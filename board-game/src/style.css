@@ -310,3 +310,43 @@ code {
   .clash { grid-template-columns: 1fr; }
   #title { padding: 1rem; }
 }
+
+/* Whose move: a coloured pill at the top, and a big banner on every change. */
+#topbar.gold #turn, #topbar.violet #turn {
+  display: inline-block;
+  padding: 0.25rem 1rem;
+  border-radius: 999px;
+  color: #17120c;
+  text-shadow: none;
+}
+#topbar.gold #turn { background: var(--gold); box-shadow: 0 0 22px rgba(230, 194, 122, 0.55); }
+#topbar.violet #turn { background: var(--violet); box-shadow: 0 0 22px rgba(201, 182, 255, 0.55); }
+
+#turn-banner {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  transform: translate(-50%, -50%) scale(0.7);
+  padding: 0.7rem 2.2rem;
+  border-radius: 14px;
+  font-family: var(--display);
+  font-size: clamp(1.6rem, 6vw, 3rem);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #17120c;
+  background: #e8e2d6;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, transform 0.32s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+#turn-banner.gold { background: var(--gold); box-shadow: 0 0 48px rgba(230, 194, 122, 0.7); }
+#turn-banner.violet { background: var(--violet); box-shadow: 0 0 48px rgba(201, 182, 255, 0.7); }
+#turn-banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+/* The winner's colour runs through the game-over card. */
+#gameover.gold .card { border-color: var(--gold); box-shadow: 0 0 60px rgba(230, 194, 122, 0.45); }
+#gameover.violet .card { border-color: var(--violet); box-shadow: 0 0 60px rgba(201, 182, 255, 0.45); }
+#gameover.gold h2 { color: var(--gold); }
+#gameover.violet h2 { color: var(--violet); }
