@@ -1,0 +1,15 @@
+{
+  "name": "com.simulacra.core",
+  "version": "0.2.0",
+  "displayName": "Simulacra Core",
+  "description": "Device-independent runtime for the Simulacra embodied AI companion: world model, runtime NavMesh, avatar control, action validation, voice streaming and the backend link. Each headset project adds one SpatialProvider subclass.",
+  "unity": "2021.3",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.0.2",
+    "com.unity.modules.ai": "1.0.0",
+    "com.unity.modules.animation": "1.0.0",
+    "com.unity.modules.audio": "1.0.0",
+    "com.unity.modules.imgui": "1.0.0",
+    "com.unity.modules.physics": "1.0.0"
+  }
+}

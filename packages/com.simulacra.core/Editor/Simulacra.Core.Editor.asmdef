@@ -1,0 +1,14 @@
+{
+    "name": "Simulacra.Core.Editor",
+    "rootNamespace": "Simulacra.EditorTools",
+    "references": ["Simulacra.Core"],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

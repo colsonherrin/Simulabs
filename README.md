@@ -6,11 +6,17 @@ you by voice, knows what is around it, and decides for itself when to walk somew
 Built for Immerse the Bay (Stanford XR Hackathon). Quest 3S first; the brain and the protocol are
 device-independent so XREAL and Spectacles clients can reuse them.
 
-> **Status — read this first.** The backend is tested (unit + end-to-end tests, and driven in a real
-> browser through the simulator). The Unity code compiles against Unity reference assemblies and
-> stand-ins for the Meta SDK types, but **it has not been opened in a Unity editor or run on a
-> headset yet**, and the OpenAI Realtime connection has only been exercised against a fake upstream,
-> not the live API. Expect a short shake-down on first run; see [Troubleshooting](#troubleshooting).
+> **Status — read this first.** Nothing here has run on a headset or inside a Unity editor yet;
+> that first run is yours. What has been verified:
+> - **Backend:** unit and end-to-end tests pass, and the simulator was driven in a real browser.
+>   The OpenAI Realtime link has only been exercised against a fake upstream, not the live API.
+> - **Quest C#:** every method body binds without errors against the real Meta SDK 85 source
+>   (MR Utility Kit + Core) and the real Unity 6000.0.66f2 assemblies.
+> - **XREAL C#:** same check against the real XREAL SDK 3.1.0, AR Foundation 5.2.0, Input System
+>   and Unity 2022.3.62f2 assemblies.
+> - **Not verifiable without the hardware:** scene assembly in the editor, tracking quality, plane
+>   detection behaviour, audio levels, frame rate. See [Troubleshooting](#troubleshooting).
+> - **Snap Spectacles:** not built yet. The backend and protocol are ready for it.
 
 ## How it fits together
 
@@ -63,9 +69,9 @@ the fastest way to work on the AI without a headset. With no key the server star
 npm test
 ```
 
-### 2. Unity project → Quest 3S
+### 2. Quest 3S
 
-1. Open `unity/` with **Unity 6000.0.66f2** (or a newer 6000.0 LTS) with Android Build Support.
+1. Open `unity-quest/` with **Unity 6000.0.66f2** (or a newer 6000.0 LTS) with Android Build Support.
    First import pulls the Meta packages (MR Utility Kit 85 and its dependencies).
 2. **File > Build Profiles > Android > Switch Platform.** If **Meta > Tools > Project Setup Tool**
    lists issues, press **Fix All**.
@@ -94,7 +100,40 @@ echo '{"backendUrl":"ws://192.168.0.42:8787/device"}' > simulacra.json
 adb push simulacra.json /sdcard/Android/data/com.simulacra.app/files/simulacra.json
 ```
 
-### 3. No headset: editor simulator
+### 3. XREAL Air 2 Ultra
+
+Needs a Beam Pro or a supported Android phone (XREAL lists Samsung S24/S25-class flagships), with
+XREAL's **ControlGlasses** app installed on a phone (Beam Pro has MyGlasses built in).
+
+1. Download the XREAL SDK into the project folder (248 MB, not committed):
+   ```bash
+   sh unity-xreal/get-xreal-sdk.sh
+   ```
+   On Windows without a shell: download
+   `https://public-resource.xreal.com/download/XREALSDK_Release_3.1.0.20251125/com.xreal.xr.tar.gz`
+   and save it as `unity-xreal/com.xreal.xr.tar.gz`.
+2. Open `unity-xreal/` with **Unity 2022.3.62f2** (the version XREAL's template is built on) with
+   Android Build Support. Switch platform to Android if it is not already.
+3. **Edit > Project Settings > XR Plug-in Management > Android**: XREAL should be ticked. Open
+   **Project Validation** and press **Fix All** if anything is listed.
+4. Menu **Simulacra > 1. Create XREAL Scene.** It copies XREAL's own PlaneDetection sample scene
+   (their rig, AR Session and plane manager) and adds the `Simulacra` object.
+5. Set **Backend Url** on the `Simulacra` object. The app runs on the phone/Beam Pro, so either
+   `adb reverse tcp:8787 tcp:8787` over USB with `ws://127.0.0.1:8787/device`, or the laptop's
+   Wi-Fi address.
+6. **Build**, install the APK, unplug from the PC, plug in the glasses, and launch the app from
+   ControlGlasses / MyGlasses. Allow the microphone and "display over other apps".
+7. **Look down at the floor and walk around for a few seconds.** The floor comes from live plane
+   detection, so the walkable area is only what the glasses have seen. Detected planes are drawn
+   while the HUD is on.
+
+On the phone's on-screen controller: **Trigger** = interrupt the AI, **App** = hide/show the HUD and
+the plane overlay. There is no camera on these glasses for the app to use, so objects are added by
+looking at something and saying *"this is a chair"*; table-height planes appear as
+`raised_surface`. Black is transparent on see-through displays: pick an avatar without black
+clothes or hair.
+
+### 4. No headset: editor simulator
 
 **Simulacra > 2. Create Editor Sim Scene**, start the backend, press Play. A fake room with a table
 and a chair, real NavMesh navigation, the same code path as the headset minus the Meta provider.
@@ -108,7 +147,7 @@ The project runs with a primitive mannequin until you add a rigged human. Fastes
 2. Download animations for the same character, **without skin**, 30 fps: an idle, a walk with
    **In Place** ticked, and a talking loop. Optional: left turn, right turn.
 3. Name the files so they contain `idle`, `walk`, `talk`, `turn_left`, `turn_right` and drop
-   everything into `unity/Assets/Simulacra/Avatar/`.
+   everything into `unity-quest/Assets/Simulacra/Avatar/` (or `unity-xreal/Assets/Simulacra/Avatar/`).
 4. **Simulacra > 3. Setup Avatar.** It sets the rigs to Humanoid, loops the clips, builds an Animator
    Controller with the `Speed` / `Turn` / `Speaking` parameters, saves a prefab and assigns it.
 
@@ -143,27 +182,25 @@ model-written code is ever executed.
 
 | Requirement | Implemented as | If unavailable |
 |---|---|---|
-| Room geometry | MRUK scene anchors from Space Setup → floor + obstacle boxes → runtime NavMesh | 4 m open square around the user, reported to the AI as `fallback_open_floor`, obstacles unknown |
+| Room geometry (Quest) | MRUK scene anchors from Space Setup → floor + obstacle boxes → runtime NavMesh | 4 m open square around the user, reported to the AI as `fallback_open_floor`, obstacles unknown |
+| Room geometry (XREAL) | AR Foundation planes: lowest large upward plane = floor, vertical planes = walls, raised planes = obstacles; re-published as it grows | 3 m square assumed 1.6 m below the head, reported as `fallback_assumed_floor` |
 | Object awareness | Furniture from Space Setup (`room_scan`) with zero camera use | `register_marker` by pointing and naming |
 | Camera detection | Passthrough Camera API frame → vision model → Depth API raycast | Skill refuses with a reason; AI is told to use `register_marker` |
 | Navigation | Unity NavMesh, path validated before moving, stuck/timeout detection | Action fails with a spoken reason |
 | Lip sync | Loudness-driven mouth + talk clip | Head bob only |
 | RL locomotion | Not attempted; NavMesh is the locomotion layer | — |
 
-## Porting to another device
+## Adding another device
 
-Everything platform-specific is in one class. To add a headset, subclass `SpatialProvider`
-(`unity/Assets/Simulacra/Core/SpatialProvider.cs`): supply the head transform, a `RoomGeometry`
-(floor boxes + obstacle boxes), optionally an environment raycast and a camera frame grabber.
-`QuestSpatialProvider` is ~250 lines; `EditorSimProvider` is ~80.
+Everything shared lives in the local Unity package `packages/com.simulacra.core`, referenced by
+both Unity projects. A device adds exactly one class, a `SpatialProvider` subclass: the head
+transform, a `RoomGeometry` (floor boxes + obstacle boxes), and optionally an environment raycast,
+a camera frame grabber and two buttons. `QuestSpatialProvider` and `XrealSpatialProvider` are about
+200 lines each; `EditorSimProvider` is about 80.
 
-- **XREAL Air 2 Ultra (Unity):** copy `Assets/Simulacra/Core` + `Editor/SimulacraSetup.cs`, write an
-  `XrealSpatialProvider` from AR Foundation planes (largest horizontal plane = floor, other
-  planes/mesh bounds = obstacles). `HasVision` stays false: the SDK exposes no RGB frames, so objects
-  come from `register_marker`.
-- **Snap Spectacles (Lens Studio / TypeScript):** no Unity. Implement the device side of the protocol
-  in TypeScript; `backend/public/index.html` is a complete ~200-line reference client (world
-  snapshots, action handling, PCM16 audio both ways). The backend is unchanged.
+**Snap Spectacles (Lens Studio / TypeScript)** is not built yet. It cannot use Unity, so it
+implements the device side of the protocol in TypeScript; `backend/public/index.html` is a complete
+reference client (world snapshots, action handling, PCM16 audio both ways). The backend is unchanged.
 
 The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one WebSocket at
 `/device`, audio as base64 PCM16 mono 24 kHz.
@@ -180,24 +217,26 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
 - **`navmesh=NO`:** the floor anchor was missing or tiny. Redo Space Setup.
 - **`vision=no`:** Headset camera permission denied, or Horizon OS older than v74.
 - **Avatar slides or moonwalks:** the walk clip was not exported In Place.
-- **A Meta SDK compile error:** only `Assets/Simulacra/Quest/QuestSpatialProvider.cs` and
-  `Editor/SimulacraQuestSceneBuilder.cs` touch the Meta SDK. The API names in them were taken from
-  Meta's current samples (MRUK 85); adjust there.
+- **XREAL: `room=fallback_assumed_floor`:** no floor plane yet. Look at the floor and move; it
+  switches to `plane_detection` on its own.
+- **XREAL: package error on open:** `unity-xreal/com.xreal.xr.tar.gz` is missing (step 1).
+- **XREAL: avatar stops with "navmesh rebuilt":** should not happen (geometry updates wait for
+  the avatar to stand still); if it does, raise `Min Update Interval` on the provider.
+- **A package version changed:** the SDK-specific code is only in `QuestSpatialProvider.cs`,
+  `XrealSpatialProvider.cs` and the two scene builders.
 - **Model/vision IDs:** `REALTIME_MODEL`, `REALTIME_VOICE` and `VISION_MODEL` in `.env` are defaults,
   not verified against your account.
 
 ## Repository layout
 
 ```
-backend/            Node/TypeScript brain: protocol, world model, skills, memory, realtime voice, vision
-  public/           browser simulator (also the reference client for non-Unity devices)
-  test/             unit + end-to-end tests
-unity/              Unity 6 project, preconfigured for Quest 3/3S
-  Assets/Simulacra/Core    device-independent: world model, NavMesh, avatar, audio, backend link
-  Assets/Simulacra/Quest   Meta Quest device layer
-  Assets/Simulacra/Sim     editor simulator device layer
-  Assets/Simulacra/Editor  scene builders, avatar importer
+backend/                       Node/TypeScript brain: protocol, world model, skills, memory, voice, vision
+  public/                      browser simulator (also the reference client for non-Unity devices)
+packages/com.simulacra.core/   shared Unity package: world model, NavMesh, avatar, audio, backend link,
+                               editor simulator, avatar importer
+unity-quest/                   Unity 6000.0.66f2 project for Quest 3 / 3S   (Assets/Simulacra/Quest)
+unity-xreal/                   Unity 2022.3.62f2 project for XREAL glasses  (Assets/Simulacra/Xreal)
 ```
 
-Project settings and Meta config assets under `unity/` come from Meta's Passthrough Camera API
-samples; see `unity/THIRD_PARTY.md`.
+Each Unity project starts from its vendor's own sample project so the platform settings are the
+vendor's; see `unity-quest/THIRD_PARTY.md` and `unity-xreal/THIRD_PARTY.md`.
