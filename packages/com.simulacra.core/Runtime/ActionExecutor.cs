@@ -210,8 +210,27 @@ namespace Simulacra
         }
 
         /// <summary>Camera frame -> backend vision model -> image points -> depth raycast -> world model.</summary>
+        private int _backgroundScans;
+
+        /// <summary>True while a camera frame is out for detection.</summary>
+        public bool ScanBusy => _pendingFrameId != null;
+
+        /// <summary>
+        /// Look around without being asked: same pipeline as scan_surroundings, but nothing is
+        /// reported as an action. New objects simply appear in the world model.
+        /// </summary>
+        public void BackgroundScan()
+        {
+            if (ScanBusy || !_provider.HasVision) return;
+            _host.StartCoroutine(Scan("auto" + (++_backgroundScans), (ok, reason, data) => { if (!ok) Debug.Log("[Simulacra] background scan: " + reason); }));
+        }
+
         private IEnumerator Scan(string id, Action<bool, string, JObject> reply)
         {
+            // One frame at a time: a requested scan waits for a background one to finish.
+            float waitUntil = Time.time + 10f;
+            while (ScanBusy && Time.time < waitUntil) yield return null;
+
             if (!_provider.HasVision || !_provider.TryCaptureFrame(out byte[] jpeg, out Func<Vector2, Vector3?> locate))
             {
                 reply(false, "the headset camera is not available (no permission or unsupported device)", null);

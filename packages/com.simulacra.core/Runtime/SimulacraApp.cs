@@ -38,6 +38,8 @@ namespace Simulacra
         [Header("Room")]
         [Tooltip("While walking, sense real obstacles the room scan does not contain and route around them (needs device depth).")]
         public bool dynamicObstacles = true;
+        [Tooltip("Seconds between quiet background camera scans for objects, when the user is looking somewhere new (needs device camera). 0 = only when asked.")]
+        public float autoScanSeconds = 20f;
         [Tooltip("Match the avatar's lighting to the brightness of the real room where the device can measure it.")]
         public bool matchRoomBrightness = true;
 
@@ -70,6 +72,8 @@ namespace Simulacra
         private bool _hudAutoHidden;
         private Light _sun;
         private string _roomKey;
+        private float _nextAutoScan = 6f;
+        private Vector3 _lastScanPosition, _lastScanForward;
         private TextMesh _hud;
         private readonly List<string> _lines = new List<string>();
         private string _brain = "-", _status = "starting", _aiState = "";
@@ -130,6 +134,7 @@ namespace Simulacra
                 if (cfg["showHud"] != null) showHud = (bool)cfg["showHud"];
                 if (cfg["pushToTalk"] != null) pushToTalk = (bool)cfg["pushToTalk"];
                 if (cfg["dynamicObstacles"] != null) dynamicObstacles = (bool)cfg["dynamicObstacles"];
+                if (cfg["autoScanSeconds"] != null) autoScanSeconds = (float)cfg["autoScanSeconds"];
                 if (cfg["hudAutoHideSeconds"] != null) hudAutoHideSeconds = (float)cfg["hudAutoHideSeconds"];
                 Debug.Log("[Simulacra] config loaded from " + path);
             }
@@ -350,6 +355,7 @@ namespace Simulacra
             if (idleFaceUser) FaceUserWhenIdle();
             if (dynamicObstacles) SenseObstacles();
             if (matchRoomBrightness) MatchBrightness();
+            if (autoScanSeconds > 0f) AutoScan();
             AutoHideHud();
 
             if (Time.unscaledTime >= _nextReach)
@@ -442,6 +448,23 @@ namespace Simulacra
             _sensedUntil.Clear();
             if (Avatar != null) Avatar.ApplyWorldShift(oldToNew);
             _roomDirty = true;
+        }
+
+        /// <summary>
+        /// Keep the picture of the room fresh without being asked, but sparingly: one frame to the
+        /// vision model at most every autoScanSeconds, and only when the wearer is looking at
+        /// something they were not looking at for the previous scan.
+        /// </summary>
+        private void AutoScan()
+        {
+            if (Time.time < _nextAutoScan || !Backend.IsConnected || !provider.HasVision || _executor.ScanBusy || _voice.IsSpeaking) return;
+            Transform h = provider.Head;
+            bool newView = _lastScanForward == Vector3.zero || Vector3.Angle(h.forward, _lastScanForward) > 30f || Vector3.Distance(h.position, _lastScanPosition) > 0.7f;
+            if (!newView) { _nextAutoScan = Time.time + 2f; return; }
+            _nextAutoScan = Time.time + autoScanSeconds;
+            _lastScanPosition = h.position;
+            _lastScanForward = h.forward;
+            _executor.BackgroundScan();
         }
 
         /// <summary>A dim room gets a dimly lit character, a bright room a bright one.</summary>

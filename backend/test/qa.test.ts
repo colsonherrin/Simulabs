@@ -216,7 +216,10 @@ test('Q18/Q19/Q20/Q26 the model sees current positions, object origins and room 
   moved.objects[0].pos = [0.2, 0.4, 2.6];
   moved.objects.push({ id: 'bottle_1', label: 'bottle', pos: [1, 0.8, 1], source: 'detected', confidence: 0.82, lastSeen: 4 });
   dev.send({ type: 'world', world: moved });
-  await dev.waitFor(() => cloud.calls.length === 2, 6000); // the room change alone triggers one quiet call
+  await sleep(2500);
+  assert.equal(cloud.calls.length, 1, 'noticing an object does not make the character speak up by itself');
+  dev.send({ type: 'text', text: 'anything new?' });
+  await dev.waitFor(() => cloud.calls.length === 2);
   ctx = cloud.calls[1].body.messages.at(-1).content.at(-1).text;
   assert.match(ctx, /\[world_event\] A new object is now known: bottle_1 \(bottle\)/);
   assert.match(ctx, /bottle_1: bottle, seen by the headset camera, .*last seen 4 s ago, confidence 0\.8/);
@@ -226,10 +229,18 @@ test('Q18/Q19/Q20/Q26 the model sees current positions, object origins and room 
   // The object disappears from the device's world model.
   moved.objects.pop();
   dev.send({ type: 'world', world: moved });
-  await dev.waitFor(() => cloud.calls.length === 3, 6000);
+  await sleep(100);
+  dev.send({ type: 'text', text: 'and now?' });
+  await dev.waitFor(() => cloud.calls.length === 3);
   ctx = cloud.calls[2].body.messages.at(-1).content.at(-1).text;
   assert.match(ctx, /Object bottle_1 is no longer known/);
   assert.ok(!/bottle_1: bottle/.test(ctx.split('[/context]')[0]), 'a removed object is not offered as a target');
+
+  // The user walking away IS worth reacting to: it triggers one call without being asked.
+  moved.user.pos = [0, 1.6, -4];
+  dev.send({ type: 'world', world: moved });
+  await dev.waitFor(() => cloud.calls.length === 4, 6000);
+  assert.match(cloud.calls[3].body.messages.at(-1).content.at(-1).text, /\[world_event\] The user has moved away; they are now 7\.0 m from you/);
   dev.ws.close(); await srv.close(); cloud.close();
 });
 

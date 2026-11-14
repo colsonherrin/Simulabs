@@ -133,8 +133,13 @@ export class ClaudeBrain implements Brain {
     void this.pump();
   }
 
-  onWorldEvent(description: string) {
+  onWorldEvent(description: string, urgent: boolean) {
     this.inbox.push({ kind: 'note', text: `[world_event] ${description}` });
+    // Noticing an object is not a reason to speak: it just rides along with the next turn.
+    if (!urgent) {
+      if (this.inbox.filter((i) => i.kind === 'note').length > 12) this.inbox.splice(this.inbox.findIndex((i) => i.kind === 'note'), 1);
+      return;
+    }
     // Room changes are batched and rate limited; they ride along with the next turn, or trigger
     // one quiet call of their own if nothing else is going on.
     if (this.worldEventTimer) return;

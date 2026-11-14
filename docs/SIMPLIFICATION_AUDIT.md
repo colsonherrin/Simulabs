@@ -28,6 +28,29 @@ The structural result: **the system already is the four-component design**, so n
 restructured. The remaining large simplification, one mind instead of two, should be decided by a
 ten-minute benchmark rather than by taste.
 
+## Update after the engineering sprint
+
+The sprint closed the six audit failures, so it added capability, and the code grew again (Unity
+runtime about 2,360 → 2,940 lines). Where it could, it solved problems by removing a requirement
+rather than adding a subsystem:
+
+| Removed requirement | How | What it eliminated |
+|---|---|---|
+| Downloading a character and four animation files from a third-party site, renaming them, running an import step | A licensed character ships in the repo; walking, idling and gaze are generated from its skeleton; the scene builder prepares it | 6 manual steps, an external account, the "in-place walk" pitfall, foot sliding (stride is derived from distance travelled) |
+| Unity's Humanoid mapping succeeding | Bones are found by mapping **or** by name | A whole class of "rig did not import as humanoid" failures |
+| Pressing a button to hide the debug HUD | It hides itself when healthy, returns when not | One demo step, and a visible HUD in the recording |
+| Running `adb reverse` by hand | The backend does it and retries | One step per session; the commonest "cannot connect" cause |
+| Re-introducing the chair every session | Registered objects are stored relative to the room and restored | One demo step |
+| A model call when an object is noticed | Notices ride along with the next turn | Unprompted speech; wasted calls |
+
+Dependencies changed: **+1** Unity package (`com.unity.xr.meta-openxr`, required by the SDK for
+depth occlusion; removable by deleting one line) and **+21 MB** of character assets (MIT). No
+library was added for lip sync, animation or avatar loading: the bundled character's own
+blendshapes and a 150-line procedural animator cover the demo.
+
+Still the largest available simplification, still undecided because it needs a measurement: one
+mind instead of two.
+
 ## Existing architecture against the proposed four components
 
 | Proposed component | What exists | Verdict |

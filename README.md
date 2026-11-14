@@ -95,25 +95,29 @@ npm test
 ### 2. Quest 3S
 
 1. Open `unity-quest/` with **Unity 6000.0.66f2** (or a newer 6000.0 LTS) with Android Build Support.
-   First import pulls the Meta packages (MR Utility Kit 85 and its dependencies).
+   First import pulls the Meta packages (MR Utility Kit 85 and its dependencies) and Unity's
+   OpenXR Meta package, which depth occlusion needs. If that package causes trouble, delete the
+   `com.unity.xr.meta-openxr` line from `Packages/manifest.json`; only occlusion is lost.
 2. **File > Build Profiles > Android > Switch Platform.** If **Meta > Tools > Project Setup Tool**
    lists issues, press **Fix All**.
 3. Menu **Simulacra > 1. Create Quest Scene.** This generates the passthrough scene (camera rig,
    passthrough underlay, MRUK, depth raycast, passthrough camera, the `Simulacra` object) and makes
    it the build scene.
 4. Select the `Simulacra` object and set **Backend Url**:
-   - USB (most reliable on hackathon Wi-Fi): keep `ws://127.0.0.1:8787/device` and run
-     ```bash
-     adb reverse tcp:8787 tcp:8787
-     ```
+   - USB (most reliable on hackathon Wi-Fi): keep `ws://127.0.0.1:8787/device`. The backend sets
+     up the USB tunnel itself whenever a headset is plugged in (it needs `adb` on the laptop).
    - Wi-Fi: `ws://<laptop-ip>:8787/device` (the backend prints its addresses on start). If the
      network isolates clients, use a phone hotspot.
 5. On the headset, run **Settings > Environment setup > Space Setup** once so the room has a floor,
    walls and furniture. Label a couch/table/bed if you have one.
 6. **Build And Run.** Accept the Spatial data, Headset camera and Microphone prompts.
 
-You should see a placeholder mannequin ~1.8 m in front of you with a green debug HUD.
-**A** = interrupt the AI, **B** = hide/show the HUD. Say *"Hey, can you come over here?"*
+You should see the character about 1.8 m in front of you, and a green debug HUD that disappears
+by itself once everything is ready (it comes back if something breaks).
+**A** = interrupt the AI, **B** = show/hide the HUD. Say *"Hey, can you come over here?"*
+
+Point the right controller at something and say *"this is a chair"* to register it; it is
+remembered for that room on later launches.
 
 In a loud room tick **Push To Talk** on the `Simulacra` object (or put `"pushToTalk": true` in
 `simulacra.json`): the microphone then only listens while the right index trigger is held.
@@ -166,26 +170,33 @@ and a chair, real NavMesh navigation, the same code path as the headset minus th
 
 ## Avatar
 
-The project runs with a primitive mannequin until you add a rigged human. Fastest route:
+A realistic adult ships with the project (Microsoft Rocketbox, MIT licence; see
+`packages/com.simulacra.core/Avatar/Rocketbox/README.md`). Creating the scene prepares it
+automatically: materials are rebuilt from its textures and a prefab is saved. It needs no animation
+files: walking, idling and looking at you are generated from the skeleton, the mouth and a slight
+smile follow the voice, and it blinks.
 
-1. On [Mixamo](https://www.mixamo.com/) pick a character and download it as **FBX for Unity**, T-pose,
-   *with skin*.
-2. Download animations for the same character, **without skin**, 30 fps: an idle, a walk with
-   **In Place** ticked, and a talking loop. Optional: left turn, right turn.
-3. Name the files so they contain `idle`, `walk`, `talk`, `turn_left`, `turn_right` and drop
-   everything into `unity-quest/Assets/Simulacra/Avatar/` (or `unity-xreal/Assets/Simulacra/Avatar/`).
-4. **Simulacra > 3. Setup Avatar.** It sets the rigs to Humanoid, loops the clips, builds an Animator
-   Controller with the `Speed` / `Turn` / `Speaking` parameters, saves a prefab and assigns it.
+To use your own character instead, put a rigged FBX in `Assets/Simulacra/Avatar/` of the Unity
+project and run **Simulacra > 3. Setup Avatar**. Alone, it is animated procedurally like the
+bundled one (its bones are found by Unity's Humanoid mapping or by name: Biped, Mixamo and generic
+names work). If you add animation files whose names contain `idle`, `walk` (exported **in place**),
+`talk`, `turn_left`, `turn_right`, they are used instead, through an Animator Controller with the
+parameters `Speed` (0 standing to 1 walking), `Turn` (−1..1), `MotionSpeed` and `Speaking`.
 
-Any humanoid works (VRM via UniVRM, Ready Player Me, your own). The contract is just: an `Animator`
-with optional `Speed` (float, 0 standing to 1 walking), `Turn` (float, −1..1), `MotionSpeed` (float,
-walk-cycle playback rate) and `Speaking` (bool). The body is measured at spawn: it is rescaled to
-1.72 m only if its height is implausible for a human (an import-scale mistake), and its soles are
-put on the floor wherever the model's pivot is. Humanoids look at you with their head and eyes. If
-the feet slide while walking, change **Walk Clip Speed** on the avatar until they do not. Animation is driven by
-how the body is actually moving, not by what was requested. Mouth: a blendshape named like
-`jawOpen` / `viseme_aa` / `mouthOpen` or a humanoid jaw bone is driven by voice loudness; otherwise
-you get the talk clip plus a head bob. Check the licence of whatever model you use.
+Whatever the model, it is measured at spawn: rescaled to 1.72 m only if its height is implausible
+for a human, and its soles put on the floor wherever its pivot is. Check the licence of any model
+you add.
+
+Settings you may want, on the `Simulacra` object or in `simulacra.json` on the headset:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `pushToTalk` | off | Listen only while the right index trigger is held (loud rooms) |
+| `dynamicObstacles` | on | Sense unmapped obstacles with depth while walking and go around them |
+| `autoScanSeconds` | 20 | Quiet background camera scans for objects. **Sends room images to the vision provider.** 0 = only when asked |
+| `hudAutoHideSeconds` | 8 | Hide the debug HUD once everything is ready. 0 = keep it |
+| Depth Occlusion (Quest object only) | on | Real furniture hides the character; turns itself off if unsupported |
+| Use Depth Mesh (XREAL object only) | off | Feed the reconstructed mesh to navigation |
 
 ## Skills
 

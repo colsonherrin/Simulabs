@@ -6,20 +6,25 @@ state of branch `qa-audit`.
 ## Bottom line
 
 **Nobody has yet seen this character through a headset.** No Quest or XREAL device, no Unity editor
-licence and no Claude/OpenAI credentials were available where this audit ran. So the honest answer
-to "can someone wear the headset and feel a life-sized intelligent human is present" is **not
-tested**, and two things are known to be missing for it: real furniture does not hide the character
-(no depth occlusion), and no rigged human is in the repository (a primitive mannequin stands in).
+licence and no Claude/OpenAI credentials were available where this work was done. The honest answer
+to "can someone wear the headset and feel a life-sized intelligent human is present" is still
+**not tested**.
 
-What this audit did do: read every source file skeptically, found 17 defects that would have hurt
-a first run (4 of them likely demo-killers), fixed them, and added 41 automated checks that were run here (49 now run in total) plus 8 in-editor
-tests that need Unity. Results:
+**Demo readiness: partially ready.** Everything the 45-second script needs is implemented and
+passes every check that can be run without hardware, and a realistic rigged human now ships in the
+repository. It is not "ready" because the first build, the first headset run and the first live
+model call have not happened.
 
-| Result | Count | Questions |
-|---|---|---|
-| PASS | 8 | 13, 18, 26, 27, 28, 29, 30, 48 |
-| FAIL | 6 | 10, 14, 37, 39, 47, 49 |
-| NOT TESTED | 36 | all others |
+| Result | After the first audit | Now | Questions now |
+|---|---|---|---|
+| PASS | 8 | 8 | 13, 18, 26, 27, 28, 29, 30, 48 |
+| FAIL | 6 | 0 | – |
+| NOT TESTED | 36 | 42 | all others |
+
+**Read the zero carefully.** The six former failures (10, 14, 37, 39, 47, 49) were "not
+implemented". They are now implemented and compile against the real SDKs, which moves them to NOT
+TESTED, not to PASS. Nothing was promoted to PASS in this sprint, because nothing new could be
+observed.
 
 A question is marked PASS only when the thing it asks about was exercised by a test or settled by
 reading the real SDK source. Where the logic passes but the question is about what the wearer
@@ -30,8 +35,8 @@ sees or hears, it is NOT TESTED and the hardware procedure is given.
 | Label used below | Meaning |
 |---|---|
 | **backend test** | `backend/test/*.test.ts`, 17 tests. Real server, real WebSockets and HTTP. Claude, speech-to-text, text-to-speech and the headset are stand-in servers. No live API. |
-| **headless** | `tools/headless-tests`, 32 checks. The real `RoomGeometry.cs`, `WorldModel.cs` and `AvatarFit.Math.cs` compiled outside Unity against a small stand-in for Unity's vector maths. |
-| **editor test** | `packages/com.simulacra.core/Tests/Editor`, 8 tests using the real engine (NavMesh, renderers). **Written and compile-checked, not run**: they need a Unity editor. |
+| **headless** | `tools/headless-tests`, 34 checks. The real `RoomGeometry.cs`, `WorldModel.cs` and `AvatarFit.Math.cs` compiled outside Unity against a small stand-in for Unity's vector maths. |
+| **editor test** | `packages/com.simulacra.core/Tests/Editor`, 10 tests using the real engine (NavMesh, renderers). **Written and compile-checked, not run**: they need a Unity editor. |
 | **simulator** | Browser stand-in for the headset driven by Playwright against the real backend with the mock (keyword) brain. Exercises the protocol, not AI and not Unity. |
 | **compile check** | Every C# method body bound against the real Meta SDK 85, XREAL SDK 3.1.0, AR Foundation 5.2 sources and the real Unity 6000.0.66f2 / 2022.3.62f2 assemblies: 0 errors on both targets. |
 | **source read** | Behaviour confirmed by reading the vendor SDK source, not by running it. |
@@ -64,8 +69,32 @@ Also removed as unused or duplicated: idle-autonomy timer, `forget_object` actio
 tool (duplicate of `run_sequence` with `save_as`), and three configuration switches. See
 `SIMPLIFICATION_AUDIT.md`.
 
-Discovered and **not** fixed: depth occlusion cannot work with the packages currently installed
-(Q10).
+## Second pass (engineering sprint): the six failures and what else turned up
+
+| # | Was | Change | Verified by |
+|---|---|---|---|
+| S1 | Q10 no occlusion | Added `com.unity.xr.meta-openxr` 2.2.0 (the version Meta's own setup check asks for and its Phanto sample uses). At spawn the avatar's opaque Standard materials switch to the SDK's occlusion shader, with soft occlusion. If depth is unsupported or the shader is missing, nothing is changed and the HUD says why. Scene creation forces the shader into the build | compile check; source read |
+| S2 | Q14 static room on Quest | (a) Room-scan update events from the SDK rebuild navigation. (b) Live sensing: while walking, two short depth rays look ahead; a real surface seen twice that the scan does not explain becomes a temporary obstacle and the walk replans, with no model call | compile check; editor test for the replan (not run) |
+| S3 | Q37 no face | A realistic adult with 175 facial blendshapes is bundled (Microsoft Rocketbox, MIT). Mouth uses its jaw-open shape, eyes blink with one matched pair, a slight smile at rest and more while speaking, head and neck follow the user | compile check; blendshape names read from the FBX |
+| S4 | Q39 flat visuals | Lighting follows the measured brightness of the room (passthrough camera); occlusion (S1); contact shadow (earlier); the body is never frozen: breathing and weight shift when standing | compile check |
+| S5 | Q47 XREAL planes only | Spatial anchor on the floor: when tracking corrects itself the avatar, registered objects and obstacles move with the room. Depth mesh can feed navigation as blockers (off by default until seen on the glasses: a noisy mesh can block real floor) | compile check against XREAL SDK 3.1.0 / AR Foundation 5.2 |
+| S6 | Q49 setup steps | Character ships in the repo and is prepared automatically when the scene is created; no animation files needed; HUD hides itself when healthy and returns if the backend drops; the backend opens the USB tunnel itself and keeps retrying; objects you register by pointing are remembered per room across launches | compile check; backend run |
+
+New defects found during the sprint and fixed:
+
+| # | Problem | Consequence | Fix | Verified by |
+|---|---|---|---|---|
+| 18 | Room-scan objects were deleted and recreated on every room refresh | `table_1` silently became `table_2`, `table_3`…; an id the AI had just used stopped resolving. Constant on XREAL, and on Quest whenever an obstacle is sensed | Seeds are reconciled in place; ids are stable | headless test |
+| 19 | A character without separately downloaded clips had no animation | It would glide across the floor in its bind pose | Procedural walk, idle and gaze from the skeleton; stride length is derived from distance travelled, so feet cannot slide | compile check; gait arithmetic checked by hand |
+| 20 | Body-bone lookup required Unity's Humanoid mapping | The bundled character's rig (3ds Max Biped, A-pose, unusual parenting) may not auto-map; then no head, gestures or gaze | Bones are found by Humanoid mapping or by name (Biped, Mixamo, generic) | compile check |
+| 21 | Blink drove every blendshape whose name contained "blink" | On a face with several blink sets the eyes close three times over | Exactly one set is chosen | compile check |
+| 22 | Mouth blendshape and jaw bone were both driven | Mouth opens twice as far as intended | Jaw bone only when there is no mouth shape | compile check |
+| 23 | Noticing a new object triggered a model call | The character could start talking unprompted every time something was detected | Object notices ride along with the next turn; only the user walking away triggers a reaction | backend test |
+| 24 | Idle sway was applied to the lower spine | On Biped rigs the thighs hang off the spine, so idle sway would drag the feet | Sway moved to the chest | code read |
+
+Not used, by decision: the bundled character's own animation files. They have no in-place walk
+(the root travels 1.46 m per cycle), no mesh, and a different node hierarchy; the procedural gait
+avoids all three problems.
 
 ---
 
@@ -77,7 +106,7 @@ Discovered and **not** fixed: depth occlusion cannot work with the packages curr
 |---|---|---|---|
 | 1 | Correct physical size | NOT TESTED | Fix 3. Scale arithmetic passes headless (1.8 cm, 178 m and 1.78 m inputs). On the real renderer it is an editor test, not run. **Hardware:** tape a mark on a wall at 1.72 m; walk the character beside it (`register_marker` "wall mark", then "go to the wall mark"); the top of the head should be within 3 cm. The HUD line `avatar height …` states what the app believes. |
 | 2 | Feet on the floor | NOT TESTED | Fix 4. **Hardware:** crouch and look at the soles against a floor line or a sheet of paper on the floor; record the gap in mm on Quest and on XREAL. On XREAL repeat after 30 s (floor plane refines). |
-| 3 | Believable spawn distance, inside the field of view | NOT TESTED | Quest: spawns 1.8 m ahead; a 1.72 m body spans about 51° of roughly 96° vertical, so it fits. XREAL: needs about 3.6 m to fit fully; set to 3.2 m (fix 9). Field-of-view figures are from published specifications as recalled, not measured. **Hardware:** on launch, is the whole body visible without moving the head? |
+| 3 | Believable spawn distance, inside the field of view | NOT TESTED | Quest: spawns 1.8 m ahead; a 1.75 m body spans about 51° of roughly 96° vertical, so it fits. XREAL: needs about 3.6 m to fit fully; set to 3.2 m. Field-of-view figures are from published specifications as recalled, not measured. **Hardware:** on launch, is the whole body visible without moving the head? |
 | 4 | Height and orientation hold when the user sits or stands | NOT TESTED | By design the body is a world-space object with no dependence on head height. Known exception: XREAL before any floor plane is found assumes the floor is 1.6 m below the head, so starting seated puts the character about 0.4 m too low until the floor is detected. **Hardware:** sit, stand, crouch; the feet must not move. |
 | 5 | Natural initial position and facing | NOT TESTED | Fix 2; the avatar is turned to face the user when placed and re-faces them when idle. Editor test covers "not in furniture, not behind the user, not across a wall" but was not run. **Hardware:** launch three times facing a table, a wall 1 m away, and open floor. |
 
@@ -89,7 +118,7 @@ Discovered and **not** fixed: depth occlusion cannot work with the packages curr
 | 7 | Drift, jitter, sliding | NOT TESTED | Nothing in the app moves the idle avatar except ground pinning and turning to face the user. **Hardware:** stand still 60 s, then shake the head; film through the lens. Expect more drift on XREAL. |
 | 8 | Coordinate systems aligned | NOT TESTED | One world space is used everywhere (Unity world, metres, y up); anchors, planes, detections, NavMesh and avatar are never converted between frames except at two boundaries: room anchor → upright box (headless: floor, wall, rotated furniture, tilted volume all correct) and image point → world ray (SDK call; orientation unverified, fix 14). Backend direction words follow Unity's handedness (backend test). **Hardware:** the scan test in Q17 is the check for the image boundary. |
 | 9 | Tracking loss, recentre, relocalisation | NOT TESTED | Quest: world lock should absorb a recentre (source read; behaviour on recentre is inferred, the SDK text does not mention it). XREAL: **not handled**; after a recentre the planes move and the avatar does not. **Hardware:** hold the Meta button to recentre; cover the cameras 5 s; record where the character ends up. |
-| 10 | Real furniture occludes the character | **FAIL** | Not implemented. The character is drawn over everything. Depth occlusion needs the `com.unity.xr.meta-openxr` (≥ 2.1) or `com.unity.xr.oculus` (≥ 4.2) package, which this project does not have: `EnvironmentDepthManager` returns "not supported" without one (source read). Not added blind because it changes the project's XR provider setup. Steps are under "Three highest-priority fixes". Impossible on XREAL's optical display in the same way; would need its depth mesh. |
+| 10 | Real furniture occludes the character | NOT TESTED | S1. Implemented with the SDK's depth occlusion; never seen. It needs, on first open of `unity-quest`: the new package to resolve, then Meta's *Project Setup Tool > Fix All* (it enables the Occlusion and Session OpenXR features, Vulkan and Multiview). **Hardware:** HUD must read `occlusion=on (N materials)`; stand so a table is between you and the character: legs must be hidden. If the avatar turns pink or vanishes, set **Depth Occlusion** off on the `Simulacra` object. Hair and lashes are not occluded (cut-out material). Not possible on XREAL's optical display. |
 
 ### C. Room mapping and depth
 
@@ -98,17 +127,17 @@ Discovered and **not** fixed: depth occlusion cannot work with the packages curr
 | 11 | Floor detected, with elevation | NOT TESTED | Quest: floor anchor from Space Setup; its height is used, not assumed zero. XREAL: lowest large upward plane at least 0.6 m below the head. Reduction to geometry passes headless. **Hardware:** HUD shows `room=room_scan` / `plane_detection`, never `fallback_…`. |
 | 12 | Walls, tables, chairs become obstacles | NOT TESTED | Quest: walls and every furniture volume in the Space Setup scan. **Chairs are usually not in that scan**, so the character will walk through a real chair unless it was added as a volume. XREAL: vertical planes and raised horizontal planes only; chair legs and clutter are invisible to it. |
 | 13 | Real sensor data, not canned geometry | PASS | Code read: the Quest scene loads the device's own room scan; XREAL uses live plane detection. Simulated geometry exists only in the editor/browser simulators and is labelled `simulated` to the AI. Both fallbacks are labelled (`fallback_open_floor`, `fallback_assumed_floor`) and shown on the HUD. Caveat: on Quest the room is the scan the user made earlier, not live depth meshing. |
-| 14 | Map updates when the room changes | **FAIL** | Quest: geometry is read once at load; a moved chair or a person stepping in is not seen. XREAL: planes are re-read every second and the NavMesh rebuilt with a walk in progress replanned, but only for planes, and untested. |
+| 14 | Map updates when the room changes | NOT TESTED | S2. Quest: scan updates and live depth sensing while walking. Limits: sensing only sees what is inside the headset's current view, only ahead of the walking body, and forgets after 45 s. XREAL: planes re-read every second (and optionally the depth mesh). **Hardware:** send the character across open floor, then put a chair in its path and send it again; record whether it goes around. A false stop is as important to record as a collision. Disable with `"dynamicObstacles": false` in `simulacra.json`. |
 | 15 | Missing or noisy depth | NOT TESTED | Depth is used only to place detected or pointed-at objects. If the depth ray fails the simplified room geometry is used instead (headless), else the object is reported "seen but not located". Navigation does not depend on depth. |
 
 ### D. Object recognition and tracking
 
 | # | Question | Result | Evidence and what remains |
 |---|---|---|---|
-| 16 | Camera recognises real objects | NOT TESTED | Quest only: one camera frame on request → cloud vision model → labelled points. Needs a headset, the camera permission and an OpenAI key; never run. XREAL Air 2 Ultra: not available. **Hardware:** look at a chair and a bottle, say "look around and tell me what you see", then pull `last_scan.jpg` and check it is upright. |
+| 16 | Camera recognises real objects | NOT TESTED | Quest only: a camera frame → cloud vision model → labelled points; on request, and now also quietly in the background (at most every 20 s, only when you look somewhere new). **This sends room images to the vision provider without being asked**; set `"autoScanSeconds": 0` to stop it. Never run. XREAL Air 2 Ultra: not available. **Hardware:** look at a chair and a bottle for 30 s, then ask "what do you see?"; pull `last_scan.jpg` and check it is upright. |
 | 17 | Detections get real 3D positions | NOT TESTED | Method: ray through the image point using the camera pose captured with the frame, intersected with the Depth API. This is the same method Meta's Spatial Lingo sample uses. Depth raycasting works with the installed packages (source read: it uses the OVRPlugin provider). Risk: the depth ray only works inside the current view, so turn away during the 2–5 s wait and it falls back to room geometry. **Hardware:** scan one object on open floor, then "go to the …"; measure where the character stops. |
 | 18 | Detected vs registered vs room-scan vs simulated are distinguished | PASS | headless: a camera sighting never changes the origin or position of a user-registered object. backend test: each object reaches the model with its origin in words, and the prompt forbids calling non-camera objects "seen". |
-| 19 | Stable identity and position over time | NOT TESTED | headless: re-sighting within 0.75 m keeps the id and refines the position; a same-label object 3 m away gets a new id. Limits: objects never expire, and the same object labelled differently by the vision model ("armchair" vs "chair") becomes two. Behaviour as the user moves is a hardware question. |
+| 19 | Stable identity and position over time | NOT TESTED | headless: re-sighting within 0.75 m keeps the id and refines the position; a same-label object 3 m away gets a new id; refreshing the room keeps room-scan ids (defect 18); registered objects are restored per room across launches (editor test, not run). Limits: detections never expire, and the same object labelled differently ("armchair" vs "chair") becomes two. |
 | 20 | "What is that?" answered from observations | NOT TESTED | backend test: the prompt contains the object the user is looking toward and only known objects, no coordinates. Whether live Claude sticks to it has not been run. **Test:** in the simulator with real keys ask about something not in the room. |
 
 ### E. Navigation and movement
@@ -141,17 +170,17 @@ the system does with Claude's output. It says nothing about how well live Claude
 | 31 | Microphone works in a noisy room | NOT TESTED | Fixes 1 and 7 remove the two failure modes found by reading; push-to-talk added for loud rooms. Capture quality itself needs the headset. **Hardware:** play crowd noise at conversation volume; give 10 commands; count misses, with and without push-to-talk. |
 | 32 | Natural replies reach the speakers | NOT TESTED | Never run with live models or a headset. |
 | 33 | Interrupt while speaking or moving | NOT TESTED | backend test: "Stop!" reaches the headset in under 100 ms, before the model answers, and cancels the rest of a sequence. simulator: body idle 77 ms after the click. Headset: A button or the talk trigger cuts speech locally. Unity side not run. |
-| 34 | Mouth and speaking state follow the voice | NOT TESTED | Loudness-driven mouth plus a talk clip; no visemes. Mixamo characters have no mouth blendshapes, so on them only the talk clip and head motion show. |
+| 34 | Mouth and speaking state follow the voice | NOT TESTED | Loudness drives the bundled character's jaw-open blendshape; a slight smile grows while speaking; no visemes (it has 15, unused). **Hardware:** watch the mouth during a long sentence; note lag between sound and movement. |
 | 35 | Measured latencies | NOT TESTED | No live measurement exists. Measured without any model: input → action sent 1 ms; → body started 10–18 ms; stop 77 ms; path planning in the browser stand-in 0.1 ms. Expected dominant stages, unmeasured: speech-to-text after end of speech, Claude's time to its first tool call (the default model always thinks first), first text-to-speech audio. **To measure:** `npm run bench` (typed input, live Claude), then five spoken commands on the headset and read `/metrics`. |
 
 ### H. Animation and presence
 
 | # | Question | Result | Evidence and what remains |
 |---|---|---|---|
-| 36 | Smooth transitions | NOT TESTED | Blend tree idle↔walk, 0.15–0.3 s cross-fades, gestures layered procedurally. Needs eyes on it. |
-| 37 | Face: expressions, blinking, eyes | **FAIL** | No facial expressions exist. Blinking works only on a model with a blink blendshape, which a Mixamo character lacks. Eye direction: humanoid look-at only. |
-| 38 | Looks at the user or the relevant object | NOT TESTED | Fix 12; needs a humanoid with the generated controller (re-run *Simulacra > 3. Setup Avatar* to enable its IK pass). |
-| 39 | Lighting, shadows, materials, occlusion | **FAIL** | One fixed directional light and flat ambient, no estimate of room lighting, no occlusion (Q10), placeholder body unless a model is imported. Contact shadow added (fix 13), unseen. |
+| 36 | Smooth transitions | NOT TESTED | With the bundled character all motion is procedural: walk blends in and out over about 0.25 s, gestures layer on top. It will read as stylised rather than motion-captured. With your own clips: blend tree and cross-fades. Needs eyes on it. |
+| 37 | Face: expressions, blinking, eyes | NOT TESTED | S3. Blink every 2–5 s, resting and speaking smile, head and neck gaze. No emotional expressions beyond that, and the eyeballs themselves do not move. **Hardware:** stand 1 m away for 30 s: does it blink, does it hold your gaze as you step sideways? |
+| 38 | Looks at the user or the relevant object | NOT TESTED | Head and neck turn toward the user, and toward the object an action concerns for about 4 s. Body re-faces the user when idle. |
+| 39 | Lighting, shadows, materials, occlusion | NOT TESTED | S4. Brightness matching needs the camera permission; light direction is still a fixed guess. Materials are rebuilt from the character's textures (albedo + normal); the occlusion shader drops the normal map. **Hardware:** compare the character's brightness with your own hand in a bright and a dim room. |
 | 40 | Stereo depth and comfort | NOT TESTED | Standard shaders only; nothing custom that could render to one eye. **Hardware:** close each eye in turn at the HUD and the character. |
 
 ### I. Performance and recovery
@@ -169,23 +198,31 @@ the system does with Claude's output. It says nothing about how well live Claude
 | # | Question | Result | Evidence and what remains |
 |---|---|---|---|
 | 46 | Quest 3S builds, deploys, runs | NOT TESTED | compile check: 0 errors against the real SDK. No build has been made. |
-| 47 | XREAL Air 2 Ultra works, incl. depth meshing and anchors | **FAIL** | compile check passes, never run. Marked FAIL because two things the question names are not used at all: the app reads planes only, not the depth mesh, and uses no spatial anchors. |
+| 47 | XREAL Air 2 Ultra works, incl. depth meshing and anchors | NOT TESTED | S5. Anchor: on by default; HUD shows `anchor=tracking`. Depth mesh: implemented, **off** by default (tick **Use Depth Mesh** on the `Simulacra` object to try it). Never run. |
 | 48 | Features adapted to each headset's limits | PASS | Code read and backend test: XREAL declares no camera, so `scan_surroundings` is refused with an explanation and the AI is told to use pointing; no shadow is drawn on its additive display; spawn distance suits its field of view. Nothing unsupported is reported as working. |
-| 49 | New user completes the demo with no developer help | **FAIL** | Today it needs: a laptop running the backend on a reachable network, two API keys, Space Setup done on the Quest, the HUD hidden, and (without a camera scan) the chair introduced by pointing. No coordinates are edited by hand and no response is scripted. |
+| 49 | New user completes the demo with no developer help | NOT TESTED | S6. During the demo nothing needs a developer: no HUD to hide, no coordinates, no scripted replies, the chair is remembered. Before it, once: two API keys, Space Setup on the Quest, build and install, register the chair by pointing. Each session: `npm start` on a laptop and the headset on USB or the same network. Unproven until someone does it. |
 | 50 | Does it feel like an intelligent human is present? | NOT TESTED | Cannot be claimed. See below. |
 
 ---
 
-## Three highest-priority remaining fixes
+## Three highest-priority remaining tasks
 
-| Priority | Weakness | Why it matters | Fix | Time |
-|---|---|---|---|---|
-| 1 | **No rigged human, and it has never been seen in a headset** | Everything in sections A, E, G, H and I is unverified until someone looks | Import a humanoid (README "Avatar"), build to the Quest, run the hardware checklist below, fix what it shows | 2–3 h |
-| 2 | **Furniture does not occlude the character** | The single cue that most breaks presence: the body shows through tables and walls | In `unity-quest`: add `com.unity.xr.meta-openxr` 2.1+, enable its Occlusion feature and run Meta's Project Setup Tool "Fix All"; add an `EnvironmentDepthManager`; switch the avatar's materials to `Meta/EnvironmentDepth/Built-in Render Pipeline/OcclusionSurfaceLit` (ships in the SDK; keeps colour and texture, drops normal maps). Keep a build without it as fallback | 1–2 h, needs the headset |
-| 3 | **Voice latency and robustness are unmeasured** | A two-second pause before every reply kills the illusion more than any visual flaw | `npm run bench` on `claude-opus-5-5` and `claude-haiku-5-5`; five spoken commands on the headset; if speech-to-action is over about 1.5 s switch `PLANNER_MODEL` or `BRAIN=realtime`; decide on push-to-talk for the venue | 30 min |
+| Priority | Task | Why | Time |
+|---|---|---|---|
+| 1 | **Open `unity-quest`, create the scene, build to the Quest, run checklist steps 0–8d** | Everything in A, E, G, H and I is unverified until someone looks. This is also the first test of the new XR package, the bundled character's import and the occlusion shader | 1–2 h |
+| 2 | **Measure the voice path** with real keys: `npm run doctor`, `npm run bench`, five spoken commands, read `/metrics` | A long pause before each reply breaks the illusion more than any visual flaw; the model and brain choice depends on these numbers | 30 min |
+| 3 | **Rehearse the 45-second script ten times in the demo room** and record every miss | Finds the failures that only repetition shows: tracking loss, a noisy hall, a mis-registered chair | 1 h |
 
-Next after those: the room only contains what Space Setup captured, so add the demo chair as a
-furniture volume in Space Setup, which makes it both an obstacle and a known object.
+## New blockers and risks introduced or found in the sprint
+
+| Risk | What happens if it goes wrong | Way out |
+|---|---|---|
+| `com.unity.xr.meta-openxr` 2.2.0 was added to the Quest project without an editor to open it | Package resolution or compile errors on first open | Delete that one line from `unity-quest/Packages/manifest.json`; occlusion then reports itself off and everything else is unaffected |
+| Bundled character's import is unverified (materials, skeleton names, scale) | Wrong look, or a static body | The avatar setup dialog reports "Skeleton recognised: yes/no", blendshape and material counts; the HUD shows the height. Any other rigged FBX can be dropped into `Assets/Simulacra/Avatar/` instead |
+| Procedural gait has never been seen | May look robotic or have a sign error on an unusual rig | `Swing Degrees` on the avatar; or supply real clips, which take over automatically |
+| Live obstacle sensing could misread depth noise | Needless detour or a "path blocked" stop | `"dynamicObstacles": false` |
+| Background scans send room images to the vision provider | Privacy and cost you did not ask for | `"autoScanSeconds": 0` |
+| Unity will generate `.meta` files for the bundled character on first import | Uncommitted files in the shared package | Commit them once |
 
 ## Readiness
 
@@ -193,11 +230,12 @@ furniture volume in Space Setup, which makes it both an obstacle and a known obj
 |---|---|---|
 | Compiles against the real SDK | yes | yes |
 | Built and run on device | no | no |
-| Room source | Space Setup scan (static) | live planes (grows) |
-| Object source | room-scan furniture, pointing, camera scan (untested) | pointing only |
-| Occlusion | not implemented | not possible the same way |
-| Anchoring | SDK world lock | none |
-| Verdict | the demo target; needs the first hardware run | keep as a second target; do not demo before Quest works |
+| Room source | Space Setup scan + live depth sensing while walking | live planes (+ optional depth mesh) |
+| Object source | room-scan furniture, pointing (remembered), camera scan (untested) | pointing only |
+| Occlusion | implemented, untested | not possible the same way |
+| Anchoring | SDK world lock | spatial anchor, untested |
+| Character | bundled, procedural animation, untested | same |
+| Verdict | the demo target; partially ready | second target; do not demo before Quest works |
 
 Snap Spectacles: no client exists. Future work.
 
@@ -216,7 +254,10 @@ Do this in order on the Quest, then repeat the starred rows on XREAL. Write the 
 | 5★ | Stand 60 s; shake head | visible drift or jitter, yes/no, cm |
 | 6 | Recentre (hold Meta button) | where the character is afterwards |
 | 7★ | "Hey, come over here." five times from different spots | arrivals out of 5; final distance; HUD latency line each time |
-| 8 | Put a scanned table between you; "come over here" | walks around / through |
+| 8 | Put a scanned table between you; "come over here" | walks around / through; are its legs hidden behind the table (HUD `occlusion=on`)? |
+| 8b | Send it across open floor; then stand a chair in the way and send it again | goes around / through / stops; any false stop on clear floor |
+| 8c | Stand 1 m in front of it for 30 s; step sideways | blinks? head follows? mouth moves with speech? |
+| 8d | Register a chair by pointing; quit; relaunch | chair still known and in the right place (cm off) |
 | 9 | Look at a chair on open floor; "look around, what do you see?" then pull `last_scan.jpg` | upright? listed objects; `seen_but_not_located` count |
 | 10 | "Go to the chair." | stop distance from the real chair, cm |
 | 11★ | Point at a chair; "this is a chair"; "go check it out" | stop distance, cm |
@@ -231,7 +272,7 @@ Do this in order on the Quest, then repeat the starred rows on XREAL. Write the 
 | 20★ | Close each eye in turn | anything visible in one eye only |
 
 Also run the editor tests once: open `unity-quest`, *Window > General > Test Runner > EditMode >
-Run All*. Eight tests; the planning-time test logs milliseconds per path query.
+Run All*. Ten tests; the planning-time test logs milliseconds per path query.
 
 ## Phase 4 run: the ten-step interaction
 
@@ -257,20 +298,25 @@ The same interaction with live Claude and with the headset has not been run.
 One-time setup:
 
 1. `cd backend && npm install && cp .env.example .env`, add both keys, `npm run doctor`.
-2. Import a humanoid into `unity-quest/Assets/Simulacra/Avatar/` and run *Simulacra > 3. Setup Avatar*.
-3. Quest: Settings > Environment setup > Space Setup. Add the demo chair as a furniture volume.
-4. *Simulacra > 1. Create Quest Scene*, set the backend URL, Build And Run, accept the three prompts.
+2. Quest: Settings > Environment setup > Space Setup for the demo room.
+3. Open `unity-quest` in Unity 6000.0.66f2, switch platform to Android, run Meta's *Project Setup
+   Tool > Fix All*, then *Simulacra > 1. Create Quest Scene* (this also prepares the bundled
+   character). Build And Run; accept the three permission prompts.
+4. Once, in the room: point the right controller at the chair and say "this is a chair". It is
+   stored as a **user-registered** object and remembered for that room.
 
 Each run:
 
-1. `npm start`; USB: `adb reverse tcp:8787 tcp:8787`.
-2. Launch the app facing open floor. Wait for HUD `ready`, `room=room_scan`, `navmesh=yes`. Press **B** to hide the HUD.
-3. "Hey, can you come over here?" The character answers and walks to you.
-4. Look at the chair. If it is not known yet, point the right controller at it and say "this is a chair".
-   That makes it a **user-registered** object; say so if asked. For a camera detection instead say
-   "look around and tell me what you see" (untested path).
-5. "What do you see over there?"
-6. "Yeah, go check it out." It walks to the chair and remarks on it.
-7. "Come back." or "Stop."
+1. `npm start` on the laptop; plug the headset in (the USB tunnel is automatic) or use the Wi-Fi address.
+2. Launch the app facing open floor. The HUD disappears by itself when everything is ready; if it
+   stays, it says what is wrong.
 
-Before the event, record a backup take with the Quest's built-in capture.
+| Time | You | Expected |
+|---|---|---|
+| 0–10 s | "Come over here." | The character is standing about 1.8 m away facing you |
+| 10–20 s | | It answers and walks to about 1.2 m from you |
+| 20–30 s | Look toward the chair: "What do you see over there?" | It refers to the chair. If asked how it knows: it was told (registered), unless a camera scan found it, in which case it may say it sees it |
+| 30–40 s | "Go take a look." | It walks to the chair |
+| 40–45 s | | It stops, looks at the chair and remarks on it |
+
+Do not present a registered chair as visual recognition. Record a backup take beforehand.

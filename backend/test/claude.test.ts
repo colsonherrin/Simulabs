@@ -33,6 +33,7 @@ test('"come over here": action is dispatched mid-stream, one call to start, one 
 
   await dev.waitFor((m) => m.type === 'transcript' && /Here I am/.test(m.text));
   assert.equal(cloud.calls.length, 2);
+  await dev.waitFor(() => cloud.spoken.length === 3); // the second sentence reaches the speech service a moment after the first
   assert.deepEqual(cloud.spoken.slice(1), ['Here I am.', 'What did you want to show me?']);
 
   // Request shape: cached stable prefix, eager tool streaming, low effort, prefetched world, no world-query tool.

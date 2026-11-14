@@ -203,15 +203,15 @@ class Session implements DeviceLink {
     if (!s || !this.brain.onWorldEvent) return;
     const ids = new Set(s.objects.map((o) => o.id));
     if (this.knownIds && this.pending.size === 0) {
-      for (const o of s.objects) if (!this.knownIds.has(o.id)) this.brain.onWorldEvent(`A new object is now known: ${o.id} (${o.label}).`);
-      for (const id of this.knownIds) if (!ids.has(id)) this.brain.onWorldEvent(`Object ${id} is no longer known.`);
+      for (const o of s.objects) if (!this.knownIds.has(o.id)) this.brain.onWorldEvent(`A new object is now known: ${o.id} (${o.label}).`, false);
+      for (const id of this.knownIds) if (!ids.has(id)) this.brain.onWorldEvent(`Object ${id} is no longer known.`, false);
     }
     this.knownIds = ids;
 
     const d = Math.hypot(s.avatar.pos[0] - s.user.pos[0], s.avatar.pos[2] - s.user.pos[2]);
     if (!this.userFar && d > 3.5 && s.avatar.state === 'idle') {
       this.userFar = true;
-      this.brain.onWorldEvent(`The user has moved away; they are now ${d.toFixed(1)} m from you.`);
+      this.brain.onWorldEvent(`The user has moved away; they are now ${d.toFixed(1)} m from you.`, true);
     } else if (this.userFar && d < 2.5) this.userFar = false;
   }
 

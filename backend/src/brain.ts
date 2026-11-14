@@ -27,8 +27,11 @@ export interface Brain {
   onFeedback(outcome: Record<string, unknown>, respond: boolean): void;
   /** World or memory changed enough that the standing context should be refreshed. */
   refreshContext(): void;
-  /** Something meaningful changed in the room (object appeared, user walked off). Optional. */
-  onWorldEvent?(description: string): void;
+  /**
+   * Something changed in the room. `urgent` changes (the user walked off) may trigger a reaction;
+   * the rest (an object was noticed) is only passed along with the next turn. Optional.
+   */
+  onWorldEvent?(description: string, urgent: boolean): void;
   close(): void;
 }
 
