@@ -117,4 +117,25 @@ export class WorldModel {
       .map((o) => `- ${o.id}: a ${o.label}, ${SOURCE_TEXT[o.source] ?? o.source}${o.reachable === false ? ', NOT reachable on foot' : ''}`)
       .join('\n');
   }
+
+  /** Fresh spatial context as plain text, prefetched into every reasoning turn so the model never has to ask for it. */
+  contextText(): string {
+    const s = this.snapshot;
+    if (!s) return 'No world data from the headset yet.';
+    const gaze = this.gazeTarget();
+    const lines = [
+      `you: ${s.avatar.state}, ${flatDist(s.avatar.pos, s.user.pos).toFixed(1)} m from the user, ${WorldModel.bearing(s.user, s.avatar.pos)} of them`,
+      `user is looking toward: ${gaze ? gaze.id : 'nothing you know about'}`,
+      `room: ${s.room ? `${s.room.source}, walkable floor ${s.room.navmesh ? 'mapped' : 'NOT mapped'}` : 'unknown'}`,
+    ];
+    if (s.objects.length === 0) lines.push('objects: none known yet');
+    else {
+      lines.push('objects:');
+      for (const o of s.objects)
+        lines.push(
+          `- ${o.id}: ${o.label}, ${SOURCE_TEXT[o.source] ?? o.source}, ${flatDist(o.pos, s.avatar.pos).toFixed(1)} m from you, ${flatDist(o.pos, s.user.pos).toFixed(1)} m from the user (${WorldModel.bearing(s.user, o.pos)} for them)${o.reachable === false ? ', NOT reachable on foot' : ''}`,
+        );
+    }
+    return lines.join('\n');
+  }
 }

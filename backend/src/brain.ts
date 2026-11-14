@@ -2,6 +2,7 @@ import type { BackendMessage } from './protocol.js';
 import type { Memory } from './memory.js';
 import type { SkillExecutor } from './skills.js';
 import type { WorldModel } from './world.js';
+import type { TurnTimer } from './latency.js';
 
 /** Everything a brain may touch. It can only act on the world through `skills`. */
 export interface BrainContext {
@@ -9,6 +10,7 @@ export interface BrainContext {
   skills: SkillExecutor;
   world: WorldModel;
   memory: Memory;
+  timer: TurnTimer;
   log(level: 'info' | 'warn' | 'error', message: string): void;
 }
 
@@ -25,6 +27,8 @@ export interface Brain {
   onFeedback(outcome: Record<string, unknown>, respond: boolean): void;
   /** World or memory changed enough that the standing context should be refreshed. */
   refreshContext(): void;
+  /** Something meaningful changed in the room (object appeared, user walked off). Optional. */
+  onWorldEvent?(description: string): void;
   /** Nothing has happened for a while: the brain may choose its own goal. */
   onIdle(): void;
   close(): void;

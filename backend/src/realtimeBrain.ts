@@ -99,6 +99,8 @@ export class RealtimeBrain implements Brain {
   }
 
   onText(text: string) {
+    this.ctx.timer.begin('text', text);
+    this.ctx.timer.countLlmCall();
     this.up({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });
     this.requestResponse();
   }
@@ -143,12 +145,14 @@ export class RealtimeBrain implements Brain {
     switch (ev.type) {
       case 'response.created':
         this.responseActive = true;
+        this.ctx.timer.mark('llm_first_token');
         this.ctx.send({ type: 'state', status: 'thinking' });
         break;
 
       // GA and beta event names for the same things.
       case 'response.output_audio.delta':
       case 'response.audio.delta':
+        this.ctx.timer.mark('first_audio');
         this.ctx.send({ type: 'audio', pcm16: ev.delta });
         break;
       case 'response.output_audio_transcript.done':
@@ -156,7 +160,10 @@ export class RealtimeBrain implements Brain {
         if (ev.transcript) this.ctx.send({ type: 'transcript', role: 'assistant', text: ev.transcript });
         break;
       case 'conversation.item.input_audio_transcription.completed':
-        if (ev.transcript) this.ctx.send({ type: 'transcript', role: 'user', text: ev.transcript });
+        if (ev.transcript) {
+          this.ctx.timer.note({ input: String(ev.transcript).slice(0, 80) });
+          this.ctx.send({ type: 'transcript', role: 'user', text: ev.transcript });
+        }
         break;
 
       case 'input_audio_buffer.speech_started':
@@ -167,6 +174,8 @@ export class RealtimeBrain implements Brain {
         break;
       case 'input_audio_buffer.speech_stopped':
         this.userSpeaking = false;
+        this.ctx.timer.begin('voice', '(speech)');
+        this.ctx.timer.countLlmCall();
         break;
 
       case 'response.done': {

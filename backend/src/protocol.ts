@@ -40,6 +40,8 @@ export type ActionName =
   | 'walk_to'
   | 'look_at'
   | 'approach_user'
+  | 'follow_user'
+  | 'gesture'
   | 'inspect_object'
   | 'scan_surroundings'
   | 'register_marker'
@@ -81,6 +83,7 @@ export type DeviceMessage =
   | ActionResult
   | { type: 'frame'; id: string; jpeg: string } // camera frame answering a scan action
   | { type: 'interrupt' }
+  // Known events: action_started {id, plan_ms, path_m} - the body began executing an action.
   | { type: 'event'; name: string; data?: Record<string, unknown> };
 
 // ---- backend -> device
@@ -92,4 +95,5 @@ export type BackendMessage =
   | { type: 'detections'; frameId: string; items: Detection[]; error?: string }
   | { type: 'transcript'; role: 'user' | 'assistant'; text: string }
   | { type: 'state'; status: 'idle' | 'listening' | 'thinking' | 'speaking' }
-  | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string };
+  | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
+  | { type: 'metrics'; turn: Record<string, unknown> }; // per-turn latency breakdown, for HUDs
