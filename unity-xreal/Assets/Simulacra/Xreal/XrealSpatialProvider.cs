@@ -71,9 +71,12 @@ namespace Simulacra
             cam.backgroundColor = Color.black;
         }
 
+        private float _startTime;
+
         private IEnumerator Start()
         {
             float start = Time.unscaledTime;
+            _startTime = start;
             var wait = new WaitForSeconds(1f);
             while (true)
             {
@@ -176,6 +179,10 @@ namespace Simulacra
 
             TrackAnchor(floorY);
             int meshVertices = useDepthMesh ? CountMeshVertices() : 0;
+
+            // Do not start on a sliver of floor: the avatar would have nowhere to stand or walk, and
+            // would jump when more floor appears. Wait for a usable patch, up to the fallback deadline.
+            if (!_hasRealFloor && floorArea < 2.5f && Time.unscaledTime - _startTime < floorWaitSeconds) return;
 
             // Publish only when something material changed, and not too often: every publish rebuilds the NavMesh.
             string signature = Mathf.RoundToInt(floorY / 0.04f) + ":" + geometry.floor.Count + ":" + Mathf.RoundToInt(floorArea / 0.75f) + ":" + geometry.obstacles.Count + ":" + seeds.Count + ":" + (meshVertices / 2000);

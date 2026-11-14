@@ -71,8 +71,10 @@ namespace Simulacra.EditorTools
             foreach (GameObject go in scene.GetRootGameObjects())
                 if (go.name.Contains("XREALLogo")) Object.DestroyImmediate(go);
 
+            // On an additive display dark shading is see-through, so light the character generously.
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.6f, 0.6f, 0.6f);
+            RenderSettings.ambientLight = new Color(0.85f, 0.85f, 0.85f);
+            foreach (Light light in Object.FindObjectsOfType<Light>()) if (light.type == LightType.Directional) light.intensity = Mathf.Max(light.intensity, 1.3f);
 
             var appGo = new GameObject("Simulacra");
             var provider = appGo.AddComponent<XrealSpatialProvider>();
