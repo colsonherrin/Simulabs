@@ -39,9 +39,11 @@ namespace Simulacra
         public override Vector3 HudLocalPosition => new Vector3(-0.2f, 0.02f, 1.1f);
         public override bool InterruptPressed => _triggerDown;
         public override bool ToggleHudPressed => _appDown;
+        public override bool TalkHeld => _triggerHeld;
+        public override bool CanDarkenWorld => false; // optical see-through: black is invisible
 
         private Transform _head;
-        private bool _triggerDown, _appDown, _showPlanes = true, _hasRealFloor;
+        private bool _triggerDown, _triggerHeld, _appDown, _showPlanes = true, _hasRealFloor;
         private string _signature = "";
         private float _lastPublish = -100f;
 
@@ -71,11 +73,13 @@ namespace Simulacra
         private void Update()
         {
             _triggerDown = false;
+            _triggerHeld = false;
             _appDown = false;
             foreach (InputDevice device in InputSystem.devices)
             {
                 if (!(device is XREALController c)) continue;
                 if (c.TriggerButton != null && c.TriggerButton.wasPressedThisFrame) _triggerDown = true;
+                if (c.TriggerButton != null && c.TriggerButton.isPressed) _triggerHeld = true;
                 if (c.ButtonId0 != null && c.ButtonId0.wasPressedThisFrame) _appDown = true;
             }
         }

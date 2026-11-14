@@ -28,12 +28,15 @@ namespace Simulacra
         public float roomWaitSeconds = 10f;
         public float fallbackFloorSide = 4f;
         public int frameWidth = 768;
+        [Tooltip("Tick if last_scan.jpg (saved next to simulacra.json after each scan) is upside down.")]
+        public bool flipScanImage = false;
 
         public override string DeviceName => "quest";
         public override Transform Head => rig.centerEyeAnchor;
         public override bool HasVision => cameraAccess != null && cameraAccess.isActiveAndEnabled && cameraAccess.IsPlaying;
         public override bool InterruptPressed => OVRInput.GetDown(OVRInput.Button.One);
         public override bool ToggleHudPressed => OVRInput.GetDown(OVRInput.Button.Two);
+        public override bool TalkHeld => OVRInput.Get(OVRInput.Button.PrimaryIndexTrigger, OVRInput.Controller.RTouch);
 
         public override Ray PointerRay
         {
@@ -226,7 +229,8 @@ namespace Simulacra
             int w = Mathf.Min(frameWidth, size.x);
             int h = Mathf.RoundToInt(w * (size.y / (float)size.x));
             RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
-            Graphics.Blit(_full, rt);
+            if (flipScanImage) Graphics.Blit(_full, rt, new Vector2(1f, -1f), new Vector2(0f, 1f));
+            else Graphics.Blit(_full, rt);
             RenderTexture previous = RenderTexture.active;
             RenderTexture.active = rt;
             if (_small == null || _small.width != w || _small.height != h) _small = new Texture2D(w, h, TextureFormat.RGB24, false);
@@ -235,6 +239,8 @@ namespace Simulacra
             RenderTexture.active = previous;
             RenderTexture.ReleaseTemporary(rt);
             jpeg = _small.EncodeToJPG(70);
+            // Keep the last frame for inspection: `adb pull /sdcard/Android/data/<package>/files/last_scan.jpg`.
+            try { System.IO.File.WriteAllBytes(System.IO.Path.Combine(Application.persistentDataPath, "last_scan.jpg"), jpeg); } catch (Exception) { /* diagnostics only */ }
 
             locate = imagePoint =>
             {

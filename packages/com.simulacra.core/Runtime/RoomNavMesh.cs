@@ -73,7 +73,10 @@ namespace Simulacra
         public static void Clear()
         {
             if (s_instance.valid) s_instance.Remove();
-            if (s_data != null) Object.Destroy(s_data);
+            if (s_data != null)
+            {
+                if (Application.isPlaying) Object.Destroy(s_data); else Object.DestroyImmediate(s_data);
+            }
             s_data = null;
         }
 
@@ -89,6 +92,38 @@ namespace Simulacra
         {
             path = path ?? new NavMeshPath();
             return NavMesh.CalculatePath(from, to, NavMesh.AllAreas, path) && path.status == NavMeshPathStatus.PathComplete;
+        }
+
+        /// <summary>
+        /// Where to place the avatar at start: in front of the user, on floor that is connected to
+        /// where the user stands, preferring a spot with a clear straight line to them (so it does not
+        /// appear behind a table or on the far side of a wall).
+        /// </summary>
+        public static bool FindSpawnPoint(Vector3 userFloor, Vector3 forward, float distance, out Vector3 spot)
+        {
+            spot = userFloor;
+            if (!Snap(userFloor, 1.5f, out Vector3 start)) return false;
+            forward.y = 0f;
+            forward = forward.sqrMagnitude < 1e-4f ? Vector3.forward : forward.normalized;
+            var path = new NavMeshPath();
+            for (int pass = 0; pass < 2; pass++)
+            {
+                foreach (float d in new[] { distance, distance * 0.75f, distance * 1.3f, 1.0f })
+                {
+                    for (int i = 0; i < 9; i++)
+                    {
+                        float offset = ((i + 1) / 2) * 25f * ((i % 2 == 0) ? -1f : 1f);
+                        Vector3 candidate = new Vector3(userFloor.x, start.y, userFloor.z) + Quaternion.Euler(0f, offset, 0f) * forward * d;
+                        if (!Snap(candidate, 0.15f, out Vector3 snapped)) continue;
+                        if (!HasCompletePath(start, snapped, path)) continue;
+                        // First pass insists on line of sight across the floor; second pass accepts any connected spot.
+                        if (pass == 0 && NavMesh.Raycast(start, snapped, out _, NavMesh.AllAreas)) continue;
+                        spot = snapped;
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         /// <summary>

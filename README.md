@@ -66,7 +66,11 @@ npm install
 cp .env.example .env
 ```
 Put `ANTHROPIC_API_KEY` (Claude, the planner) and `OPENAI_API_KEY` (speech-to-text, the voice and
-camera detection) in `.env`, then:
+camera detection) in `.env`. Check them, and get the address the headset should use, with:
+```bash
+npm run doctor
+```
+Then start it:
 ```bash
 npm start
 ```
@@ -110,6 +114,9 @@ npm test
 
 You should see a placeholder mannequin ~1.8 m in front of you with a green debug HUD.
 **A** = interrupt the AI, **B** = hide/show the HUD. Say *"Hey, can you come over here?"*
+
+In a loud room tick **Push To Talk** on the `Simulacra` object (or put `"pushToTalk": true` in
+`simulacra.json`): the microphone then only listens while the right index trigger is held.
 
 To change the URL without rebuilding:
 ```bash
@@ -171,7 +178,11 @@ The project runs with a primitive mannequin until you add a rigged human. Fastes
    Controller with the `Speed` / `Turn` / `Speaking` parameters, saves a prefab and assigns it.
 
 Any humanoid works (VRM via UniVRM, Ready Player Me, your own). The contract is just: an `Animator`
-with optional `Speed` (float, m/s), `Turn` (float, −1..1), `Speaking` (bool). Animation is driven by
+with optional `Speed` (float, 0 standing to 1 walking), `Turn` (float, −1..1), `MotionSpeed` (float,
+walk-cycle playback rate) and `Speaking` (bool). The body is measured at spawn: it is rescaled to
+1.72 m only if its height is implausible for a human (an import-scale mistake), and its soles are
+put on the floor wherever the model's pivot is. Humanoids look at you with their head and eyes. If
+the feet slide while walking, change **Walk Clip Speed** on the avatar until they do not. Animation is driven by
 how the body is actually moving, not by what was requested. Mouth: a blendshape named like
 `jawOpen` / `viseme_aa` / `mouthOpen` or a humanoid jaw bone is driven by voice loudness; otherwise
 you get the talk clip plus a head bob. Check the licence of whatever model you use.
@@ -192,7 +203,7 @@ you get the talk clip plus a head bob. Check the licence of whatever model you u
 | `scan_surroundings()` | Camera frame → vision model → depth raycast → new `detected` objects. |
 | `register_marker(label)` | "This is my desk" while pointing: stores a `manual` object. |
 | `stop_moving()` | Halt. |
-| `save_skill(...)` / `run_skill(...)` | Compose primitives into a reusable named skill (`$target` placeholder) and replay it. |
+| `run_skill(name, target_id)` | Replay a sequence that was saved with `save_as`, on any object. |
 | speak | Claude's text is spoken; with an action, the line rides in the action's `say` field so it starts with the movement. |
 
 Memory (`backend/data/memory.json`) keeps per-skill success/failure counts with the last failure
@@ -234,7 +245,7 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
 - **HUD `brain=-` and a `[error] brain failed to start`:** bad/missing `OPENAI_API_KEY`, or the
   account has no access to `REALTIME_MODEL`. Change the model in `.env`.
 - **`[error] Claude rejected the request`:** a planner setting the model does not accept; clear
-  `PLANNER_FAST` / `PLANNER_THINKING` or change `PLANNER_MODEL`.
+  `PLANNER_FAST` or change `PLANNER_MODEL`.
 - **It hears you but never answers aloud:** speech-to-text or text-to-speech failed; the HUD shows
   the error. Both need `OPENAI_API_KEY`. `BRAIN=realtime` is the fallback that needs no Claude key.
 - **It talks over itself / cuts itself off:** half-duplex is on by default (mic muted while it
@@ -253,13 +264,33 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
 - **Model IDs:** `REALTIME_MODEL`, `REALTIME_VOICE`, `STT_MODEL`, `TTS_MODEL` and `VISION_MODEL` in
   `.env` are defaults, not verified against your account.
 
+## Tests
+
+```bash
+cd backend && npm test
+```
+17 backend tests (real server, WebSockets and HTTP; cloud services and headset are stand-ins).
+
+```bash
+cd tools/headless-tests && dotnet run
+```
+32 checks of the real geometry, world-model and avatar-fit code outside Unity.
+
+In either Unity project: **Window > General > Test Runner > EditMode > Run All** runs the NavMesh,
+obstacle-avoidance, spawn-placement and avatar-scale tests against the real engine.
+
+The audit of all of this, with what is and is not verified, is in
+[docs/FULL_SYSTEM_AUDIT.md](docs/FULL_SYSTEM_AUDIT.md); the complexity review is in
+[docs/SIMPLIFICATION_AUDIT.md](docs/SIMPLIFICATION_AUDIT.md).
+
 ## Repository layout
 
 ```
 backend/                       Node/TypeScript brain: protocol, world model, skills, memory, voice, vision
   public/                      browser simulator (also the reference client for non-Unity devices)
 packages/com.simulacra.core/   shared Unity package: world model, NavMesh, avatar, audio, backend link,
-                               editor simulator, avatar importer
+                               editor simulator, avatar importer, in-editor tests
+tools/headless-tests/          runs the package's geometry and world-model code outside Unity
 unity-quest/                   Unity 6000.0.66f2 project for Quest 3 / 3S   (Assets/Simulacra/Quest)
 unity-xreal/                   Unity 2022.3.62f2 project for XREAL glasses  (Assets/Simulacra/Xreal)
 ```

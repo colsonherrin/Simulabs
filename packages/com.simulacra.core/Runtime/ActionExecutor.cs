@@ -23,6 +23,9 @@ namespace Simulacra
         private readonly MonoBehaviour _host;
         private readonly GestureController _gestures;
 
+        /// <summary>Optional eye-contact controller: glances at whatever an action is about.</summary>
+        public HeadLook headLook;
+
         /// <summary>Milliseconds the last movement spent on validation + path planning, measured on device.</summary>
         public float LastPlanMs { get; private set; }
 
@@ -71,7 +74,6 @@ namespace Simulacra
                     case "look_at": LookAt(target, reply); break;
                     case "stop": _avatar.Stop(); reply(true, null, null); break;
                     case "register_marker": RegisterMarker((string)p?["label"], reply); break;
-                    case "forget_object": reply(_world.Remove(target), "no such object", null); break;
                     case "scan_surroundings": _host.StartCoroutine(Scan(id, reply)); break;
                     default: reply(false, "this headset does not implement action '" + action + "'", null); break;
                 }
@@ -108,6 +110,7 @@ namespace Simulacra
             }
             if (_world.TryGet(target, out TrackedObject o))
             {
+                if (headLook != null) headLook.Focus(o.position, 4f);
                 position = o.position;
                 standOff = WorldModel.StandOff(o);
                 return true;

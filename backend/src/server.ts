@@ -29,20 +29,17 @@ export interface ServerOptions {
   claudeModel?: string;
   claudeEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   claudeFast?: boolean;
-  claudeThinkingOff?: boolean;
   sttModel?: string;
   ttsModel?: string;
   ttsBaseUrl?: string;
   /** Key for text-to-speech when it should differ from `apiKey` (benchmarks). */
   ttsApiKey?: string;
-  stopReflex?: boolean;
   worldEventMinGapSec?: number;
   realtimeModel: string;
   realtimeVoice: string;
   realtimeUrl?: string;
   visionModel: string;
   memoryPath: string | null;
-  autonomyIdleSec: number;
   quiet?: boolean;
 }
 
@@ -56,7 +53,6 @@ class Session implements DeviceLink {
   private nextId = 1;
   private worldSig = '';
   private refreshTimer: NodeJS.Timeout | null = null;
-  private idleTimer: NodeJS.Timeout | null = null;
   private device = 'unknown';
   private timer = new TurnTimer();
   private knownIds: Set<string> | null = null;
@@ -91,11 +87,9 @@ class Session implements DeviceLink {
         model: opts.claudeModel ?? 'claude-opus-5-5',
         effort: opts.claudeEffort ?? 'low',
         fast: opts.claudeFast ?? false,
-        thinkingOff: opts.claudeThinkingOff ?? false,
         // Claude has no audio interface: speech in and out are separate, swappable services.
         ears: opts.apiKey ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl }, log) : null,
         mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
-        stopReflex: opts.stopReflex ?? true,
         worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
       });
     else this.brain = new RealtimeBrain(ctx, { apiKey: opts.apiKey!, model: opts.realtimeModel, voice: opts.realtimeVoice, url: opts.realtimeUrl });
@@ -103,7 +97,6 @@ class Session implements DeviceLink {
       this.log('info', `feedback ${JSON.stringify(outcome).slice(0, 300)}`);
       this.brain.refreshContext(); // memory changed
       this.brain.onFeedback(outcome, true);
-      this.touch();
     };
 
     ws.on('message', (raw, isBinary) => {
@@ -151,11 +144,6 @@ class Session implements DeviceLink {
     });
   }
 
-  private touch() {
-    if (this.idleTimer) clearTimeout(this.idleTimer);
-    if (this.opts.autonomyIdleSec > 0) this.idleTimer = setTimeout(() => this.brain.onIdle(), this.opts.autonomyIdleSec * 1000);
-  }
-
   private onMessage(msg: DeviceMessage) {
     switch (msg.type) {
       case 'hello':
@@ -163,13 +151,11 @@ class Session implements DeviceLink {
         this.capabilities = msg.capabilities ?? {};
         this.log('info', `hello protocol=${msg.protocol} capabilities=${JSON.stringify(this.capabilities)}`);
         if (msg.protocol !== PROTOCOL_VERSION) this.log('warn', `protocol mismatch: device ${msg.protocol}, backend ${PROTOCOL_VERSION}`);
-        this.touch();
         break;
       case 'audio':
         this.brain.onAudio(msg.pcm16);
         break;
       case 'text':
-        this.touch();
         this.brain.onText(msg.text);
         break;
       case 'interrupt':
@@ -244,7 +230,6 @@ class Session implements DeviceLink {
   }
 
   private dispose() {
-    if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
@@ -325,15 +310,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     claudeModel: env.PLANNER_MODEL ?? 'claude-opus-5-5',
     claudeEffort: (env.PLANNER_EFFORT as ServerOptions['claudeEffort']) ?? 'low',
     claudeFast: env.PLANNER_FAST === '1',
-    claudeThinkingOff: env.PLANNER_THINKING === 'off',
     sttModel: env.STT_MODEL,
     ttsModel: env.TTS_MODEL,
-    stopReflex: env.STOP_REFLEX !== '0',
     realtimeModel: env.REALTIME_MODEL ?? 'gpt-realtime',
     realtimeVoice: env.REALTIME_VOICE ?? 'marin',
     visionModel: env.VISION_MODEL ?? 'gpt-4.1-mini',
     memoryPath: env.MEMORY_PATH ?? join(HERE, '..', 'data', 'memory.json'),
-    autonomyIdleSec: Number(env.AUTONOMY_IDLE_SEC ?? 0),
   });
   console.log(`Simulacra backend up. brain=${brain}`);
   console.log(`  simulator:  http://localhost:${port}/`);

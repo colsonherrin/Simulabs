@@ -118,17 +118,6 @@ export class RealtimeBrain implements Brain {
     if (respond) this.requestResponse();
   }
 
-  onIdle() {
-    this.up({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text: '[idle] The user has been quiet for a while. If something in the room is worth a look, or you are far from the user, you may choose one skill to run and say one short sentence about it. Otherwise say nothing at all.' }],
-      },
-    });
-    this.requestResponse();
-  }
 
   /** Ask for a model turn, but never on top of an active one or over the user's speech. */
   private requestResponse() {

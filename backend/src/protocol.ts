@@ -45,7 +45,6 @@ export type ActionName =
   | 'inspect_object'
   | 'scan_surroundings'
   | 'register_marker'
-  | 'forget_object'
   | 'stop';
 
 /** The action contract from the spec: backend -> device. */

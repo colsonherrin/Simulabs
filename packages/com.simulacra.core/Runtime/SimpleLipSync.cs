@@ -23,6 +23,9 @@ namespace Simulacra
         private Vector3 _mouthRest;
         private bool _hasSpeakingParam;
         private float _phase;
+        private SkinnedMeshRenderer _blinkMesh;
+        private readonly System.Collections.Generic.List<int> _blinkShapes = new System.Collections.Generic.List<int>();
+        private float _nextBlink, _blinkEnd;
 
         private static readonly string[] Names = { "jawopen", "jaw_open", "mouthopen", "mouth_open", "viseme_aa", "fcl_mth_a", "vrc.v_aa", "aa", "jaw" };
 
@@ -39,6 +42,8 @@ namespace Simulacra
                 }
             }
             if (face == null || blendShapeIndex < 0) FindBlendShape();
+            FindBlinkShapes();
+            _nextBlink = Time.time + Random.Range(1.5f, 4f);
             if (jaw != null) _jawRest = jaw.localRotation;
             if (mouthVisual != null) _mouthRest = mouthVisual.localScale;
         }
@@ -62,12 +67,34 @@ namespace Simulacra
             }
         }
 
+        private void FindBlinkShapes()
+        {
+            foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>())
+            {
+                Mesh m = smr.sharedMesh;
+                if (m == null) continue;
+                for (int i = 0; i < m.blendShapeCount; i++)
+                {
+                    string n = m.GetBlendShapeName(i).ToLowerInvariant();
+                    if (n.Contains("blink") || n.Contains("eyesclosed") || n.Contains("eyes_closed")) _blinkShapes.Add(i);
+                }
+                if (_blinkShapes.Count > 0) { _blinkMesh = smr; return; }
+            }
+        }
+
         // After the Animator has posed the skeleton.
         private void LateUpdate()
         {
             float level = voice != null ? voice.Level : 0f;
             bool speaking = voice != null && voice.IsSpeaking;
             if (_hasSpeakingParam) _animator.SetBool("Speaking", speaking);
+
+            if (_blinkMesh != null)
+            {
+                if (Time.time >= _nextBlink) { _blinkEnd = Time.time + 0.13f; _nextBlink = Time.time + Random.Range(2.2f, 5.5f); }
+                float closed = Time.time < _blinkEnd ? 100f : 0f;
+                foreach (int i in _blinkShapes) _blinkMesh.SetBlendShapeWeight(i, closed);
+            }
 
             if (face != null && blendShapeIndex >= 0) face.SetBlendShapeWeight(blendShapeIndex, level * 100f);
             if (jaw != null) jaw.localRotation = _jawRest * Quaternion.Euler(level * jawOpenDegrees, 0f, 0f);

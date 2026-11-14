@@ -11,7 +11,9 @@ namespace Simulacra
     /// replans when the destination moves or the NavMesh is rebuilt, detects being stuck, and
     /// reports the outcome through a callback.
     ///
-    /// Animator contract (all optional): float "Speed" (m/s), float "Turn" (-1..1), bool "Speaking".
+    /// Animator contract (all optional): float "Speed" (0 = standing, 1 = walking at walkSpeed),
+    /// float "Turn" (-1..1), float "MotionSpeed" (playback rate that keeps feet from sliding),
+    /// bool "Speaking".
     /// </summary>
     [RequireComponent(typeof(NavMeshAgent))]
     public class AvatarController : MonoBehaviour
@@ -19,15 +21,43 @@ namespace Simulacra
         /// <summary>Returns where to stand and what to face, or false if the target cannot be reached right now.</summary>
         public delegate bool GoalProvider(out Vector3 stand, out Vector3 face);
 
-        public float walkSpeed = 0.9f;
+        public float walkSpeed = 1.0f;
         public float turnSpeedDegrees = 200f;
+        [Tooltip("Ground speed in m/s that the walk clip was animated for. Tune on the headset until the feet stop sliding: raise it if the feet slip backwards, lower it if they skate forwards.")]
+        public float walkClipSpeed = 1.4f;
+
+        /// <summary>The rendered body (child of this root). Kept exactly on the physical floor.</summary>
+        public Transform visual;
+        /// <summary>Optional things lying on the floor under the avatar (a contact shadow).</summary>
+        public Transform groundDecal;
+        private float _groundY;
+        private bool _hasGround;
+        private float _visualLift;
+
+        /// <summary>
+        /// The physical floor height. A NavMesh sits a few centimetres off the real surface (it is
+        /// voxelised), so the body is pinned to the measured floor instead of the mesh.
+        /// </summary>
+        public void SetGround(float floorY)
+        {
+            _groundY = floorY;
+            _hasGround = true;
+            if (visual != null && _visualLift == 0f) _visualLift = visual.localPosition.y;
+        }
+
+        private void LateUpdate()
+        {
+            if (!_hasGround) return;
+            if (visual != null) { Vector3 p = visual.position; p.y = _groundY + _visualLift; visual.position = p; }
+            if (groundDecal != null) { Vector3 p = groundDecal.position; p.y = _groundY + 0.006f; groundDecal.position = p; }
+        }
 
         public string State { get; private set; } = "idle"; // idle | walking | turning | following
         public bool IsBusy => _routine != null;
 
         private NavMeshAgent _agent;
         private Animator _animator;
-        private bool _hasSpeed, _hasTurn;
+        private bool _hasSpeed, _hasTurn, _hasMotionSpeed;
         private Coroutine _routine;
         private Action<bool, string> _done;
         private float _animSpeed, _animTurn, _lastYaw;
@@ -39,7 +69,7 @@ namespace Simulacra
             _agent.radius = RoomNavMesh.AgentRadius;
             _agent.height = RoomNavMesh.AgentHeight;
             _agent.speed = walkSpeed;
-            _agent.acceleration = 3f;
+            _agent.acceleration = 2.5f;
             _agent.angularSpeed = turnSpeedDegrees;
             _agent.stoppingDistance = 0.05f;
             _agent.autoBraking = true;
@@ -57,6 +87,7 @@ namespace Simulacra
                 {
                     if (p.name == "Speed") _hasSpeed = true;
                     if (p.name == "Turn") _hasTurn = true;
+                    if (p.name == "MotionSpeed") _hasMotionSpeed = true;
                 }
             }
             _lastYaw = transform.eulerAngles.y;
@@ -292,7 +323,10 @@ namespace Simulacra
             _animTurn = Mathf.Lerp(_animTurn, Mathf.Clamp(yawRate / turnSpeedDegrees, -1f, 1f), 1f - Mathf.Exp(-10f * dt));
             if (_animator != null)
             {
-                if (_hasSpeed) _animator.SetFloat("Speed", _animSpeed);
+                float normalized = Mathf.Clamp01(_animSpeed / Mathf.Max(0.1f, walkSpeed));
+                if (_hasSpeed) _animator.SetFloat("Speed", normalized);
+                // Play the walk cycle at the rate that matches real ground speed; leave idle untouched.
+                if (_hasMotionSpeed) _animator.SetFloat("MotionSpeed", Mathf.Lerp(1f, walkSpeed / Mathf.Max(0.1f, walkClipSpeed), normalized));
                 if (_hasTurn) _animator.SetFloat("Turn", _animTurn);
             }
         }

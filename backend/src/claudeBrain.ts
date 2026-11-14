@@ -12,10 +12,8 @@ export interface ClaudeBrainOptions {
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   fast: boolean; // fast output mode (costs more; only on models that support it)
-  thinkingOff: boolean; // only valid on models that accept disabled thinking
   ears: Ears | null;
   mouth: Mouth | null;
-  stopReflex: boolean;
   worldEventMinGapMs: number;
 }
 
@@ -48,7 +46,7 @@ Be truthful about how you know things: only objects marked "seen by the headset 
 Messages are not always the user speaking. [action_result] reports how an action ended. [world_event] reports a change in the room. [note] is information only. If an event needs no words and no action, reply with exactly <silent> and nothing else.
 
 # Learning
-When a sequence of steps works and would be useful again, pass save_as to run_sequence or call save_skill with "$target" so it generalises. Prefer run_skill for things you already learned. Use remember_object for facts worth keeping about a thing.
+When a sequence of steps would be useful again, pass save_as to run_sequence; if it works it is remembered. Prefer run_skill (with a target_id) for things you already learned. Use remember_object for facts worth keeping about a thing.
 
 Stay at a comfortable distance and never walk into the user.`;
 
@@ -98,16 +96,15 @@ export class ClaudeBrain implements Brain {
     private ctx: BrainContext,
     private opts: ClaudeBrainOptions,
   ) {
-    this.client = new Anthropic({ ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(opts.baseURL ? { baseURL: opts.baseURL } : {}), maxRetries: 1 });
+    this.client = new Anthropic({ ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(opts.baseURL ? { baseURL: opts.baseURL } : {}), maxRetries: 1, timeout: 20_000 }); // a hung request must not freeze the character
     if (opts.mouth) {
       opts.mouth.onAudio = (pcm16) => this.ctx.send({ type: 'audio', pcm16 });
       opts.mouth.onFirstAudio = () => this.ctx.timer.mark('first_audio');
     }
     if (opts.ears) {
-      opts.ears.onSpeechStart = () => {
-        this.ctx.send({ type: 'state', status: 'listening' });
-        this.cutOff(); // barge-in: stop talking and stop thinking about the old request
-      };
+      // A noise burst also looks like "speech started". Nothing is cut off until real words arrive
+      // (see heard()), so background noise can neither silence the character nor drop a request.
+      opts.ears.onSpeechStart = () => this.ctx.send({ type: 'state', status: 'listening' });
       opts.ears.onSpeechEnd = () => (this.speechEndAt = performance.now());
       opts.ears.onTranscript = (text) => this.heard(text, 'voice');
     }
@@ -123,7 +120,6 @@ export class ClaudeBrain implements Brain {
   }
 
   onText(text: string) {
-    this.cutOff();
     this.heard(text, 'text');
   }
 
@@ -154,11 +150,6 @@ export class ClaudeBrain implements Brain {
     /* context is rebuilt from the live world model on every turn */
   }
 
-  onIdle() {
-    this.inbox.push({ kind: 'event', text: '[world_event] The user has been quiet for a while. If something in the room is worth a look, or you are far from the user, you may do one thing about it. Otherwise reply <silent>.' });
-    void this.pump();
-  }
-
   close() {
     this.closed = true;
     this.cutOff();
@@ -169,12 +160,15 @@ export class ClaudeBrain implements Brain {
   // ---- input
 
   private heard(text: string, trigger: 'voice' | 'text') {
+    // Speech-to-text returns punctuation or nothing for coughs and clatter: not a turn.
+    if (!/\p{L}{2,}/u.test(text)) return;
+    this.cutOff(); // barge-in on real words: stop talking and abandon the reply to the old request
     this.ctx.send({ type: 'transcript', role: 'user', text });
     this.ctx.timer.begin(trigger, text, trigger === 'voice' && this.speechEndAt ? this.speechEndAt : performance.now());
     if (trigger === 'voice') this.ctx.timer.mark('transcript');
 
     // Safety reflex: a bare "stop" halts the body locally, before any model call.
-    if (this.opts.stopReflex && /^\s*(stop|wait|hold on|freeze|halt)\b[\s.!]*$/i.test(text)) {
+    if (/^\s*(stop|wait|hold on|freeze|halt)\b[\s.!]*$/i.test(text)) {
       void this.ctx.skills.execute('stop_moving', {});
       this.inbox.push({ kind: 'note', text: '[note] The body was already stopped by a local reflex when the user said this.' });
     }
@@ -238,7 +232,6 @@ export class ClaudeBrain implements Brain {
       tools: CLAUDE_TOOLS,
       messages: this.history,
       output_config: { effort: opts.effort },
-      ...(opts.thinkingOff ? { thinking: { type: 'disabled' as const } } : {}),
       ...(opts.fast ? { speed: 'fast' as const } : {}),
       // A safety decline is retried server-side on a fallback model instead of leaving the character mute.
       ...(supportsFallback ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),

@@ -39,7 +39,7 @@ export const TOOLS: ToolDef[] = [
   {
     type: 'function',
     name: 'run_sequence',
-    description: 'Run several primitive skills one after another in a single go, without checking back in between (use this for multi-step requests such as "go to the table, then come back"). If save_as is given and every step succeeds, the sequence is stored as a reusable skill. Outcome arrives later as an [action_result].',
+    description: 'Run several primitive skills one after another in a single go, without checking back in between (use this for multi-step requests such as "go to the table, then come back"). If save_as is given and every step succeeds, the sequence is stored as a reusable skill; when all its steps concern one object, it is stored generically and can later be run on any object with run_skill. Outcome arrives later as an [action_result].',
     parameters: obj(
       {
         steps: { type: 'array', items: obj({ skill: { type: 'string', enum: ['walk_to', 'look_at', 'approach_user', 'inspect_object', 'scan_surroundings', 'gesture'] }, target: { type: 'string', description: 'Object id, "user", or for gesture the gesture type.' } }, ['skill']) },
@@ -48,23 +48,7 @@ export const TOOLS: ToolDef[] = [
       ['steps'],
     ),
   },
-  {
-    type: 'function',
-    name: 'save_skill',
-    description: 'Store a reusable skill made of existing primitive skills, after a sequence worked. Use "$target" as the target to make it apply to any object later.',
-    parameters: obj(
-      {
-        name: { type: 'string', description: 'snake_case name, e.g. "approach_object".' },
-        description: { type: 'string' },
-        steps: {
-          type: 'array',
-          items: obj({ skill: { type: 'string', enum: ['walk_to', 'look_at', 'approach_user', 'inspect_object', 'scan_surroundings', 'gesture'] }, target: { type: 'string', description: 'Object id, "user", "$target", or for gesture the gesture type.' } }, ['skill']),
-        },
-      },
-      ['name', 'description', 'steps'],
-    ),
-  },
-  { type: 'function', name: 'run_skill', description: 'Run a skill you saved earlier with save_skill. Outcome arrives later as an [action_result].', parameters: obj({ name: { type: 'string' }, target_id: { type: 'string', description: 'Replaces "$target" in the skill steps.' } }, ['name']) },
+  { type: 'function', name: 'run_skill', description: 'Run a skill you saved earlier (run_sequence with save_as). Outcome arrives later as an [action_result].', parameters: obj({ name: { type: 'string' }, target_id: { type: 'string', description: 'Replaces "$target" in the skill steps.' } }, ['name']) },
 ];
 
 const MOVE_TIMEOUT = 45_000;
@@ -83,6 +67,8 @@ export class SkillExecutor {
   /** Called with the outcome of a long-running skill. */
   onFeedback: (outcome: Outcome) => void = () => {};
   private runToken = 0;
+  /** Recent consecutive failures per skill+target, to stop a model from retrying the same doomed action. */
+  private recentFailures = new Map<string, { count: number; at: number; reason?: string }>();
 
   constructor(
     private device: DeviceLink,
@@ -136,8 +122,6 @@ export class SkillExecutor {
           const r = await this.device.request('stop', undefined, undefined, QUICK_TIMEOUT);
           return { status: r.status, reason: r.reason };
         }
-        case 'save_skill':
-          return this.saveSkill(args);
         case 'run_skill':
           return this.runSkill(args);
         default:
@@ -153,8 +137,22 @@ export class SkillExecutor {
     return `No object with id "${id}". Known ids: ${ids.length ? ids.join(', ') : '(none yet)'}, or "user". Try scan_surroundings or ask the user to point at it and use register_marker.`;
   }
 
+  private record(skill: string, target: string | undefined, status: 'succeeded' | 'failed', reason?: string) {
+    const key = `${skill}:${target ?? ''}`;
+    if (status === 'succeeded') this.recentFailures.delete(key);
+    else {
+      const prev = this.recentFailures.get(key);
+      const fresh = prev && Date.now() - prev.at < 30_000;
+      this.recentFailures.set(key, { count: fresh ? prev!.count + 1 : 1, at: Date.now(), reason });
+    }
+    this.memory.recordOutcome(skill, target, status, reason);
+  }
+
   /** Cheap checks before bothering the headset. Geometry is validated on the device. */
   private validate(skill: string, target: string | undefined): string | null {
+    const recent = this.recentFailures.get(`${skill}:${target ?? ''}`);
+    if (recent && recent.count >= 2 && Date.now() - recent.at < 30_000)
+      return `This exact action has just failed ${recent.count} times in a row (${recent.reason ?? 'no reason given'}). Do not try it again now; tell the user and suggest something else.`;
     if (!this.world.snapshot) return 'The headset has not sent any world data yet.';
     if (skill === 'scan_surroundings') return this.device.capabilities.vision ? null : 'This headset has no camera access for object detection. Ask the user to point at things and use register_marker instead.';
     if (skill === 'approach_user') return null;
@@ -166,7 +164,7 @@ export class SkillExecutor {
   }
 
   private fail(skill: string, target: string | undefined, reason: string): Outcome {
-    this.memory.recordOutcome(skill, target, 'failed', reason);
+    this.memory.recordOutcome(skill, target, 'failed', reason); // refused before reaching the body: not counted by the breaker
     return { status: 'failed', skill, target_id: target, reason };
   }
 
@@ -177,7 +175,7 @@ export class SkillExecutor {
     const action = skill as ActionName;
     const timeout = skill === 'look_at' || skill === 'gesture' ? QUICK_TIMEOUT : MOVE_TIMEOUT;
     const r = skill === 'gesture' ? await this.device.request(action, undefined, { type: target }, timeout) : await this.device.request(action, target, undefined, timeout);
-    this.memory.recordOutcome(skill, target, r.status, r.reason);
+    this.record(skill, target, r.status, r.reason);
     const out: Outcome = { status: r.status, skill, target_id: target, reason: r.reason, ...r.data };
     if (skill === 'inspect_object' && r.status === 'succeeded') {
       const o = this.world.find(target);
@@ -198,18 +196,6 @@ export class SkillExecutor {
         if (token !== this.runToken && outcome.status === 'failed') return;
         this.onFeedback(outcome);
       });
-  }
-
-  private saveSkill(args: Record<string, any>): Outcome {
-    const name = String(args.name ?? '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_');
-    const steps: SkillStep[] = Array.isArray(args.steps) ? args.steps : [];
-    if (!name) return { status: 'failed', reason: 'name is required' };
-    if (TOOLS.some((t) => t.name === name)) return { status: 'failed', reason: `"${name}" is a built-in skill; pick another name.` };
-    if (steps.length === 0 || steps.length > 6) return { status: 'failed', reason: 'A skill needs 1 to 6 steps.' };
-    const bad = steps.find((s) => !PRIMITIVES.has(s.skill));
-    if (bad) return { status: 'failed', reason: `Step skill "${bad.skill}" is not a primitive. Allowed: ${[...PRIMITIVES].join(', ')}` };
-    this.memory.saveSkill({ name, description: String(args.description ?? ''), steps: steps.map((s) => ({ skill: s.skill, target: s.target })) });
-    return { status: 'succeeded', saved: name, steps: steps.length };
   }
 
   private runSkill(args: Record<string, any>): Outcome {
@@ -236,7 +222,10 @@ export class SkillExecutor {
     const saveAs = String(args.save_as ?? '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_');
     this.runSteps('run_sequence', steps, undefined, (ok) => {
       if (ok && saveAs && !TOOLS.some((t) => t.name === saveAs)) {
-        this.memory.saveSkill({ name: saveAs, description: `Sequence that worked: ${steps.map((x) => `${x.skill}(${x.target ?? ''})`).join(' -> ')}`, steps });
+        // If every object step concerns the same thing, store it generically so it works on any object later.
+        const objects = new Set(steps.filter((x) => x.skill !== 'gesture' && x.target && x.target !== 'user').map((x) => x.target));
+        const generic = objects.size === 1 ? steps.map((x) => (x.skill !== 'gesture' && objects.has(x.target) ? { ...x, target: '$target' } : x)) : steps;
+        this.memory.saveSkill({ name: saveAs, description: `Sequence that worked: ${generic.map((x) => `${x.skill}(${x.target ?? ''})`).join(' -> ')}`, steps: generic });
         this.memory.skillUsed(saveAs, true);
       }
     });

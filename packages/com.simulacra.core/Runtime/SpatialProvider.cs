@@ -66,6 +66,18 @@ namespace Simulacra
         /// <summary>Called when the debug HUD is shown or hidden, so providers can hide their own debug visuals too.</summary>
         public virtual void SetDebugVisible(bool visible) { }
 
+        /// <summary>True while the push-to-talk control is held (Quest: right index trigger).</summary>
+        public virtual bool TalkHeld => false;
+
+        /// <summary>
+        /// True if rendering black darkens the real world (video passthrough). False on optical
+        /// see-through displays, where black is simply invisible and a drawn shadow cannot work.
+        /// </summary>
+        public virtual bool CanDarkenWorld => true;
+
+        /// <summary>Give the provider a chance to adapt a freshly spawned avatar (e.g. depth occlusion).</summary>
+        public virtual void PrepareAvatar(GameObject avatarRoot) { }
+
         /// <summary>True during the frame the user pressed "interrupt" (Quest: A).</summary>
         public virtual bool InterruptPressed => false;
 

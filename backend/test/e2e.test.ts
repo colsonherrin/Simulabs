@@ -16,7 +16,7 @@ const WORLD: WorldSnapshot = {
   ],
 };
 
-const base: ServerOptions = { port: 0, brain: 'mock', realtimeModel: 'x', realtimeVoice: 'x', visionModel: 'x', memoryPath: null, autonomyIdleSec: 0, quiet: true };
+const base: ServerOptions = { port: 0, brain: 'mock', realtimeModel: 'x', realtimeVoice: 'x', visionModel: 'x', memoryPath: null, quiet: true };
 
 /** Minimal headset: answers actions the way the Unity client does. */
 function fakeDevice(port: number, behave: (action: any) => { status: string; reason?: string; data?: any }) {
@@ -107,10 +107,15 @@ test('skills: unknown targets never reach the device; composite skills run and a
   assert.equal(noCam.status, 'failed');
   assert.equal(sent.length, 0);
 
-  const notPrimitive = await exec.execute('save_skill', { name: 'x', description: '', steps: [{ skill: 'rm_rf', target: '/' }] });
+  const notPrimitive = await exec.execute('run_sequence', { steps: [{ skill: 'rm_rf', target: '/' }] });
   assert.equal(notPrimitive.status, 'failed');
 
-  assert.equal((await exec.execute('save_skill', { name: 'approach_object', description: 'walk up and face it', steps: [{ skill: 'walk_to', target: '$target' }, { skill: 'look_at', target: '$target' }] })).status, 'succeeded');
+  // A sequence that works is remembered, and generalised because every step concerns one object.
+  assert.equal((await exec.execute('run_sequence', { save_as: 'approach_object', steps: [{ skill: 'walk_to', target: 'chair_1' }, { skill: 'look_at', target: 'chair_1' }] })).status, 'started');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(memory.data.learnedSkills.approach_object.steps, [{ skill: 'walk_to', target: '$target' }, { skill: 'look_at', target: '$target' }]);
+  sent.length = 0;
+  feedback.length = 0;
   assert.equal((await exec.execute('run_skill', { name: 'approach_object', target_id: 'table_1' })).status, 'started');
   await new Promise((r) => setTimeout(r, 30));
   assert.deepEqual(sent, [
@@ -118,7 +123,7 @@ test('skills: unknown targets never reach the device; composite skills run and a
     { action: 'look_at', target_id: 'table_1' },
   ]);
   assert.equal(feedback[0].status, 'succeeded');
-  assert.equal(memory.data.learnedSkills.approach_object.successes, 1);
+  assert.equal(memory.data.learnedSkills.approach_object.successes, 2);
   assert.match(memory.summary(), /approach_object/);
 });
 

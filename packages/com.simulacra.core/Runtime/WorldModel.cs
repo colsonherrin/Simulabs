@@ -126,6 +126,23 @@ namespace Simulacra
                 o.reachable = RoomNavMesh.FindStandPoint(o.position, StandOff(o), from, out _);
         }
 
+        private int _reachCursor;
+
+        /// <summary>Re-check one object per call (round robin), so the periodic refresh never causes a frame hitch.</summary>
+        public void RefreshNextReachability(Vector3 from)
+        {
+            if (!RoomNavMesh.IsBuilt || objects.Count == 0) return;
+            _reachCursor %= objects.Count;
+            int i = 0;
+            foreach (var o in objects.Values)
+            {
+                if (i++ != _reachCursor) continue;
+                o.reachable = RoomNavMesh.FindStandPoint(o.position, StandOff(o), from, out _);
+                break;
+            }
+            _reachCursor++;
+        }
+
         public static string Sanitize(string label)
         {
             label = (label ?? "object").Trim().ToLowerInvariant().Replace(' ', '_');

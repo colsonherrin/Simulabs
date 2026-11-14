@@ -79,6 +79,8 @@ namespace Simulacra.EditorTools
             provider.planeManager = planes;
             var app = appGo.AddComponent<SimulacraApp>();
             app.provider = provider;
+            // Narrow field of view (about 46 x 27 degrees): a 1.7 m body only fits in view from roughly 3.5 m.
+            app.spawnDistance = 3.2f;
             app.avatarPrefab = SimulacraSetup.FindAvatarPrefab();
 
             SimulacraSetup.SaveScene(scene, ScenePath, true);

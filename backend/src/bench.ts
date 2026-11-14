@@ -32,8 +32,8 @@ const srv = await startServer({
   port: 0, brain: 'claude', anthropicKey: env.ANTHROPIC_API_KEY, apiKey: undefined,
   // Text-to-speech only if a key is present; speech-to-text is bypassed by typing.
   ttsBaseUrl: env.OPENAI_API_KEY ? 'https://api.openai.com/v1' : undefined,
-  claudeModel: model, claudeEffort: (env.PLANNER_EFFORT as 'low' | 'medium' | 'high' | undefined) ?? 'low', claudeFast: env.PLANNER_FAST === '1', claudeThinkingOff: env.PLANNER_THINKING === 'off',
-  realtimeModel: 'unused', realtimeVoice: env.REALTIME_VOICE ?? 'marin', visionModel: 'unused', memoryPath: null, autonomyIdleSec: 0, quiet: true, stopReflex: false,
+  claudeModel: model, claudeEffort: (env.PLANNER_EFFORT as 'low' | 'medium' | 'high' | undefined) ?? 'low', claudeFast: env.PLANNER_FAST === '1',
+  realtimeModel: 'unused', realtimeVoice: env.REALTIME_VOICE ?? 'marin', visionModel: 'unused', memoryPath: null, quiet: true,
   ttsApiKey: env.OPENAI_API_KEY,
 });
 

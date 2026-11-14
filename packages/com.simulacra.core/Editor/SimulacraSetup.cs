@@ -46,7 +46,7 @@ namespace Simulacra.EditorTools
 
         /// <summary>
         /// Turns the model + animation files in Assets/Simulacra/Avatar into a ready prefab:
-        /// humanoid rig, looping clips, an Animator Controller with the Speed/Turn/Speaking contract.
+        /// humanoid rig, looping clips, an Animator Controller with the Speed/Turn/MotionSpeed/Speaking contract.
         /// Clips are matched by FILE name: *idle*, *walk*, *talk*|*speak*, *turn*left*, *turn*right*.
         /// </summary>
         [MenuItem("Simulacra/3. Setup Avatar From Assets-Simulacra-Avatar")]
@@ -150,6 +150,7 @@ namespace Simulacra.EditorTools
             AssetDatabase.DeleteAsset(ControllerPath);
             var controller = AnimatorController.CreateAnimatorControllerAtPath(ControllerPath);
             controller.AddParameter("Speed", AnimatorControllerParameterType.Float);
+            controller.AddParameter(new AnimatorControllerParameter { name = "MotionSpeed", type = AnimatorControllerParameterType.Float, defaultFloat = 1f });
             controller.AddParameter("Turn", AnimatorControllerParameterType.Float);
             controller.AddParameter("Speaking", AnimatorControllerParameterType.Bool);
             AnimatorStateMachine sm = controller.layers[0].stateMachine;
@@ -160,8 +161,15 @@ namespace Simulacra.EditorTools
             tree.blendParameter = "Speed";
             tree.useAutomaticThresholds = false;
             if (idle != null) tree.AddChild(idle, 0f);
-            if (walk != null) tree.AddChild(walk, 0.9f);
+            if (walk != null) tree.AddChild(walk, 1f); // Speed is normalised: 1 = walking at full speed
             sm.defaultState = locomotion;
+            // Playback rate is driven at runtime so the walk cycle matches real ground speed (no foot sliding).
+            locomotion.speedParameter = "MotionSpeed";
+            locomotion.speedParameterActive = true;
+            // IK pass lets HeadLook turn the head and eyes toward the user.
+            AnimatorControllerLayer[] layers = controller.layers;
+            layers[0].iKPass = true;
+            controller.layers = layers;
 
             if (talk != null)
             {

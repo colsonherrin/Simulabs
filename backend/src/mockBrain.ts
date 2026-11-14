@@ -15,7 +15,6 @@ export class MockBrain implements Brain {
     this.ctx.send({ type: 'audio_stop' });
   }
   refreshContext() {}
-  onIdle() {}
   close() {}
 
   private say(text: string) {
@@ -40,7 +39,7 @@ export class MockBrain implements Brain {
       await run('stop_moving');
       return this.say('Okay, stopping.');
     }
-    if (/come (over )?here|come to me|over here/.test(text)) {
+    if (/come (over |back )?here|come to me|over here|come back/.test(text)) {
       const r = await run('approach_user');
       return this.say(r.status === 'started' ? 'Of course.' : `I can't: ${r.reason}`);
     }
