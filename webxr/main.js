@@ -226,8 +226,22 @@ let previewMode = true;
 const core = new SimulacraCore(host, 'webxr');
 let socket = null;
 
+/**
+ * Where the backend is. Served by the backend itself: the same host. Hosted somewhere else
+ * (GitHub Pages): the address typed into the page, else this device's own port 8787, which is the
+ * laptop when a headset is plugged in by USB. A secure page may only use ws:// to localhost;
+ * any other backend must be wss://.
+ */
+const hostedElsewhere = !/^\/xr\//.test(location.pathname);
+function backendAddress() {
+  let saved = '';
+  try { saved = localStorage.getItem('simulacra.backend') || ''; } catch (e) { /* storage unavailable */ }
+  return params.get('backend') || (hostedElsewhere ? saved || 'ws://localhost:8787' : (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+}
+
 function connect() {
-  const base = params.get('backend') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  const base = backendAddress();
+  if (document.activeElement !== $('backend')) $('backend').value = base;
   socket = new WebSocket(base.replace(/\/$/, '') + '/device');
   socket.onopen = () => core.onOpen();
   socket.onmessage = (e) => { if (typeof e.data === 'string') core.onMessage(e.data); };
@@ -399,7 +413,7 @@ function loadAvatar() {
     }
     const tex = new THREE.TextureLoader();
     const map = (name, srgb) => {
-      const t = tex.load('/xr/avatar/' + name);
+      const t = tex.load('./avatar/' + name);
       if (srgb) t.colorSpace = THREE.SRGBColorSpace;
       return t;
     };
@@ -407,7 +421,7 @@ function loadAvatar() {
     const quiet = new THREE.LoadingManager();
     quiet.setURLModifier((url) => (/\.fbx$/i.test(url) ? url : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'));
     new FBXLoader(quiet).load(
-      '/xr/avatar/RocketboxAdult.fbx',
+      './avatar/RocketboxAdult.fbx',
       (model) => {
         try {
           // The FBX refers to textures by the artist's file paths; bind the bundled ones by material name.
@@ -800,7 +814,7 @@ function note(text) {
 
 function statusText() {
   const lines = [];
-  lines.push(core.connected ? 'Backend connected · brain: ' + core.brain : 'Connecting to the backend…');
+  lines.push(core.connected ? 'Backend connected · brain: ' + core.brain : hostedElsewhere ? 'No backend at ' + backendAddress() + ' yet: start it on your computer (npm start)' : 'Connecting to the backend…');
   if (core.connected && core.brain === 'mock') lines.push('No AI keys yet: open /setup on the computer running the backend');
   if (!core.placed) lines.push(room.floorY === null ? 'Looking for the floor…' : 'Finding a clear spot on the floor: look at open floor in front of you');
   if (core.lastTranscript) lines.push(core.lastTranscript);
@@ -859,6 +873,11 @@ function frame(timeMs, xrFrame) {
 async function start() {
   $('mic').onclick = startMic;
   $('enter').onclick = enterAR;
+  $('backendRow').hidden = !hostedElsewhere;
+  $('backend').addEventListener('change', () => {
+    try { localStorage.setItem('simulacra.backend', $('backend').value.trim()); } catch (e) { /* storage unavailable */ }
+    if (socket) socket.close(); // reconnects to the new address
+  });
   $('text').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     audioContext();

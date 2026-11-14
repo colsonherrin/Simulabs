@@ -11,6 +11,7 @@
     "test": "tsx --test --expose-gc --test-force-exit test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "bench": "tsx src/bench.ts",
+    "build:webxr": "tsx src/build-webxr.ts",
     "doctor": "tsx src/doctor.ts"
   },
   "dependencies": {

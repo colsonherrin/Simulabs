@@ -78,3 +78,20 @@ a single sample off the floor.
 Not checked: anything on a physical headset. In particular tracking, what Quest Browser actually
 reports for a given room, depth occlusion (the emulator logs a WebGL warning for the occlusion
 draw; use `?depth=0` if the avatar looks wrong), microphone echo, audio level, frame rate.
+
+## Hosting the page on GitHub Pages
+
+The page can be served from `https://<you>.github.io/simulacra/` instead of from the backend.
+Only the page moves: the backend (the mind, the voice and your keys) still runs on your computer.
+
+```bash
+cd backend && npm run build:webxr -- ../webxr-site
+```
+
+Publish that folder as the `gh-pages` branch, then in the repository's Settings → Pages choose
+"Deploy from a branch", `gh-pages`, `/ (root)`.
+
+The hosted page connects to `ws://localhost:8787` by default (the laptop, when the headset is on
+USB) and has a "Backend address" box for anything else. Because the page is HTTPS, any backend
+other than localhost must be `wss://` (for example a tunnel). Not tested on a headset; a browser
+may ask permission before letting a public page reach a local address.

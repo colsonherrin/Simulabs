@@ -27,12 +27,13 @@
   <button id="enter" disabled>Enter AR</button>
   <button id="mic" class="secondary">Use microphone</button>
   <div id="say"><input id="text" placeholder="Type instead of talking, then Enter" autocomplete="off"></div>
+  <div id="backendRow" hidden style="margin-top:10px;font-size:13px;color:#8996a3">Backend address<br><input id="backend" style="width:100%;box-sizing:border-box;font:13px ui-monospace,monospace;padding:7px 9px;border-radius:8px;border:1px solid #46525e;background:#171d23;color:inherit" spellcheck="false"></div>
   <div id="note"></div>
 </div>
 <script type="module">
   // ?emulate=1 installs a software headset (for desktop testing only) before the client starts.
-  if (new URLSearchParams(location.search).has('emulate')) await import('/xr/emulator.js');
-  await import('/xr/app.js');
+  if (new URLSearchParams(location.search).has('emulate')) await import('./emulator.js');
+  await import('./app.js');
 </script>
 </body>
 </html>
