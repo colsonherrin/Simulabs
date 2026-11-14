@@ -35,9 +35,10 @@ const meter = $('meter');
 const meterBar = $('meter-bar');
 const toastEl = $('toast');
 const gameoverEl = $('gameover');
-const turnBanner = $('turn-banner');
-let bannerTimer = 0;
-let bannerShown = null;
+const lastMoveEl = $('last-move');
+let turnShown = null;
+// What was just played, shown under the turn pill, and a running move count.
+let lastMove = '';
 let fallEpoch = -1;
 const goTitle = $('go-title');
 const goSub = $('go-sub');
@@ -414,9 +415,12 @@ function updateHUD() {
   btnMove.classList.toggle('hidden', !(xrKind === 'ar' && !placing && !fighting));
   btnArMini.classList.toggle('hidden', xrKind === 'ar');
   btnVrMini.classList.toggle('hidden', xrKind === 'vr');
+  const falling = game.phase === 'over' && fallEpoch !== -1;
   turnEl.textContent = game.phase === 'over'
-    ? (game.draw ? 'Stalemate' : `${SIDE_NAME[game.winner]} wins`)
-    : `${SIDE_NAME[game.turn]}'s move`;
+    ? (game.draw ? 'Stalemate' : falling ? 'The monarch falls…' : `${SIDE_NAME[game.winner]} wins!`)
+    : `Move ${game.moveNo || 1} · ${SIDE_NAME[game.turn]} to move`;
+  lastMoveEl.textContent = lastMove;
+  lastMoveEl.classList.toggle('hidden', !lastMove || menu);
   const lead = game.phase === 'over' ? game.winner : game.turn;
   turnEl.classList.toggle('gold', lead === 0);
   turnEl.classList.toggle('violet', lead === 1);
@@ -432,30 +436,20 @@ function updateHUD() {
         ? `${who}: pinch one of your pieces, or point and pull the trigger.`
         : `${who}: click one of your pieces.`;
   } else hintEl.textContent = `${who}: green moves, red strikes. The monarch only steps.`;
-  showTurnBanner();
+  flashTurn();
   btnSound.textContent = isMuted() ? 'Sound off' : 'Sound on';
 }
 
-// Big banner across the screen whenever the move passes to the other side,
-// so it is always obvious who plays next.
-function showTurnBanner() {
-  if (!turnBanner || menu || game.phase === 'combat') return;
-  // Let the monarch finish falling before announcing the winner.
-  if (game.phase === 'over' && fallEpoch !== -1) return;
-  const key = game.phase === 'over' ? `over-${game.winner}` : `turn-${game.turn}`;
-  if (key === bannerShown) return;
-  bannerShown = key;
-  const lead = game.phase === 'over' ? game.winner : game.turn;
-  turnBanner.textContent = game.phase === 'over'
-    ? (game.draw ? 'Stalemate' : `${SIDE_NAME[game.winner]} wins!`)
-    : `${SIDE_NAME[game.turn]} to move`;
-  turnBanner.classList.remove('gold', 'violet', 'show');
-  if (lead === 0) turnBanner.classList.add('gold');
-  if (lead === 1) turnBanner.classList.add('violet');
-  void turnBanner.offsetWidth;
-  turnBanner.classList.add('show');
-  clearTimeout(bannerTimer);
-  bannerTimer = setTimeout(() => turnBanner.classList.remove('show'), game.phase === 'over' ? 2600 : 1400);
+// The turn pill at the top flashes whenever the move passes to the other
+// side (or the game ends), so the change is never missed.
+function flashTurn() {
+  if (menu || game.phase === 'combat') return;
+  const key = `${game.phase}|${game.turn}|${game.moveNo || 1}|${fallEpoch !== -1}`;
+  if (key === turnShown) return;
+  turnShown = key;
+  topbar.classList.remove('flash');
+  void topbar.offsetWidth;
+  topbar.classList.add('flash');
 }
 
 function showGameOver() {
@@ -480,28 +474,44 @@ function settle(info) {
   if (game.phase === 'over') showGameOver();
 }
 
+// Squares are named like chess: files a–e from Gold's left, ranks 1–5 from
+// Gold's side of the board.
+function squareName(r, c) {
+  return `${'abcde'[c]}${5 - r}`;
+}
+
+function describe(piece) {
+  return `${SIDE_NAME[piece.side]} ${TYPE_NAME[piece.type]}`;
+}
+
 function doMove(r, c) {
   const from = game.selected;
   const piece = game.board[from.r][from.c];
   game.board[r][c] = piece;
   game.board[from.r][from.c] = null;
+  lastMove = `${describe(piece)} ${squareName(from.r, from.c)} → ${squareName(r, c)}`;
+  game.moveNo = (game.moveNo || 1) + 1;
   settle(advanceTurn(game));
 }
 
 function finishCombat(win) {
   const { from, to } = pending || {};
   const attacker = from && game.board[from.r][from.c];
+  const defender = to && game.board[to.r][to.c];
+  if (attacker) {
+    lastMove = win
+      ? `${describe(attacker)} takes ${defender ? describe(defender) : 'the square'} on ${squareName(to.r, to.c)}`
+      : `${describe(attacker)} falls attacking ${squareName(to.r, to.c)}`;
+    game.moveNo = (game.moveNo || 1) + 1;
+  }
   if (win && attacker) {
     game.board[to.r][to.c] = attacker;
     game.board[from.r][from.c] = null;
     // The ping plays when the piece lands on the square it took.
     game.takeover = attacker.id;
-    toast(`${SIDE_NAME[attacker.side]} ${TYPE_NAME[attacker.type]} takes the square`);
   } else if (attacker) {
-    const name = `${SIDE_NAME[attacker.side]} ${TYPE_NAME[attacker.type]}`;
     game.board[from.r][from.c] = null;
     playDefeat();
-    toast(`${name} falls`);
   }
   game.phase = 'play';
   pending = null;
@@ -522,6 +532,7 @@ function doAttack(r, c) {
     game.draw = false;
     game.fallen = { id: defender.id, by: { r: from.r, c: from.c } };
     fallEpoch = epoch;
+    lastMove = `${describe(attacker)} strikes the ${SIDE_NAME[defender.side]} Monarch on ${squareName(r, c)}`;
     playSfx('ping');
     tabletop.refresh(game);
     updateHUD();
@@ -547,7 +558,7 @@ function onMonarchFallen() {
   if (fallEpoch !== epoch || game.phase !== 'over') return;
   fallEpoch = -1;
   playSfx('victory');
-  showTurnBanner();
+  updateHUD();
   setTimeout(() => { if (game.phase === 'over') showGameOver(); }, 900);
 }
 
@@ -755,7 +766,8 @@ function restart() {
   game = createGame();
   pending = null;
   hideGameOver();
-  bannerShown = null;
+  turnShown = null;
+  lastMove = '';
   tabletop.refresh(game);
   updateHUD();
   playSfx('start');

@@ -140,8 +140,8 @@ export function createTabletop(scene, sfx = {}) {
   // Whose move it is, floating over the board in that side's colour, plus a
   // glowing bar along that side's edge. Both pulse when the turn changes.
   const turnSprite = makeTextSprite("Gold's move", SIDE_HEX[0], [0.3, 0.075]);
-  // Above the far edge, so it never hides the pieces.
-  turnSprite.position.set(0, 0.15, -(TOP / 2 + 0.06));
+  // Beyond the far edge, clear of the board, so it never hides the pieces.
+  turnSprite.position.set(0, 0.1, -(TOP / 2 + 0.16));
   turnSprite.raycast = () => {};
   board.add(turnSprite);
   const turnBars = [0, 1].map((side) => {
@@ -337,8 +337,8 @@ export function createTabletop(scene, sfx = {}) {
     const turnColor = lead == null ? '#e8e2d6' : SIDE_HEX[lead];
     const turnText = over
       ? (state.draw ? 'Stalemate' : `${SIDE_NAME[state.winner]} wins!`)
-      : `${SIDE_NAME[state.turn]}'s move`;
-    const key = `${state.phase}|${lead}`;
+      : `Move ${state.moveNo || 1} · ${SIDE_NAME[state.turn]} to move`;
+    const key = `${state.phase}|${lead}|${state.moveNo || 1}`;
     if (key !== shownTurn) {
       shownTurn = key;
       turnPulse = 1;
@@ -351,8 +351,8 @@ export function createTabletop(scene, sfx = {}) {
       bar.material.color.setHex(SIDE_GLOW[over && lead != null ? lead : side]);
       sideLabels[side].material.opacity = over || side === state.turn ? 1 : 0.35;
     }
-    turnSprite.userData.base = over ? [0.42, 0.105] : [0.3, 0.075];
-    turnSprite.position.y = over ? 0.24 : 0.15;
+    turnSprite.userData.base = over ? [0.42, 0.105] : [0.38, 0.095];
+    turnSprite.position.y = over ? 0.16 : 0.1;
     const selId = state.selected && state.board[state.selected.r]?.[state.selected.c]?.id;
     for (const mesh of meshes.values()) mesh.userData.chosen = mesh.userData.id === selId;
 
