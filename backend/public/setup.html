@@ -38,7 +38,7 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const minds = { claude: 'Claude thinks', realtime: 'OpenAI speech-to-speech', mock: 'keyword rules only (not AI)' };
+const minds = { claude: 'Claude thinks', gpt: 'an OpenAI model thinks', realtime: 'OpenAI speech-to-speech', mock: 'keyword rules only (not AI)' };
 function show(s) {
   const voice = s.voice ? '<span class="ok">Voice: on</span>' : '<span class="bad">Voice: off — add an OpenAI key</span>';
   const mind = s.brain === 'mock' ? '<span class="bad">Mind: ' + minds.mock + '</span>' : '<span class="ok">Mind: ' + minds[s.brain] + '</span>';

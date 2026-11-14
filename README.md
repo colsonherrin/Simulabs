@@ -81,10 +81,14 @@ Open `http://localhost:8787/` — the browser simulator. Click **Mic on** and ta
 the fastest way to work on the AI without a headset. The latency of each turn is shown above the
 log, and `http://localhost:8787/metrics` has the running medians.
 
-Which mind runs is set by `BRAIN` in `.env`: `claude` (default when the Anthropic key is present),
-`realtime` (one OpenAI speech-to-speech model does everything; needs only the OpenAI key) or `mock`
-(keyword rules, typed text, not AI; what you get with no keys). With only the Anthropic key, Claude
-works from typed text and answers in text. To measure Claude's response time against the live API:
+Which mind runs is set by `BRAIN` in `.env`: `claude` (default when the Anthropic key is present;
+Claude plans, OpenAI hears and speaks), `gpt` (default with only an OpenAI key; an OpenAI chat
+model plans, default `gpt-5.4-mini`), `realtime` (one OpenAI speech-to-speech model does
+everything) or `mock` (keyword rules, typed text, not AI). **`gpt` is the only mind that has been
+run against the real service**; `claude` and `realtime` have only run against stand-ins.
+
+Hearing uses a live speech-to-text socket and falls back by itself to plain HTTPS uploads if the
+network blocks it (`STT_MODE=http` forces that).
 
 ```bash
 npm run bench
@@ -270,7 +274,7 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
 - **`[error] Claude rejected the request`:** a planner setting the model does not accept; clear
   `PLANNER_FAST` or change `PLANNER_MODEL`.
 - **It hears you but never answers aloud:** speech-to-text or text-to-speech failed; the HUD shows
-  the error. Both need `OPENAI_API_KEY`. `BRAIN=realtime` is the fallback that needs no Claude key.
+  the error. Both need `OPENAI_API_KEY`. `BRAIN=gpt` is the fallback that needs no Claude key.
 - **It talks over itself / cuts itself off:** half-duplex is on by default (mic muted while it
   speaks; press **A** to cut in). If you turned it off, turn it back on.
 - **`room=fallback_open_floor`:** no Space Setup data or the Spatial data permission was denied.

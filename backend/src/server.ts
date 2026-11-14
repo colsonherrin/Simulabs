@@ -8,6 +8,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { Brain, BrainContext } from './brain.js';
 import { Memory } from './memory.js';
 import { ClaudeBrain } from './claudeBrain.js';
+import { OpenAIBrain } from './openaiBrain.js';
 import { TurnTimer, type TurnRecord } from './latency.js';
 import { MockBrain } from './mockBrain.js';
 import { Ears, Mouth } from './speech.js';
@@ -21,7 +22,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 export interface ServerOptions {
   port: number;
-  brain: 'claude' | 'realtime' | 'mock';
+  brain: 'claude' | 'gpt' | 'realtime' | 'mock';
+  /** The 'gpt' mind: an OpenAI chat model plans; OpenAI speech models hear and speak. */
+  gptModel?: string;
+  gptEffort?: string;
+  gptBaseUrl?: string;
   /** OpenAI key: realtime brain, and speech-to-text / text-to-speech / vision for the Claude brain. */
   apiKey?: string;
   /** Claude brain. The key may be omitted to let the SDK resolve credentials from the environment. */
@@ -31,6 +36,8 @@ export interface ServerOptions {
   claudeEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   claudeFast?: boolean;
   sttModel?: string;
+  /** 'http' skips the live socket and hears through plain HTTPS uploads. Default: live, falling back to http. */
+  sttMode?: 'stream' | 'http';
   ttsModel?: string;
   ttsBaseUrl?: string;
   /** Key for text-to-speech when it should differ from `apiKey` (benchmarks). */
@@ -50,9 +57,9 @@ export interface ServerOptions {
   openaiBaseUrl?: string;
 }
 
-/** Which mind runs with the keys at hand: Claude if it has a key, else OpenAI speech-to-speech, else keyword rules. */
+/** Which mind runs with the keys at hand: Claude if it has a key, else an OpenAI model, else keyword rules. */
 export function pickBrain(anthropicKey?: string, openaiKey?: string): ServerOptions['brain'] {
-  return anthropicKey ? 'claude' : openaiKey ? 'realtime' : 'mock';
+  return anthropicKey ? 'claude' : openaiKey ? 'gpt' : 'mock';
 }
 
 /** Ask the provider whether a key is accepted. 'unknown' means the provider could not be reached. */
@@ -121,7 +128,17 @@ class Session implements DeviceLink {
         effort: opts.claudeEffort ?? 'low',
         fast: opts.claudeFast ?? false,
         // Claude has no audio interface: speech in and out are separate, swappable services.
-        ears: opts.apiKey ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl }, log) : null,
+        ears: opts.apiKey ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl, mode: opts.sttMode }, log) : null,
+        mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
+        worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
+      });
+    else if (opts.brain === 'gpt')
+      this.brain = new OpenAIBrain(ctx, {
+        apiKey: opts.apiKey ?? '',
+        baseUrl: opts.gptBaseUrl,
+        model: opts.gptModel ?? 'gpt-5.4-mini',
+        effort: opts.gptEffort ?? 'none',
+        ears: opts.apiKey && !opts.gptBaseUrl ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl, mode: opts.sttMode }, log) : null,
         mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
         worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
       });
@@ -419,9 +436,9 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
 // ---- entry point
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const env = process.env;
-  // Default: Claude plans if it has credentials; otherwise the speech-to-speech brain; otherwise the mock.
+  // Default: Claude plans if it has credentials; otherwise an OpenAI model plans; otherwise the mock.
   let brain = (env.BRAIN ?? pickBrain(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN, env.OPENAI_API_KEY)) as ServerOptions['brain'];
-  if (brain === 'realtime' && !env.OPENAI_API_KEY) {
+  if ((brain === 'realtime' || brain === 'gpt') && !env.OPENAI_API_KEY) {
     console.warn('OPENAI_API_KEY is not set: starting with the MOCK brain (typed text, keyword rules, no AI, no voice).');
     brain = 'mock';
   }
@@ -434,7 +451,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     claudeModel: env.PLANNER_MODEL ?? 'claude-opus-5-5',
     claudeEffort: (env.PLANNER_EFFORT as ServerOptions['claudeEffort']) ?? 'low',
     claudeFast: env.PLANNER_FAST === '1',
+    gptModel: env.OPENAI_PLANNER_MODEL,
+    gptEffort: env.OPENAI_PLANNER_EFFORT,
     sttModel: env.STT_MODEL,
+    sttMode: env.STT_MODE === 'http' ? 'http' : undefined,
     ttsModel: env.TTS_MODEL,
     realtimeModel: env.REALTIME_MODEL ?? 'gpt-realtime',
     realtimeVoice: env.REALTIME_VOICE ?? 'marin',

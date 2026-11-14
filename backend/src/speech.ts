@@ -14,13 +14,33 @@ export class Ears {
   private ws: WebSocket | null = null;
   private closed = false;
   private retries = 0;
+  /** 'stream' = live socket with server-side speech detection; 'http' = local speech detection + one upload per utterance. */
+  mode: 'stream' | 'http' = 'stream';
+  private vad = { noise: 0.004, speaking: false, voicedMs: 0, silentMs: 0, chunks: [] as Buffer[], pre: [] as Buffer[], ms: 0 };
 
   constructor(
-    private opts: { apiKey: string; model: string; transcribeModel: string; url?: string },
+    private opts: { apiKey: string; model: string; transcribeModel: string; url?: string; mode?: 'stream' | 'http'; httpBaseUrl?: string },
     private log: (level: 'info' | 'warn' | 'error', m: string) => void,
   ) {}
 
-  start(): Promise<void> {
+  /**
+   * Connect. If the live socket cannot be opened (networks that block WebSockets), hearing falls
+   * back to plain HTTPS: slower by roughly the upload of one utterance, but it works anywhere.
+   */
+  async start(): Promise<void> {
+    if (this.opts.mode === 'http') {
+      this.mode = 'http';
+      return;
+    }
+    try {
+      await this.connect();
+    } catch (e) {
+      this.mode = 'http';
+      this.log('warn', `Live speech-to-text is unreachable (${(e as any)?.message ?? e}); hearing through plain HTTPS instead.`);
+    }
+  }
+
+  private connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = this.opts.url ?? `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(this.opts.model)}`;
       const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${this.opts.apiKey}` } });
@@ -69,13 +89,87 @@ export class Ears {
       ws.on('close', () => {
         if (this.closed || !opened) return;
         const delay = Math.min(8000, 500 * 2 ** this.retries++);
-        setTimeout(() => !this.closed && this.start().catch(() => {}), delay);
+        setTimeout(() => !this.closed && this.connect().catch(() => {}), delay);
       });
     });
   }
 
   audio(pcm16: string) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: pcm16 }));
+    if (this.mode === 'http') this.detect(Buffer.from(pcm16, 'base64'));
+    else if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: pcm16 }));
+  }
+
+  /** Local speech detection for HTTP mode: loudness against a slowly tracked noise floor. */
+  private detect(chunk: Buffer) {
+    const v = this.vad;
+    const samples = chunk.length >> 1;
+    if (samples === 0) return;
+    let sum = 0;
+    for (let i = 0; i < samples; i++) {
+      const x = chunk.readInt16LE(i * 2) / 32768;
+      sum += x * x;
+    }
+    const rms = Math.sqrt(sum / samples);
+    const ms = (samples / AUDIO_RATE) * 1000;
+    const loud = rms > Math.max(0.012, v.noise * 3.5);
+    if (!loud) v.noise += (rms - v.noise) * 0.05;
+
+    if (!v.speaking) {
+      v.pre.push(chunk);
+      if (v.pre.length > 6) v.pre.shift(); // about a third of a second of lead-in
+      v.voicedMs = loud ? v.voicedMs + ms : 0;
+      if (v.voicedMs >= 120) {
+        v.speaking = true;
+        v.chunks = v.pre.splice(0);
+        v.silentMs = 0;
+        v.ms = v.voicedMs;
+        this.onSpeechStart();
+      }
+      return;
+    }
+    v.chunks.push(chunk);
+    v.ms += ms;
+    if (loud) v.voicedMs += ms;
+    v.silentMs = loud ? 0 : v.silentMs + ms;
+    if (v.silentMs >= 550 || v.ms >= 20_000) {
+      const audio = Buffer.concat(v.chunks);
+      const voiced = v.voicedMs;
+      v.speaking = false;
+      v.chunks = [];
+      v.voicedMs = 0;
+      this.onSpeechEnd();
+      if (voiced >= 250) void this.transcribe(audio);
+    }
+  }
+
+  private async transcribe(pcm: Buffer) {
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write('WAVEfmt ', 8);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(1, 22);
+    header.writeUInt32LE(AUDIO_RATE, 24);
+    header.writeUInt32LE(AUDIO_RATE * 2, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write('data', 36);
+    header.writeUInt32LE(pcm.length, 40);
+    const form = new FormData();
+    form.append('model', this.opts.transcribeModel);
+    form.append('file', new Blob([new Uint8Array(Buffer.concat([header, pcm]))], { type: 'audio/wav' }), 'speech.wav');
+    try {
+      const res = await fetch(`${this.opts.httpBaseUrl ?? 'https://api.openai.com/v1'}/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${this.opts.apiKey}` }, body: form, signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) {
+        this.log('error', `speech-to-text failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+        return;
+      }
+      const text = String(((await res.json()) as any).text ?? '').trim();
+      if (text && !this.closed) this.onTranscript(text);
+    } catch (e) {
+      this.log('error', `speech-to-text failed: ${(e as any)?.message ?? e}`);
+    }
   }
 
   close() {

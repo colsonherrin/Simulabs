@@ -5,6 +5,29 @@ state of branch `qa-audit`.
 
 ## Bottom line
 
+### Update: first run against a real model (OpenAI key, no headset)
+
+With an OpenAI key the `gpt` mind (`gpt-5.4-mini` planning, `gpt-4o-mini-tts` speaking,
+`gpt-4o-mini-transcribe` hearing) was run for real, driving the WebXR preview's simulated room:
+
+| Check | Result |
+|---|---|
+| "Hey, come over here." | model called `approach_user`; avatar ended 1.2 m from the user; said "On my way." then "I'm here." |
+| "What do you see over there?" (user looking at the chair) | model called `look_at chair_1`; said "That chair over there." |
+| "Go take a look." | model called `inspect_object chair_1`; avatar ended 0.71 m from the chair |
+| Skill learning: "Walk to the table, then the plant, then come back to me. Remember that routine as the patrol." | ran the three steps as one sequence and saved skill `patrol` to memory |
+| "Do the patrol again." | reused the saved skill (memory shows uses 2, successes 2) |
+| Spoken microphone input (a recorded "Hey, come over here." fed in as headset audio) | transcribed correctly; `approach_user` dispatched; spoken reply produced |
+| Latency, typed input, 15 model calls | first token median 0.66 s; body starts moving median 0.9 s; first speech audio median 1.4 s (90th percentile 1.9 s) |
+| Latency, spoken input, one run | heard 0.8 s, action 1.7 s, first speech audio 2.2 s after the end of the recording (which includes its trailing silence and a 0.55 s end-of-speech wait) |
+
+Limits of that run: the room and chair were simulated; hearing went through the plain-HTTPS
+fallback because the test machine cannot open WebSockets, so the live speech-to-text socket and
+the `realtime` mind remain untested; the `claude` mind remains untested (no Anthropic key); no
+headset was involved. Camera object detection was not exercised.
+
+### Original bottom line
+
 **Nobody has yet seen this character through a headset.** No Quest or XREAL device, no Unity editor
 licence and no Claude/OpenAI credentials were available where this work was done. The honest answer
 to "can someone wear the headset and feel a life-sized intelligent human is present" is still

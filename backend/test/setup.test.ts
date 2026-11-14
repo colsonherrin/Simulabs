@@ -39,7 +39,7 @@ test('setup: pasted keys are checked, saved, and used without a restart', async 
 
     // The OpenAI key alone gives a talking character.
     r = await post({ openaiKey: '  "sk-good" ' });
-    assert.deepEqual(r, { anthropic: 'skipped', openai: 'ok', brain: 'realtime', voice: true, saved: true });
+    assert.deepEqual(r, { anthropic: 'skipped', openai: 'ok', brain: 'gpt', voice: true, saved: true });
     await dropped;
 
     // Adding the Anthropic key moves the thinking to Claude and keeps the voice.

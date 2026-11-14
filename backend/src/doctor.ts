@@ -13,7 +13,7 @@ const ok = (m: string) => console.log(`  ok    ${m}`);
 const bad = (m: string) => { problems++; console.log(`  FAIL  ${m}`); };
 const note = (m: string) => console.log(`  note  ${m}`);
 
-const brain = env.BRAIN ?? (env.ANTHROPIC_API_KEY ? 'claude' : env.OPENAI_API_KEY ? 'realtime' : 'mock');
+const brain = env.BRAIN ?? (env.ANTHROPIC_API_KEY ? 'claude' : env.OPENAI_API_KEY ? 'gpt' : 'mock');
 console.log(`Simulacra doctor\n\nMind: ${brain}`);
 if (brain === 'mock') bad('no API keys found in backend/.env: the character would run on keyword rules, not AI');
 
