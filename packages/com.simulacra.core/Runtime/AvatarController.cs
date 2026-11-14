@@ -53,7 +53,25 @@ namespace Simulacra
         }
 
         public string State { get; private set; } = "idle"; // idle | walking | turning | following
+
+        /// <summary>What the current walk is heading for (the thing to face on arrival), if any.</summary>
+        public Vector3? Destination { get; private set; }
+
+        /// <summary>Move the whole body with a correction of the world (tracking relocalised).</summary>
+        public void ApplyWorldShift(Matrix4x4 oldToNew)
+        {
+            bool wasEnabled = _agent.enabled;
+            _agent.enabled = false;
+            transform.position = oldToNew.MultiplyPoint3x4(transform.position);
+            Vector3 fwd = oldToNew.MultiplyVector(transform.forward); fwd.y = 0f;
+            if (fwd.sqrMagnitude > 1e-4f) transform.rotation = Quaternion.LookRotation(fwd.normalized, Vector3.up);
+            _agent.enabled = wasEnabled;
+            if (_routine != null) _replan = true;
+        }
         public bool IsBusy => _routine != null;
+
+        /// <summary>Smoothed real ground speed in m/s.</summary>
+        public float GroundSpeed => _animSpeed;
 
         private NavMeshAgent _agent;
         private Animator _animator;
@@ -164,6 +182,7 @@ namespace Simulacra
         {
             _routine = null;
             _replan = false;
+            Destination = null;
             if (_agent.enabled && _agent.isOnNavMesh) _agent.ResetPath();
             _agent.updateRotation = true;
             State = "idle";
@@ -185,6 +204,7 @@ namespace Simulacra
             var path = new NavMeshPath();
             if (!goal(out Vector3 stand, out Vector3 face)) { Finish(false, "there is no reachable floor next to the target"); yield break; }
             if (!Plan(stand, path)) { Finish(false, "no clear path to that spot"); yield break; }
+            Destination = face;
             clock.Stop();
             started?.Invoke((float)clock.Elapsed.TotalMilliseconds, PathLength(path));
 
@@ -213,6 +233,7 @@ namespace Simulacra
                         if (goal(out Vector3 newStand, out Vector3 newFace))
                         {
                             face = newFace;
+                            Destination = face;
                             if (forced || (newStand - stand).sqrMagnitude > 0.3f * 0.3f)
                             {
                                 if (Plan(newStand, path))

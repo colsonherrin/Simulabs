@@ -22,6 +22,7 @@ namespace Simulacra.EditorTools
         public static void Create()
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
+            SimulacraSetup.EnsureAvatar(); // if a character is in Assets/Simulacra/Avatar, prepare it first
 
             string sample = AssetDatabase.FindAssets("PlaneDetection t:Scene")
                 .Select(AssetDatabase.GUIDToAssetPath)

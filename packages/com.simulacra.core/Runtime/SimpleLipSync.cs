@@ -27,7 +27,11 @@ namespace Simulacra
         private readonly System.Collections.Generic.List<int> _blinkShapes = new System.Collections.Generic.List<int>();
         private float _nextBlink, _blinkEnd;
 
-        private static readonly string[] Names = { "jawopen", "jaw_open", "mouthopen", "mouth_open", "viseme_aa", "fcl_mth_a", "vrc.v_aa", "aa", "jaw" };
+        // In priority order. Matched as "ends with" first so "AK_25_JawOpen" wins over anything merely containing a fragment.
+        private static readonly string[] Names = { "jawopen", "jaw_open", "mouthopen", "mouth_open", "viseme_aa", "vi_10_aa", "fcl_mth_a", "vrc.v_aa", "jawdrop" };
+        private static readonly string[] SmileNames = { "mouthsmileleft", "mouthsmileright" };
+        private readonly System.Collections.Generic.List<int> _smileShapes = new System.Collections.Generic.List<int>();
+        private float _smile;
 
         private void Start()
         {
@@ -35,13 +39,10 @@ namespace Simulacra
             if (_animator != null)
             {
                 foreach (var p in _animator.parameters) if (p.name == "Speaking") _hasSpeakingParam = true;
-                if (_animator.isHuman)
-                {
-                    if (jaw == null) jaw = _animator.GetBoneTransform(HumanBodyBones.Jaw);
-                    if (head == null) head = _animator.GetBoneTransform(HumanBodyBones.Head);
-                }
             }
             if (face == null || blendShapeIndex < 0) FindBlendShape();
+            // A mouth blendshape is the better mouth; only fall back to rotating a jaw bone without one.
+            if (jaw == null && (face == null || blendShapeIndex < 0)) jaw = BoneFinder.Find(gameObject, HumanBodyBones.Jaw);
             FindBlinkShapes();
             _nextBlink = Time.time + Random.Range(1.5f, 4f);
             if (jaw != null) _jawRest = jaw.localRotation;
@@ -58,7 +59,7 @@ namespace Simulacra
                     if (m == null) continue;
                     for (int i = 0; i < m.blendShapeCount; i++)
                     {
-                        if (!m.GetBlendShapeName(i).ToLowerInvariant().Contains(wanted)) continue;
+                        if (!m.GetBlendShapeName(i).ToLowerInvariant().EndsWith(wanted)) continue;
                         face = smr;
                         blendShapeIndex = i;
                         return;
@@ -69,17 +70,37 @@ namespace Simulacra
 
         private void FindBlinkShapes()
         {
+            // A face often has several blink shapes (ARKit pair, FACS, tracker sets). Driving them all
+            // at once closes the eyes three times over, so pick exactly one set, best first.
+            string[][] sets = { new[] { "eyeblinkleft", "eyeblinkright" }, new[] { "blink_l", "blink_r" }, new[] { "blink" }, new[] { "eyesclosed" }, new[] { "eyeclosed" } };
             foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>())
             {
                 Mesh m = smr.sharedMesh;
-                if (m == null) continue;
-                for (int i = 0; i < m.blendShapeCount; i++)
+                if (m == null || m.blendShapeCount == 0) continue;
+                foreach (string[] set in sets)
                 {
-                    string n = m.GetBlendShapeName(i).ToLowerInvariant();
-                    if (n.Contains("blink") || n.Contains("eyesclosed") || n.Contains("eyes_closed")) _blinkShapes.Add(i);
+                    _blinkShapes.Clear();
+                    foreach (string wanted in set)
+                    {
+                        for (int i = 0; i < m.blendShapeCount; i++)
+                        {
+                            if (!m.GetBlendShapeName(i).ToLowerInvariant().EndsWith(wanted)) continue;
+                            _blinkShapes.Add(i);
+                            break;
+                        }
+                    }
+                    if (_blinkShapes.Count == set.Length) { _blinkMesh = smr; FindSmile(smr); return; }
                 }
-                if (_blinkShapes.Count > 0) { _blinkMesh = smr; return; }
+                _blinkShapes.Clear();
             }
+        }
+
+        private void FindSmile(SkinnedMeshRenderer smr)
+        {
+            Mesh m = smr.sharedMesh;
+            foreach (string wanted in SmileNames)
+                for (int i = 0; i < m.blendShapeCount; i++)
+                    if (m.GetBlendShapeName(i).ToLowerInvariant().EndsWith(wanted)) { _smileShapes.Add(i); break; }
         }
 
         // After the Animator has posed the skeleton.
@@ -94,6 +115,9 @@ namespace Simulacra
                 if (Time.time >= _nextBlink) { _blinkEnd = Time.time + 0.13f; _nextBlink = Time.time + Random.Range(2.2f, 5.5f); }
                 float closed = Time.time < _blinkEnd ? 100f : 0f;
                 foreach (int i in _blinkShapes) _blinkMesh.SetBlendShapeWeight(i, closed);
+                // A resting face is slightly pleasant, a speaking one a little more so; never a blank stare.
+                _smile = Mathf.MoveTowards(_smile, speaking ? 26f : 10f, Time.deltaTime * 40f);
+                foreach (int i in _smileShapes) _blinkMesh.SetBlendShapeWeight(i, _smile);
             }
 
             if (face != null && blendShapeIndex >= 0) face.SetBlendShapeWeight(blendShapeIndex, level * 100f);

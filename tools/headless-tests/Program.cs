@@ -95,6 +95,19 @@ static class T
         Check("stand-off distance grows with the object and stays within 0.6-2 m",
             Near(WorldModel.StandOff(new TrackedObject { size = new Vector3(1.4f, 0.75f, 0.8f) }), 1.15f) && Near(WorldModel.StandOff(new TrackedObject { size = Vector3.zero }), 0.6f) && Near(WorldModel.StandOff(new TrackedObject { size = Vector3.one * 9f }), 2f));
 
+        // Room data is refreshed often (plane detection, sensed obstacles). Ids the AI already uses must survive.
+        var room2 = new WorldModel();
+        var scan = new[] {
+            new ObjectSeed { label = "table", position = new Vector3(1f, 0.4f, 1f), size = new Vector3(1.4f, 0.75f, 0.8f), source = ObjectSource.RoomScan },
+            new ObjectSeed { label = "couch", position = new Vector3(-2f, 0.4f, 0f), size = new Vector3(2f, 0.8f, 0.9f), source = ObjectSource.RoomScan },
+        };
+        room2.SyncSeeds(scan);
+        room2.Upsert("chair", new Vector3(0f, 0.4f, 3f), Vector3.one * 0.5f, ObjectSource.Manual, 1f);
+        for (int i = 0; i < 5; i++) { scan[0].position += new Vector3(0.02f, 0f, 0.01f); room2.SyncSeeds(scan); } // plane refines a little each time
+        Check("refreshing the room five times keeps table_1 and couch_1 (no table_2 ... table_6)", room2.objects.Count == 3 && room2.TryGet("table_1", out TrackedObject t1) && room2.TryGet("couch_1", out _) && Near(t1.position.x, 1.1f, 0.06f), string.Join(",", room2.objects.Keys));
+        room2.SyncSeeds(new[] { scan[0] });
+        Check("an object that left the room scan is dropped; registered objects are untouched", room2.objects.Count == 2 && !room2.TryGet("couch_1", out _) && room2.TryGet("chair_1", out _));
+
         Time.time = 20f;
         var json = world.ToJson(new Vector3(0, 1.6f, 0), Vector3.forward, new Vector3(0, 0, 2), -Vector3.forward, "idle");
         var first = json["objects"]![0]!;

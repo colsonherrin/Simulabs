@@ -18,7 +18,7 @@ namespace Simulacra
 
         public static bool IsBuilt => s_instance.valid;
 
-        public static bool Build(RoomGeometry room)
+        public static bool Build(RoomGeometry room, IList<UprightBox> extraObstacles = null)
         {
             Clear();
             if (room == null || room.floor.Count == 0) return false;
@@ -36,7 +36,15 @@ namespace Simulacra
                     area = 0, // Walkable
                 });
             }
-            foreach (var o in room.obstacles)
+            var obstacles = new List<UprightBox>(room.obstacles);
+            if (extraObstacles != null) obstacles.AddRange(extraObstacles);
+            foreach (Mesh mesh in room.meshes)
+            {
+                // Reconstructed geometry is added as-is; the voxeliser makes floor under it unwalkable
+                // wherever there is less than a body's height of clearance.
+                if (mesh != null) sources.Add(new NavMeshBuildSource { shape = NavMeshBuildSourceShape.Mesh, sourceObject = mesh, transform = Matrix4x4.identity, area = 1 });
+            }
+            foreach (var o in obstacles)
             {
                 // Anything that starts above head height is not in the way.
                 if (o.MinY > room.floorY + AgentHeight) continue;

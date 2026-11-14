@@ -21,14 +21,12 @@ namespace Simulacra
         private void Start()
         {
             _animator = GetComponentInChildren<Animator>();
-            _animated = _animator != null && _animator.runtimeAnimatorController != null;
-            if (_animator != null && _animator.isHuman)
-            {
-                if (head == null) head = _animator.GetBoneTransform(HumanBodyBones.Head);
-                if (rightUpperArm == null) rightUpperArm = _animator.GetBoneTransform(HumanBodyBones.RightUpperArm);
-                if (rightLowerArm == null) rightLowerArm = _animator.GetBoneTransform(HumanBodyBones.RightLowerArm);
-                if (leftUpperArm == null) leftUpperArm = _animator.GetBoneTransform(HumanBodyBones.LeftUpperArm);
-            }
+            // True when something re-poses the skeleton every frame (clips, or the procedural animator).
+            _animated = (_animator != null && _animator.runtimeAnimatorController != null) || GetComponentInChildren<ProceduralHumanoid>() != null;
+            if (head == null) head = BoneFinder.Find(gameObject, HumanBodyBones.Head);
+            if (rightUpperArm == null) rightUpperArm = BoneFinder.Find(gameObject, HumanBodyBones.RightUpperArm);
+            if (rightLowerArm == null) rightLowerArm = BoneFinder.Find(gameObject, HumanBodyBones.RightLowerArm);
+            if (leftUpperArm == null) leftUpperArm = BoneFinder.Find(gameObject, HumanBodyBones.LeftUpperArm);
             if (head != null) _headRest = head.localRotation;
             if (rightUpperArm != null) _rUpperRest = rightUpperArm.localRotation;
             if (rightLowerArm != null) _rLowerRest = rightLowerArm.localRotation;

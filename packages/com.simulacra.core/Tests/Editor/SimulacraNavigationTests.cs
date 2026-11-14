@@ -130,6 +130,48 @@ namespace Simulacra.Tests
         }
 
         [Test]
+        public void SensedObstacle_ForcesADetour()
+        {
+            var room = Room();
+            Assert.IsTrue(RoomNavMesh.Build(room));
+            // A clear diagonal across open floor...
+            Assert.IsTrue(RoomNavMesh.Snap(OnFloor(-2.2f, -2.2f), 0.3f, out Vector3 a));
+            Assert.IsTrue(RoomNavMesh.Snap(OnFloor(2.2f, -2.2f), 0.3f, out Vector3 b));
+            var path = new NavMeshPath();
+            Assert.IsTrue(RoomNavMesh.HasCompletePath(a, b, path));
+            Assert.AreEqual(2, path.corners.Length, "test setup: the direct route should be a straight line");
+
+            // ...until something not in the room scan is sensed in the middle of it.
+            var sensed = new List<UprightBox> { new UprightBox { center = OnFloor(0f, -2.2f) + Vector3.up * 0.5f, size = new Vector3(0.45f, 1f, 0.45f), yawDegrees = 20f } };
+            Assert.IsTrue(RoomNavMesh.Build(room, sensed));
+            Assert.IsTrue(RoomNavMesh.HasCompletePath(a, b, path), "a single small obstacle must not make the goal unreachable");
+            Assert.Greater(path.corners.Length, 2, "path still goes straight through the sensed obstacle");
+            foreach (Vector3 corner in path.corners) Assert.IsFalse(InsideFootprint(sensed[0], corner, 0.05f));
+        }
+
+        [Test]
+        public void RegisteredObjects_ComeBackInTheSamePhysicalPlace_NextSession()
+        {
+            string room = "test-room-" + System.Guid.NewGuid();
+            // Session 1: the room frame happens to sit at one pose in app space.
+            var frame1 = new Pose(new Vector3(1f, 0.02f, -2f), Quaternion.Euler(-90f, 35f, 0f));
+            var world1 = new WorldModel();
+            Vector3 chairLocal = new Vector3(0.8f, -1.5f, 0.45f);
+            world1.Upsert("chair", frame1.position + frame1.rotation * chairLocal, Vector3.one * 0.5f, ObjectSource.Manual, 1f);
+            world1.Upsert("bottle", Vector3.one, Vector3.one * 0.2f, ObjectSource.Detected, 0.8f); // detections are not remembered
+            MarkerStore.Save(world1, room, frame1);
+
+            // Session 2: same physical room, completely different app-space pose.
+            var frame2 = new Pose(new Vector3(-4f, 0f, 3f), Quaternion.Euler(-90f, 200f, 0f));
+            var world2 = new WorldModel();
+            Assert.AreEqual(1, MarkerStore.Load(world2, room, frame2));
+            Assert.IsTrue(world2.TryGet("chair_1", out TrackedObject chair));
+            Assert.AreEqual(ObjectSource.Manual, chair.source, "a remembered marker must stay marked as user-registered");
+            Assert.That(Vector3.Distance(chair.position, frame2.position + frame2.rotation * chairLocal), Is.LessThan(0.002f));
+            Assert.AreEqual(0, MarkerStore.Load(new WorldModel(), "some-other-room", frame2), "markers must not leak into another room");
+        }
+
+        [Test]
         public void PathPlanning_IsFastEnoughToRunEveryFewFrames()
         {
             Assert.IsTrue(RoomNavMesh.Build(Room()));

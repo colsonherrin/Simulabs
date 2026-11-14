@@ -23,8 +23,8 @@ namespace Simulacra
         private readonly MonoBehaviour _host;
         private readonly GestureController _gestures;
 
-        /// <summary>Optional eye-contact controller: glances at whatever an action is about.</summary>
-        public HeadLook headLook;
+        /// <summary>Optional: make the character glance at a world point for some seconds.</summary>
+        public Action<Vector3, float> focus;
 
         /// <summary>Milliseconds the last movement spent on validation + path planning, measured on device.</summary>
         public float LastPlanMs { get; private set; }
@@ -110,7 +110,7 @@ namespace Simulacra
             }
             if (_world.TryGet(target, out TrackedObject o))
             {
-                if (headLook != null) headLook.Focus(o.position, 4f);
+                focus?.Invoke(o.position, 4f);
                 position = o.position;
                 standOff = WorldModel.StandOff(o);
                 return true;

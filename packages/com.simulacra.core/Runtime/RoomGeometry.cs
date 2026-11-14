@@ -68,6 +68,11 @@ namespace Simulacra
         public float floorY;
         public readonly List<UprightBox> floor = new List<UprightBox>();
         public readonly List<UprightBox> obstacles = new List<UprightBox>();
+        /// <summary>
+        /// Optional raw environment meshes (world space) from a device that reconstructs the room.
+        /// Anything they contain between ankle and head height blocks the floor beneath it.
+        /// </summary>
+        public readonly List<Mesh> meshes = new List<Mesh>();
 
         public Bounds FloorBounds()
         {

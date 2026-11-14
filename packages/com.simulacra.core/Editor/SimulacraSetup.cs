@@ -13,6 +13,8 @@ namespace Simulacra.EditorTools
     public static class SimulacraSetup
     {
         public const string AvatarFolder = "Assets/Simulacra/Avatar";
+        /// <summary>The character that ships with Simulacra (Microsoft Rocketbox, MIT licence), used when the project folder is empty.</summary>
+        public const string BundledAvatarFolder = "Packages/com.simulacra.core/Avatar/Rocketbox";
         private const string ControllerPath = AvatarFolder + "/SimulacraAvatar.controller";
         private const string PrefabPath = AvatarFolder + "/SimulacraAvatar.prefab";
         private const string SimScenePath = "Assets/Simulacra/Scenes/SimulacraEditorSim.unity";
@@ -49,15 +51,23 @@ namespace Simulacra.EditorTools
         /// humanoid rig, looping clips, an Animator Controller with the Speed/Turn/MotionSpeed/Speaking contract.
         /// Clips are matched by FILE name: *idle*, *walk*, *talk*|*speak*, *turn*left*, *turn*right*.
         /// </summary>
-        [MenuItem("Simulacra/3. Setup Avatar From Assets-Simulacra-Avatar")]
+        [MenuItem("Simulacra/3. Setup Avatar (your model in Assets-Simulacra-Avatar, else the bundled one)")]
         public static void SetupAvatar()
         {
-            string[] modelPaths = AssetDatabase.FindAssets("t:Model", new[] { AvatarFolder }).Select(AssetDatabase.GUIDToAssetPath).ToArray();
+            // Your own character in the project folder wins; otherwise the bundled one is used.
+            string sourceFolder = AvatarFolder;
+            string[] modelPaths = FindModels(AvatarFolder);
             if (modelPaths.Length == 0)
             {
-                EditorUtility.DisplayDialog("Simulacra", "Put a rigged character (FBX) and its idle / walk / talk animation files in " + AvatarFolder + " first. See README > Avatar.", "OK");
+                sourceFolder = BundledAvatarFolder;
+                modelPaths = FindModels(BundledAvatarFolder);
+            }
+            if (modelPaths.Length == 0)
+            {
+                EditorUtility.DisplayDialog("Simulacra", "No character found. Put a rigged character (FBX) in " + AvatarFolder + ". See README > Avatar.", "OK");
                 return;
             }
+            Directory.CreateDirectory(AvatarFolder);
 
             // 1. Find the file that carries the skinned mesh: that is the character.
             string characterPath = modelPaths
@@ -65,8 +75,23 @@ namespace Simulacra.EditorTools
                 .ThenByDescending(p => new FileInfo(p).Length)
                 .First();
 
+            // A character that comes alone (no animation files) is animated procedurally from its
+            // skeleton, which needs no Humanoid mapping: import it as-is and skip the controller.
+            bool hasClipFiles = modelPaths.Length > 1;
+            if (!hasClipFiles)
+            {
+                var solo = AssetImporter.GetAtPath(characterPath) as ModelImporter;
+                if (solo != null && (solo.animationType != ModelImporterAnimationType.Generic || solo.importAnimation))
+                {
+                    solo.animationType = ModelImporterAnimationType.Generic;
+                    solo.importAnimation = false;
+                    solo.importBlendShapes = true;
+                    solo.SaveAndReimport();
+                }
+            }
+
             // 2. Humanoid rig everywhere, character first so the others can copy its avatar.
-            ConfigureImporter(characterPath, null);
+            if (hasClipFiles) ConfigureImporter(characterPath, null);
             var characterAvatar = AssetDatabase.LoadAllAssetsAtPath(characterPath).OfType<Avatar>().FirstOrDefault();
             foreach (string p in modelPaths) if (p != characterPath) ConfigureImporter(p, characterAvatar);
 
@@ -83,14 +108,15 @@ namespace Simulacra.EditorTools
             AnimationClip turnL = clips.FirstOrDefault(kv => kv.Key.Contains("turn") && kv.Key.Contains("left")).Value;
             AnimationClip turnR = clips.FirstOrDefault(kv => kv.Key.Contains("turn") && kv.Key.Contains("right")).Value;
 
-            AnimatorController controller = BuildController(idle, walk, talk, turnL, turnR);
+            AnimatorController controller = idle != null || walk != null ? BuildController(idle, walk, talk, turnL, turnR) : null;
 
             // 4. Prefab.
             var characterAsset = AssetDatabase.LoadAssetAtPath<GameObject>(characterPath);
             var instance = (GameObject)PrefabUtility.InstantiatePrefab(characterAsset);
             var animator = instance.GetComponent<Animator>();
             if (animator == null) animator = instance.AddComponent<Animator>();
-            animator.runtimeAnimatorController = controller;
+            animator.runtimeAnimatorController = controller; // null = procedural animation at run time
+            int materials = BuildMaterials(instance, Path.GetDirectoryName(characterPath).Replace('\\', '/'));
             animator.applyRootMotion = false;
             animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
             GameObject prefab = PrefabUtility.SaveAsPrefabAsset(instance, PrefabPath);
@@ -103,14 +129,84 @@ namespace Simulacra.EditorTools
                 EditorSceneManager.MarkSceneDirty(app.gameObject.scene);
             }
 
-            string report = $"Character: {Path.GetFileName(characterPath)}\nidle: {Name(idle)}\nwalk: {Name(walk)}\ntalk: {Name(talk)}\nturn left/right: {Name(turnL)} / {Name(turnR)}\n\nPrefab: {PrefabPath}\n" +
-                            (walk == null ? "\nNo *walk* clip found: the avatar will glide. Add a walking animation exported 'In Place'." : "") +
-                            (animator.isHuman ? "" : "\nWarning: the rig did not import as Humanoid; head/jaw lookup will be skipped.");
+            int blendShapes = 0;
+            foreach (var smr in prefab.GetComponentsInChildren<SkinnedMeshRenderer>()) if (smr.sharedMesh != null) blendShapes += smr.sharedMesh.blendShapeCount;
+            string report = $"Character: {Path.GetFileName(characterPath)} (from {sourceFolder})\n" +
+                            (controller != null
+                                ? $"idle: {Name(idle)}\nwalk: {Name(walk)}\ntalk: {Name(talk)}\nturn left/right: {Name(turnL)} / {Name(turnR)}\n"
+                                : "No animation files: walking, idling and gaze are generated procedurally.\n") +
+                            $"Skeleton recognised: {(BoneFinder.HasLegsAndArms(prefab) ? "yes" : "NO - the body will not animate")}\n" +
+                            $"Face blendshapes: {blendShapes}\nMaterials rebuilt: {materials}\n\nPrefab: {PrefabPath}\n" +
+                            (controller != null && walk == null ? "\nNo *walk* clip found: the avatar will glide. Add a walking animation exported 'In Place'." : "");
             Debug.Log("[Simulacra] Avatar ready.\n" + report);
             EditorUtility.DisplayDialog("Simulacra avatar", report + "\nSave the scene to keep the assignment.", "OK");
         }
 
         private static string Name(AnimationClip c) => c == null ? "(none)" : "found";
+
+        private static string[] FindModels(string folder)
+        {
+            return AssetDatabase.IsValidFolder(folder) ? AssetDatabase.FindAssets("t:Model", new[] { folder }).Select(AssetDatabase.GUIDToAssetPath).ToArray() : new string[0];
+        }
+
+        /// <summary>
+        /// Rebuild materials from the textures that sit next to the model, by naming convention:
+        /// material "x" gets "x_color" as albedo and "x_normal" as normal map. Fixes characters whose
+        /// embedded texture paths are stale or whose materials import dark; a material whose name
+        /// contains "opacity" (hair, lashes) becomes alpha cut-out. Materials without a matching
+        /// texture are left exactly as imported.
+        /// </summary>
+        private static int BuildMaterials(GameObject instance, string modelFolder)
+        {
+            var textures = new Dictionary<string, string>();
+            foreach (string guid in AssetDatabase.FindAssets("t:Texture2D", new[] { modelFolder }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                textures[Path.GetFileNameWithoutExtension(path).ToLowerInvariant()] = path;
+            }
+            if (textures.Count == 0) return 0;
+            Directory.CreateDirectory(AvatarFolder + "/Materials");
+
+            int built = 0;
+            foreach (Renderer r in instance.GetComponentsInChildren<Renderer>(true))
+            {
+                Material[] mats = r.sharedMaterials;
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    if (mats[i] == null) continue;
+                    string slot = mats[i].name.ToLowerInvariant();
+                    if (!textures.TryGetValue(slot + "_color", out string albedoPath)) continue;
+
+                    var mat = new Material(Shader.Find("Standard")) { name = mats[i].name, color = Color.white };
+                    mat.mainTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(albedoPath);
+                    mat.SetFloat("_Glossiness", 0.25f);
+                    mat.SetFloat("_Metallic", 0f);
+                    if (textures.TryGetValue(slot + "_normal", out string normalPath))
+                    {
+                        var ti = AssetImporter.GetAtPath(normalPath) as TextureImporter;
+                        if (ti != null && ti.textureType != TextureImporterType.NormalMap) { ti.textureType = TextureImporterType.NormalMap; ti.SaveAndReimport(); }
+                        mat.SetTexture("_BumpMap", AssetDatabase.LoadAssetAtPath<Texture2D>(normalPath));
+                        mat.EnableKeyword("_NORMALMAP");
+                    }
+                    if (slot.Contains("opacity"))
+                    {
+                        // Alpha cut-out: stays in the opaque queue, so no sorting artefacts in the headset.
+                        mat.SetFloat("_Mode", 1f);
+                        mat.SetOverrideTag("RenderType", "TransparentCutout");
+                        mat.SetFloat("_Cutoff", 0.4f);
+                        mat.EnableKeyword("_ALPHATEST_ON");
+                        mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+                    }
+                    string matPath = AvatarFolder + "/Materials/" + mats[i].name + ".mat";
+                    AssetDatabase.DeleteAsset(matPath);
+                    AssetDatabase.CreateAsset(mat, matPath);
+                    mats[i] = mat;
+                    built++;
+                }
+                r.sharedMaterials = mats;
+            }
+            return built;
+        }
 
         private static AnimationClip Pick(Dictionary<string, AnimationClip> clips, params string[] keys)
         {
@@ -218,6 +314,15 @@ namespace Simulacra.EditorTools
 
         public static GameObject FindAvatarPrefab() => AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath);
 
+        /// <summary>True if there is a character model waiting in the Avatar folder.</summary>
+        public static bool HasAvatarSources() => FindModels(AvatarFolder).Length > 0 || FindModels(BundledAvatarFolder).Length > 0;
+
+        /// <summary>Build the avatar prefab if models are present and it has not been built yet.</summary>
+        public static void EnsureAvatar()
+        {
+            if (FindAvatarPrefab() == null && HasAvatarSources()) SetupAvatar();
+        }
+
         public static void AddLight()
         {
             var light = new GameObject("Directional Light").AddComponent<Light>();
@@ -227,6 +332,26 @@ namespace Simulacra.EditorTools
             light.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
             RenderSettings.ambientLight = new Color(0.55f, 0.55f, 0.55f);
+        }
+
+        /// <summary>Add a shader to Graphics Settings > Always Included Shaders (needed for Shader.Find in a build).</summary>
+        public static bool AlwaysIncludeShader(string shaderName)
+        {
+            Shader shader = Shader.Find(shaderName);
+            if (shader == null)
+            {
+                Debug.LogWarning($"[Simulacra] shader '{shaderName}' not found; the feature that needs it will stay off.");
+                return false;
+            }
+            var settings = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/GraphicsSettings.asset")[0]);
+            SerializedProperty list = settings.FindProperty("m_AlwaysIncludedShaders");
+            for (int i = 0; i < list.arraySize; i++)
+                if (list.GetArrayElementAtIndex(i).objectReferenceValue == shader) return true;
+            list.InsertArrayElementAtIndex(list.arraySize);
+            list.GetArrayElementAtIndex(list.arraySize - 1).objectReferenceValue = shader;
+            settings.ApplyModifiedPropertiesWithoutUndo();
+            AssetDatabase.SaveAssets();
+            return true;
         }
 
         public static void SaveScene(Scene scene, string path, bool makeBuildScene)

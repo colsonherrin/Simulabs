@@ -15,6 +15,7 @@ namespace Simulacra.EditorTools
         public static void Create()
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
+            SimulacraSetup.EnsureAvatar(); // if a character is in Assets/Simulacra/Avatar, prepare it first
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
             // Camera rig: prefer Meta's prefab, fall back to building it from components.
@@ -47,6 +48,8 @@ namespace Simulacra.EditorTools
             var camera = new GameObject("PassthroughCamera").AddComponent<PassthroughCameraAccess>();
 
             SimulacraSetup.AddLight();
+            // Depth occlusion looks the shader up by name at run time, so it must be forced into the build.
+            SimulacraSetup.AlwaysIncludeShader("Meta/EnvironmentDepth/Built-in Render Pipeline/OcclusionSurfaceLit");
 
             var appGo = new GameObject("Simulacra");
             var provider = appGo.AddComponent<QuestSpatialProvider>();

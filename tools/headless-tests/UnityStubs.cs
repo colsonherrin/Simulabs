@@ -133,6 +133,7 @@ namespace UnityEngine
     }
 
     public static class Time { public static float time; }
+    public class Mesh { }
 }
 
 namespace Simulacra

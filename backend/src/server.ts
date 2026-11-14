@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { networkInterfaces } from 'node:os';
@@ -320,6 +321,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   console.log(`Simulacra backend up. brain=${brain}`);
   console.log(`  simulator:  http://localhost:${port}/`);
   console.log(`  latency:    http://localhost:${port}/metrics`);
+
+  // A headset on USB reaches this server at ws://127.0.0.1:<port>/device (the app's default) through
+  // adb's reverse tunnel. Set it up, and keep re-doing it, so plugging the headset in is the only step.
+  let usb = '';
+  const tether = () =>
+    execFile('adb', ['reverse', `tcp:${port}`, `tcp:${port}`], { timeout: 4000 }, (err) => {
+      const now = err ? ((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'adb not installed: use the Wi-Fi address above, or install Android platform-tools' : 'no headset on USB yet') : `headset on USB can use ws://127.0.0.1:${port}/device`;
+      if (now !== usb) console.log(`  USB:        ${(usb = now)}`);
+      if (!err || (err as NodeJS.ErrnoException).code !== 'ENOENT') setTimeout(tether, 10_000).unref();
+    });
+  tether();
   for (const list of Object.values(networkInterfaces()))
     for (const ni of list ?? []) if (ni.family === 'IPv4' && !ni.internal) console.log(`  headset URL: ws://${ni.address}:${port}/device`);
 }

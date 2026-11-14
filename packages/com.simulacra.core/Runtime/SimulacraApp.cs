@@ -35,8 +35,16 @@ namespace Simulacra
         [Tooltip("Only listen while the talk control is held (Quest: right index trigger). Use in loud rooms.")]
         public bool pushToTalk = false;
 
+        [Header("Room")]
+        [Tooltip("While walking, sense real obstacles the room scan does not contain and route around them (needs device depth).")]
+        public bool dynamicObstacles = true;
+        [Tooltip("Match the avatar's lighting to the brightness of the real room where the device can measure it.")]
+        public bool matchRoomBrightness = true;
+
         [Header("Debug")]
         public bool showHud = true;
+        [Tooltip("Hide the debug HUD by itself this many seconds after everything is ready. It comes back if the backend drops. 0 = never hide.")]
+        public float hudAutoHideSeconds = 8f;
 
         public SpatialProvider provider;
 
@@ -50,8 +58,18 @@ namespace Simulacra
         private GestureController _gestures;
         private string _latency = "", _avatarReport = "";
         private HeadLook _headLook;
+        private ProceduralHumanoid _procedural;
         private float _nextHud, _talkOpenUntil;
         private bool _talkWasHeld;
+
+        // Obstacles sensed live while walking: where, and when they stop being trusted.
+        private readonly List<UprightBox> _sensed = new List<UprightBox>();
+        private readonly List<float> _sensedUntil = new List<float>();
+        private Vector3 _lastProbeHit;
+        private float _lastProbeHitTime = -10f, _nextProbe, _nextBrightness, _readySince = -1f;
+        private bool _hudAutoHidden;
+        private Light _sun;
+        private string _roomKey;
         private TextMesh _hud;
         private readonly List<string> _lines = new List<string>();
         private string _brain = "-", _status = "starting", _aiState = "";
@@ -72,6 +90,8 @@ namespace Simulacra
             while (provider.Room == null) yield return null;
             ApplyRoom();
             provider.RoomChanged += () => _roomDirty = true;
+            provider.WorldShifted += OnWorldShifted;
+            _sun = FindObjectOfType<Light>();
 
             SpawnAvatar();
 
@@ -87,7 +107,14 @@ namespace Simulacra
             _mic = gameObject.AddComponent<MicStreamer>();
             _mic.Chunk += pcm => Backend.Send(new JObject { ["type"] = "audio", ["pcm16"] = pcm });
 
-            _executor = new ActionExecutor(World, Avatar, provider, Backend, this, _gestures) { headLook = _headLook };
+            _executor = new ActionExecutor(World, Avatar, provider, Backend, this, _gestures)
+            {
+                focus = (point, seconds) =>
+                {
+                    if (_headLook != null) _headLook.Focus(point, seconds);
+                    if (_procedural != null) _procedural.Focus(point, seconds);
+                },
+            };
             _ready = true;
         }
 
@@ -102,6 +129,8 @@ namespace Simulacra
                 if (cfg["halfDuplex"] != null) halfDuplex = (bool)cfg["halfDuplex"];
                 if (cfg["showHud"] != null) showHud = (bool)cfg["showHud"];
                 if (cfg["pushToTalk"] != null) pushToTalk = (bool)cfg["pushToTalk"];
+                if (cfg["dynamicObstacles"] != null) dynamicObstacles = (bool)cfg["dynamicObstacles"];
+                if (cfg["hudAutoHideSeconds"] != null) hudAutoHideSeconds = (float)cfg["hudAutoHideSeconds"];
                 Debug.Log("[Simulacra] config loaded from " + path);
             }
             catch (System.Exception e) { Debug.LogWarning("[Simulacra] config ignored: " + e.Message); }
@@ -110,12 +139,19 @@ namespace Simulacra
         private void ApplyRoom()
         {
             World.room = provider.Room;
-            bool ok = RoomNavMesh.Build(World.room);
+            ExpireSensedObstacles();
+            bool ok = RoomNavMesh.Build(World.room, _sensed);
             Debug.Log($"[Simulacra] room source={World.room.source} floorY={World.room.floorY:0.00} obstacles={World.room.obstacles.Count} navmesh={ok}");
 
-            World.RemoveBySource(ObjectSource.RoomScan);
-            World.RemoveBySource(ObjectSource.Simulated);
-            foreach (ObjectSeed seed in provider.Seeds) World.Upsert(seed.label, seed.position, seed.size, seed.source, 1f);
+            World.SyncSeeds(provider.Seeds);
+
+            // Things the user pointed out in an earlier session come back in the same physical place.
+            if (provider.TryGetRoomFrame(out string key, out Pose frame) && key != _roomKey)
+            {
+                _roomKey = key;
+                int restored = MarkerStore.Load(World, key, frame);
+                if (restored > 0) Debug.Log($"[Simulacra] restored {restored} user-registered object(s) for this room");
+            }
 
             if (Avatar != null)
             {
@@ -147,7 +183,7 @@ namespace Simulacra
             Avatar.visual = body.transform;
 
             var animator = body.GetComponentInChildren<Animator>();
-            if (head == null && animator != null && animator.isHuman) head = animator.GetBoneTransform(HumanBodyBones.Head);
+            if (head == null) head = BoneFinder.Find(body, HumanBodyBones.Head);
 
             var voiceGo = new GameObject("Voice");
             voiceGo.transform.SetParent(head != null ? head : root.transform, false);
@@ -173,10 +209,19 @@ namespace Simulacra
                 _gestures.leftUpperArm = leftArm;
             }
 
-            if (animator != null && animator.isHuman)
+            if (animator != null && animator.isHuman && animator.runtimeAnimatorController != null)
             {
+                // Real clips drive the body; IK turns the head toward the user.
                 _headLook = animator.gameObject.AddComponent<HeadLook>();
                 _headLook.user = provider.Head;
+            }
+            else if (avatarPrefab != null && BoneFinder.HasLegsAndArms(body) && (animator == null || animator.runtimeAnimatorController == null))
+            {
+                // No clips: walk, idle and gaze are generated from the skeleton.
+                _procedural = body.AddComponent<ProceduralHumanoid>();
+                _procedural.body = Avatar;
+                _procedural.lookTarget = provider.Head;
+                _avatarReport += ", procedural animation";
             }
             if (groundShadow && provider.CanDarkenWorld) Avatar.groundDecal = CreateContactShadow(root.transform);
             provider.PrepareAvatar(root);
@@ -253,7 +298,11 @@ namespace Simulacra
                 case "ready": _brain = (string)msg["brain"]; _status = "ready"; break;
                 case "audio": _voice.Enqueue((string)msg["pcm16"]); break;
                 case "audio_stop": _voice.Clear(); break;
-                case "action": _executor.Handle(msg); _nextWorldSync = 0f; break;
+                case "action":
+                    _executor.Handle(msg);
+                    _nextWorldSync = 0f;
+                    if ((string)msg["action"] == "register_marker" && provider.TryGetRoomFrame(out string key, out Pose frame)) MarkerStore.Save(World, key, frame);
+                    break;
                 case "detections": _executor.OnDetections(msg); break;
                 case "state": _aiState = (string)msg["status"]; break;
                 case "metrics": _latency = FormatLatency(msg["turn"] as JObject); break;
@@ -299,6 +348,9 @@ namespace Simulacra
             }
 
             if (idleFaceUser) FaceUserWhenIdle();
+            if (dynamicObstacles) SenseObstacles();
+            if (matchRoomBrightness) MatchBrightness();
+            AutoHideHud();
 
             if (Time.unscaledTime >= _nextReach)
             {
@@ -313,6 +365,109 @@ namespace Simulacra
                 string state = Avatar.State == "idle" && _voice.IsSpeaking ? "speaking" : Avatar.State;
                 Backend.Send(new JObject { ["type"] = "world", ["world"] = World.ToJson(h.position, h.forward, a.position, a.forward, state) });
             }
+        }
+
+        /// <summary>
+        /// Live obstacle sensing. While the body walks, two short depth rays look ahead of it (shin and
+        /// chest height). A real surface seen twice in the same place that the room scan does not
+        /// explain becomes a temporary obstacle; the NavMesh is rebuilt and the walk replans around it.
+        /// All local: the AI is not involved.
+        /// </summary>
+        private void SenseObstacles()
+        {
+            if (Time.time < _nextProbe || World.room == null) return;
+            _nextProbe = Time.time + 0.2f;
+            if (Avatar.State != "walking" && Avatar.State != "following") return;
+
+            Vector3 origin = Avatar.transform.position, dir = Avatar.transform.forward;
+            float floorY = World.room.floorY;
+            foreach (float height in new[] { 0.3f, 0.85f })
+            {
+                var from = new Vector3(origin.x, floorY + height, origin.z);
+                if (!provider.ProbeObstacle(from, dir, 0.9f, out Vector3 hit)) continue;
+                Vector3 flat = hit - from; flat.y = 0f;
+                if (flat.magnitude < 0.25f || hit.y < floorY + 0.15f) continue;        // the body itself, or the floor
+                if (FlatDistance(hit, provider.Head.position) < 0.7f) continue;         // the wearer
+                if (Avatar.Destination.HasValue && FlatDistance(hit, Avatar.Destination.Value) < 1.1f) continue; // the thing we are walking up to
+                if (InsideKnownObstacle(hit)) continue;
+
+                // Require the same surface twice before believing it.
+                bool confirmed = Time.time - _lastProbeHitTime < 0.6f && FlatDistance(hit, _lastProbeHit) < 0.25f;
+                _lastProbeHit = hit;
+                _lastProbeHitTime = Time.time;
+                if (!confirmed) return;
+
+                if (_sensed.Count >= 8) { _sensed.RemoveAt(0); _sensedUntil.RemoveAt(0); }
+                Vector3 centre = hit + dir * 0.18f;
+                _sensed.Add(new UprightBox { center = new Vector3(centre.x, floorY + 0.5f, centre.z), size = new Vector3(0.45f, 1f, 0.45f), yawDegrees = Avatar.transform.eulerAngles.y });
+                _sensedUntil.Add(Time.time + 45f);
+                _lastProbeHitTime = -10f;
+                Debug.Log($"[Simulacra] sensed an unmapped obstacle at {hit}; replanning around it");
+                _roomDirty = true;
+                return;
+            }
+        }
+
+        private void ExpireSensedObstacles()
+        {
+            for (int i = _sensed.Count - 1; i >= 0; i--)
+                if (Time.time > _sensedUntil[i]) { _sensed.RemoveAt(i); _sensedUntil.RemoveAt(i); }
+        }
+
+        private bool InsideKnownObstacle(Vector3 point)
+        {
+            foreach (UprightBox o in World.room.obstacles) if (Contains(o, point, 0.2f)) return true;
+            foreach (UprightBox o in _sensed) if (Contains(o, point, 0.2f)) return true;
+            return false;
+        }
+
+        private static bool Contains(UprightBox box, Vector3 point, float margin)
+        {
+            Vector3 local = Quaternion.Inverse(box.Rotation) * (point - box.center);
+            return Mathf.Abs(local.x) < box.size.x * 0.5f + margin && Mathf.Abs(local.z) < box.size.z * 0.5f + margin;
+        }
+
+        private static float FlatDistance(Vector3 a, Vector3 b)
+        {
+            a.y = 0f; b.y = 0f;
+            return Vector3.Distance(a, b);
+        }
+
+        /// <summary>The device corrected where the room is: move everything that lives in the room with it.</summary>
+        private void OnWorldShifted(Matrix4x4 oldToNew)
+        {
+            foreach (TrackedObject o in World.objects.Values)
+                if (o.source == ObjectSource.Manual || o.source == ObjectSource.Detected) o.position = oldToNew.MultiplyPoint3x4(o.position);
+            _sensed.Clear();
+            _sensedUntil.Clear();
+            if (Avatar != null) Avatar.ApplyWorldShift(oldToNew);
+            _roomDirty = true;
+        }
+
+        /// <summary>A dim room gets a dimly lit character, a bright room a bright one.</summary>
+        private void MatchBrightness()
+        {
+            if (Time.unscaledTime < _nextBrightness) return;
+            _nextBrightness = Time.unscaledTime + 2f;
+            if (!provider.TryEstimateBrightness(out float b)) return;
+            float ambient = Mathf.Lerp(0.18f, 0.85f, b);
+            RenderSettings.ambientLight = Color.Lerp(RenderSettings.ambientLight, new Color(ambient, ambient, ambient), 0.5f);
+            if (_sun != null) _sun.intensity = Mathf.Lerp(_sun.intensity, Mathf.Lerp(0.35f, 1.3f, b), 0.5f);
+        }
+
+        /// <summary>The HUD is a setup aid: once everything works it gets out of the way by itself.</summary>
+        private void AutoHideHud()
+        {
+            bool healthy = Backend.IsConnected && _status == "ready" && RoomNavMesh.IsBuilt && Avatar.OnNavMesh;
+            if (!healthy)
+            {
+                _readySince = -1f;
+                if (_hudAutoHidden) { _hudAutoHidden = false; showHud = true; } // something broke: show why
+                return;
+            }
+            if (hudAutoHideSeconds <= 0f || _hudAutoHidden) return;
+            if (_readySince < 0f) _readySince = Time.unscaledTime;
+            if (showHud && Time.unscaledTime - _readySince > hudAutoHideSeconds) { showHud = false; _hudAutoHidden = true; }
         }
 
         /// <summary>One HUD line from the backend's per-turn latency record.</summary>
@@ -384,6 +539,7 @@ namespace Simulacra
                 sb.Append("room=").Append(World.room.source).Append(" navmesh=").Append(RoomNavMesh.IsBuilt ? "yes" : "NO").Append(" objects=").Append(World.objects.Count)
                   .Append(" vision=").Append(provider.HasVision ? "yes" : "no").Append('\n');
             if (_avatarReport.Length > 0) sb.Append(_avatarReport).Append('\n');
+            if (provider.DebugStatus.Length > 0) sb.Append(provider.DebugStatus).Append('\n');
             if (_mic != null) sb.Append("mic=").Append(!_mic.IsCapturing ? "OFF" : _mic.Muted ? (pushToTalk ? "hold trigger to talk" : "muted") : "live").Append("  avatar=").Append(Avatar != null ? Avatar.State : "-").Append('\n');
             if (_executor != null && _executor.LastAction.Length > 0) sb.Append("action: ").Append(_executor.LastAction).Append('\n');
             if (_latency.Length > 0) sb.Append(_latency).Append('\n');
