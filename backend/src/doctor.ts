@@ -1,5 +1,6 @@
 // Pre-demo check: `npm run doctor`. Verifies, without spending tokens, that the keys work, the
 // configured models exist for those keys, and prints the address the headset should use.
+import './env.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { accessSync, constants, mkdirSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';

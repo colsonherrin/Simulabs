@@ -1,3 +1,4 @@
+import './env.js';
 import { execFile } from 'node:child_process';
 import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type Server } from 'node:http';
@@ -465,6 +466,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   });
   if (!env.ANTHROPIC_API_KEY || !env.OPENAI_API_KEY) console.log(`\n  >>> Keys missing. Open http://localhost:${port}/setup on this computer and paste them in. No restart needed.\n`);
   console.log(`Simulacra backend up. brain=${brain}`);
+  console.log(`  setup keys: http://localhost:${port}/setup`);
+  console.log(`  WebXR app:  http://localhost:${port}/xr/   (desktop preview; on Quest over USB, press Enter AR)`);
   console.log(`  simulator:  http://localhost:${port}/`);
   console.log(`  latency:    http://localhost:${port}/metrics`);
 
