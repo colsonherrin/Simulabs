@@ -56,9 +56,9 @@ function distPointSeg(p, a, b) {
 
 function paletteForEnemy(attackerSide) {
   if (attackerSide === 0) {
-    return { cloth: 0x3a2a68, metal: 0xc8c4e4, emissive: 0x221848, skin: 0x8d6a52 };
+    return { side: 1, cloth: 0x3a2a68, metal: 0xc8c4e4, emissive: 0x221848, skin: 0x8d6a52 };
   }
-  return { cloth: 0x6a3a28, metal: 0xf0d090, emissive: 0x4a3010, skin: 0x8d6a52 };
+  return { side: 0, cloth: 0x6a3a28, metal: 0xf0d090, emissive: 0x4a3010, skin: 0x8d6a52 };
 }
 
 export function createCombat({ scene, camera, renderer, hooks }) {
