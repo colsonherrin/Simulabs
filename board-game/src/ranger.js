@@ -100,17 +100,32 @@ function crownGeo(depth = 0.008) {
   );
 }
 
+// Leg chain: hip (this group) -> knee -> ankle. Hip pivot sits at the top of
+// the thigh; the knee pivot is the knee cap, the ankle pivot the top of the
+// sabaton, so bending any joint folds the armour plates around it.
+export const THIGH_LEN = 0.44;
+export const SHIN_LEN = 0.36;
+
 function buildLeg(m) {
   const leg = new THREE.Group();
   part(leg, new THREE.CylinderGeometry(0.08, 0.07, 0.38, 6), m.clothDark, [0, -0.2, 0]);
-  part(leg, new THREE.OctahedronGeometry(0.075, 0), m.steel, [0, -0.44, 0.05], [0, Math.PI / 4, 0], [1.1, 1, 0.85]);
-  part(leg, new THREE.CylinderGeometry(0.08, 0.068, 0.3, 6), m.steel, [0, -0.63, 0]);
-  part(leg, new THREE.CylinderGeometry(0.088, 0.088, 0.045, 6), m.steelDark, [0, -0.5, 0]);
-  part(leg, new THREE.CylinderGeometry(0.082, 0.082, 0.045, 6), m.steelDark, [0, -0.77, 0]);
-  part(leg, new THREE.BoxGeometry(0.15, 0.13, 0.24), m.steelDark, [0, -0.855, 0.025]);
-  part(leg, new THREE.BoxGeometry(0.13, 0.08, 0.1), m.steelDark, [0, -0.88, 0.17], [0.25, 0, 0]);
-  return leg;
+  const knee = new THREE.Group();
+  knee.position.y = -THIGH_LEN;
+  leg.add(knee);
+  part(knee, new THREE.OctahedronGeometry(0.075, 0), m.steel, [0, 0, 0.05], [0, Math.PI / 4, 0], [1.1, 1, 0.85]);
+  part(knee, new THREE.CylinderGeometry(0.08, 0.068, 0.3, 6), m.steel, [0, -0.19, 0]);
+  part(knee, new THREE.CylinderGeometry(0.088, 0.088, 0.045, 6), m.steelDark, [0, -0.06, 0]);
+  part(knee, new THREE.CylinderGeometry(0.082, 0.082, 0.045, 6), m.steelDark, [0, -0.33, 0]);
+  const ankle = new THREE.Group();
+  ankle.position.y = -SHIN_LEN;
+  knee.add(ankle);
+  part(ankle, new THREE.BoxGeometry(0.15, 0.13, 0.24), m.steelDark, [0, -0.055, 0.025]);
+  part(ankle, new THREE.BoxGeometry(0.13, 0.08, 0.1), m.steelDark, [0, -0.08, 0.17], [0.25, 0, 0]);
+  return { leg, knee, ankle };
 }
+
+export const UPPER_LEN = 0.27;
+export const FORE_LEN = 0.25;
 
 function buildArm(m, side, heavyShoulder) {
   // side: -1 = figure's right (-x), +1 = figure's left (+x)
@@ -123,14 +138,14 @@ function buildArm(m, side, heavyShoulder) {
     part(arm, new THREE.OctahedronGeometry(0.1, 0), m.cloth, [side * 0.02, 0.0, 0], [0, Math.PI / 4, 0], [1, 0.7, 1]);
   }
   const fore = new THREE.Group();
-  fore.position.y = -0.27;
+  fore.position.y = -UPPER_LEN;
   arm.add(fore);
   part(fore, new THREE.OctahedronGeometry(0.055, 0), m.steelDark, [0, 0, 0]);
   part(fore, new THREE.CylinderGeometry(0.07, 0.058, 0.18, 6), m.steelDark, [0, -0.11, 0]);
   part(fore, new THREE.CylinderGeometry(0.085, 0.085, 0.05, 6), m.steel, [0, -0.035, 0]);
   part(fore, new THREE.DodecahedronGeometry(0.068, 0), m.steelDark, [0, -0.25, 0.005], [0.3, 0.2, 0], [1, 1.1, 1]);
   const hand = new THREE.Object3D();
-  hand.position.y = -0.25;
+  hand.position.y = -FORE_LEN;
   fore.add(hand);
   return { arm, fore, hand };
 }
@@ -260,11 +275,22 @@ function materialsFor(palette) {
 
 /**
  * Build a ranger figure.
+ *
+ * The figure is a real joint hierarchy so the combat rig can bend it:
+ *
+ *   root
+ *    └ body
+ *       └ pelvis (hips, y 0.92) ── skirt, belt, tabard
+ *          ├ legR / legL (hip)  └ knee └ ankle
+ *          └ spine (waist)     ── chest, bandolier, cowl, cape, quiver
+ *             ├ neck (head)
+ *             └ armR / armL (shoulder) └ fore (elbow) └ hand (wrist)
+ *
  * @param {object} opts
  * @param {'archer'|'sword'} opts.kind
  * @param {object} opts.palette  one of RANGER_PALETTES (or compatible)
  * @param {'mini'|'soldier'} opts.pose  mini = static display pose on an octagonal base;
- *   soldier = straight limbs for combat animation, weapons angled for the arena.
+ *   soldier = rest pose with weapons in the hands, animated by rig.js.
  * @param {number} [opts.eyeColor]  glowing eyes behind the visor (soldier pose)
  */
 export function buildRanger({ kind, palette, pose = 'mini', eyeColor = null }) {
@@ -272,42 +298,42 @@ export function buildRanger({ kind, palette, pose = 'mini', eyeColor = null }) {
   const root = new THREE.Group();
   const body = new THREE.Group();
   root.add(body);
+  const isMini = pose === 'mini';
 
-  if (pose === 'mini') {
+  if (isMini) {
     part(root, new THREE.CylinderGeometry(0.4, 0.44, 0.09, 8), m.band, [0, 0.045, 0], [0, Math.PI / 8, 0]);
-        part(root, new THREE.CylinderGeometry(0.34, 0.4, 0.04, 8), m.steel, [0, 0.11, 0], [0, Math.PI / 8, 0]);
+    part(root, new THREE.CylinderGeometry(0.34, 0.4, 0.04, 8), m.steel, [0, 0.11, 0], [0, Math.PI / 8, 0]);
     body.position.y = 0.13;
   }
 
-  // Legs
-  const legR = buildLeg(m);
-  const legL = buildLeg(m);
-  legR.position.set(-0.115, 0.92, 0);
-  legL.position.set(0.115, 0.92, 0);
-  body.add(legR, legL);
+  // Hips
+  const pelvis = new THREE.Group();
+  pelvis.position.y = 0.92;
+  body.add(pelvis);
 
-  // Torso
-  part(body, new THREE.CylinderGeometry(0.17, 0.16, 0.18, 8), m.clothDark, [0, 1.04, 0], [0, 0, 0], [1, 1, 0.78]);
-  part(body, new THREE.CylinderGeometry(0.225, 0.17, 0.4, 8), m.cloth, [0, 1.3, 0], [0, 0, 0], [1, 1, 0.72]);
-  part(body, new THREE.BoxGeometry(0.13, 0.1, 0.03), m.steel, [-0.085, 1.27, 0.14], [0.12, -0.25, 0.3]);
-  part(body, new THREE.BoxGeometry(0.11, 0.09, 0.03), m.steel, [0.095, 1.15, 0.13], [0.1, 0.25, -0.2]);
-  part(body, new THREE.CylinderGeometry(0.19, 0.185, 0.07, 8), m.steelDark, [0, 0.95, 0], [0, 0, 0], [1, 1, 0.8]);
-  part(body, new THREE.BoxGeometry(0.085, 0.06, 0.03), m.steel, [0, 0.95, 0.155]);
-  part(body, new THREE.BoxGeometry(0.045, 0.03, 0.035), m.clothDark, [0, 0.95, 0.16]);
+  const right = buildLeg(m);
+  const left = buildLeg(m);
+  right.leg.position.set(-0.115, 0, 0);
+  left.leg.position.set(0.115, 0, 0);
+  pelvis.add(right.leg, left.leg);
+
+  part(pelvis, new THREE.CylinderGeometry(0.19, 0.185, 0.07, 8), m.steelDark, [0, 0.03, 0], [0, 0, 0], [1, 1, 0.8]);
+  part(pelvis, new THREE.BoxGeometry(0.085, 0.06, 0.03), m.steel, [0, 0.03, 0.155]);
+  part(pelvis, new THREE.BoxGeometry(0.045, 0.03, 0.035), m.clothDark, [0, 0.03, 0.16]);
   for (const sx of [-1, 1]) {
-    part(body, new THREE.BoxGeometry(0.085, 0.1, 0.07), m.clothDark, [sx * 0.185, 0.88, 0.06], [0, sx * 0.35, 0]);
-    part(body, new THREE.BoxGeometry(0.09, 0.03, 0.075), m.steelDark, [sx * 0.185, 0.93, 0.06], [0, sx * 0.35, 0]);
+    part(pelvis, new THREE.BoxGeometry(0.085, 0.1, 0.07), m.clothDark, [sx * 0.185, -0.04, 0.06], [0, sx * 0.35, 0]);
+    part(pelvis, new THREE.BoxGeometry(0.09, 0.03, 0.075), m.steelDark, [sx * 0.185, 0.01, 0.06], [0, sx * 0.35, 0]);
   }
 
   // Coat skirt with a ragged hem
   const skirt = raggedHem(new THREE.CylinderGeometry(0.19, 0.3, 0.46, 8, 1, true), 8, 0.08);
-  part(body, skirt, m.clothDouble, [0, 0.73, 0], [0, Math.PI / 8, 0], [1, 1, 0.8]);
+  part(pelvis, skirt, m.clothDouble, [0, -0.19, 0], [0, Math.PI / 8, 0], [1, 1, 0.8]);
 
   // Tabard with crown emblem
   const tabard = new THREE.Group();
-  tabard.position.set(0, 0.95, 0.165);
+  tabard.position.set(0, 0.03, 0.165);
   tabard.rotation.x = -0.2;
-  body.add(tabard);
+  pelvis.add(tabard);
   part(
     tabard,
     extrude(
@@ -324,46 +350,98 @@ export function buildRanger({ kind, palette, pose = 'mini', eyeColor = null }) {
   );
   part(tabard, crownGeo(), m.emblem, [0, -0.27, 0.01], [0, 0, 0], [1.35, 1.35, 1]);
 
+  // Waist / chest
+  const spine = new THREE.Group();
+  spine.position.y = 0.03;
+  pelvis.add(spine);
+  part(spine, new THREE.CylinderGeometry(0.17, 0.16, 0.18, 8), m.clothDark, [0, 0.09, 0], [0, 0, 0], [1, 1, 0.78]);
+  part(spine, new THREE.CylinderGeometry(0.225, 0.17, 0.4, 8), m.cloth, [0, 0.35, 0], [0, 0, 0], [1, 1, 0.72]);
+  part(spine, new THREE.BoxGeometry(0.13, 0.1, 0.03), m.steel, [-0.085, 0.32, 0.14], [0.12, -0.25, 0.3]);
+  part(spine, new THREE.BoxGeometry(0.11, 0.09, 0.03), m.steel, [0.095, 0.2, 0.13], [0.1, 0.25, -0.2]);
+
   // Bandolier strap with diamond buckles (figure's left shoulder to right hip)
-  part(body, new THREE.BoxGeometry(0.06, 0.56, 0.03), m.clothDark, [0, 1.235, 0.155], [0.12, 0, -0.505]);
+  part(spine, new THREE.BoxGeometry(0.06, 0.56, 0.03), m.clothDark, [0, 0.285, 0.155], [0.12, 0, -0.505]);
   const buckle = new THREE.TorusGeometry(0.032, 0.009, 4, 4);
-  part(body, buckle, m.steel, [0.068, 1.36, 0.175], [0.1, 0, 0]);
-  part(body, buckle, m.steel, [-0.058, 1.14, 0.17], [0.1, 0, 0]);
+  part(spine, buckle, m.steel, [0.068, 0.41, 0.175], [0.1, 0, 0]);
+  part(spine, buckle, m.steel, [-0.058, 0.19, 0.17], [0.1, 0, 0]);
 
   // Cowl / scarf
-  part(body, new THREE.TorusGeometry(0.14, 0.07, 5, 8), m.sash, [0, 1.52, 0], [Math.PI / 2, 0, Math.PI / 8], [1, 0.85, 1]);
-  part(body, new THREE.TorusGeometry(0.115, 0.05, 5, 8), m.sash, [0, 1.58, -0.01], [Math.PI / 2 - 0.15, 0, 0], [1, 0.85, 1]);
-  part(body, new THREE.ConeGeometry(0.12, 0.22, 4), m.sash, [0.04, 1.4, 0.12], [Math.PI, 0, 0.35], [1, 1, 0.35]);
+  part(spine, new THREE.TorusGeometry(0.14, 0.07, 5, 8), m.sash, [0, 0.57, 0], [Math.PI / 2, 0, Math.PI / 8], [1, 0.85, 1]);
+  part(spine, new THREE.TorusGeometry(0.115, 0.05, 5, 8), m.sash, [0, 0.63, -0.01], [Math.PI / 2 - 0.15, 0, 0], [1, 0.85, 1]);
+  part(spine, new THREE.ConeGeometry(0.12, 0.22, 4), m.sash, [0.04, 0.45, 0.12], [Math.PI, 0, 0.35], [1, 1, 0.35]);
 
-  // Head
-  const head = buildHelm(m, eyeColor);
-  head.position.y = 1.56;
-  body.add(head);
+  // Head on a neck joint
+  const neck = buildHelm(m, eyeColor);
+  neck.position.y = 0.61;
+  spine.add(neck);
 
   // Arms
-  const right = buildArm(m, -1, true);
-  const left = buildArm(m, 1, kind === 'sword');
-  right.arm.position.set(-0.275, 1.46, 0);
-  left.arm.position.set(0.275, 1.46, 0);
-  body.add(right.arm, left.arm);
+  const armR = buildArm(m, -1, true);
+  const armL = buildArm(m, 1, kind === 'sword');
+  armR.arm.position.set(-0.275, 0.51, 0);
+  armL.arm.position.set(0.275, 0.51, 0);
+  spine.add(armR.arm, armL.arm);
 
-  // Pose the arms first so weapons can be placed in world space and then
-  // attached to the hands (Object3D.attach keeps the world transform).
-  const isMini = pose === 'mini';
-  if (isMini) {
-    right.arm.rotation.set(0, 0, -0.22);
-    right.fore.rotation.set(-1.15, 0, 0.35);
-    left.arm.rotation.set(0, 0, 0.16);
-    left.fore.rotation.set(-1.05, 0, -0.2);
+  const joints = {
+    root,
+    body,
+    pelvis,
+    spine,
+    neck,
+    hipR: right.leg,
+    hipL: left.leg,
+    kneeR: right.knee,
+    kneeL: left.knee,
+    ankleR: right.ankle,
+    ankleL: left.ankle,
+    shoulderR: armR.arm,
+    shoulderL: armL.arm,
+    elbowR: armR.fore,
+    elbowL: armL.fore,
+    wristR: armR.hand,
+    wristL: armL.hand,
+  };
+
+  if (kind === 'archer') {
+    const quiver = buildQuiver(m);
+    quiver.position.set(-0.13, 0.37, -0.19);
+    quiver.rotation.set(-0.15, 0, 0.42);
+    spine.add(quiver);
+    joints.quiver = quiver;
   } else {
-    // Combat stance used only while attaching weapons.
-    right.arm.rotation.set(kind === 'sword' ? -0.4 : -0.3, 0, 0);
-    left.arm.rotation.set(kind === 'sword' ? 0 : -0.6, 0, 0);
-    right.fore.rotation.set(-0.2, 0, 0);
-    left.fore.rotation.set(-0.2, 0, 0);
+    // A short cloak down the back.
+    const cape = raggedHem(new THREE.CylinderGeometry(0.21, 0.32, 0.86, 8, 1, true, Math.PI / 2, Math.PI), 8, 0.07);
+    joints.cape = part(spine, cape, m.sashDouble, [0, 0.11, -0.02], [0.06, 0, 0], [1, 1, 0.85]);
   }
+
+  if (isMini) {
+    poseMini(root, kind, m, armR, armL);
+  } else {
+    armSoldier(kind, m, joints);
+  }
+
+  root.userData.joints = joints;
+  root.userData.limbs = {
+    legL: left.leg,
+    legR: right.leg,
+    armL: armL.arm,
+    armR: armR.arm,
+    foreL: armL.fore,
+    foreR: armR.fore,
+  };
+  return root;
+}
+
+// Static display pose for the board miniatures. Weapons are placed in figure
+// space and then attached to the hands so they keep that placement.
+function poseMini(root, kind, m, right, left) {
+  right.arm.rotation.set(0, 0, -0.22);
+  right.fore.rotation.set(-1.15, 0, 0.35);
+  left.arm.rotation.set(0, 0, 0.16);
+  left.fore.rotation.set(-1.05, 0, -0.2);
   root.updateMatrixWorld(true);
-  const handPos = (h) => h.getWorldPosition(new THREE.Vector3()).applyMatrix4(root.matrixWorld.clone().invert());
+  const inv = root.matrixWorld.clone().invert();
+  const handPos = (h) => h.getWorldPosition(new THREE.Vector3()).applyMatrix4(inv);
   const place = (obj, hand, pos, rot) => {
     obj.position.copy(pos);
     obj.rotation.set(rot[0], rot[1], rot[2]);
@@ -373,51 +451,63 @@ export function buildRanger({ kind, palette, pose = 'mini', eyeColor = null }) {
   };
 
   if (kind === 'archer') {
-    const quiver = buildQuiver(m);
-    quiver.position.set(-0.13, 1.32, -0.19);
-    quiver.rotation.set(-0.15, 0, 0.42);
-    body.add(quiver);
-
     const bow = buildBow(m, 0.95);
-    const lp = handPos(left.hand);
-    if (isMini) {
-      place(bow, left.hand, lp.add(new THREE.Vector3(0.02, 0, 0.02)), [0, 0, -0.1]);
-    } else {
-      place(bow, left.hand, lp.add(new THREE.Vector3(0, 0, 0.03)), [0, -Math.PI / 2, 0]);
-    }
+    place(bow, left.hand, handPos(left.hand).add(new THREE.Vector3(0.02, 0, 0.02)), [0, 0, -0.1]);
     const arrow = buildArrow(m);
-    const rp = handPos(right.hand);
-    if (isMini) {
-      place(arrow, right.hand, rp.add(new THREE.Vector3(0, 0.1, 0.02)), [0.1, 0, 0.15]);
-    } else {
-      place(arrow, right.hand, rp, [Math.PI / 2, 0, 0]);
-    }
+    place(arrow, right.hand, handPos(right.hand).add(new THREE.Vector3(0, 0.1, 0.02)), [0.1, 0, 0.15]);
     root.userData.bow = bow;
   } else {
     const sword = buildSword(m);
-    const rp = handPos(right.hand);
-    if (isMini) {
-      place(sword, right.hand, rp.add(new THREE.Vector3(0, 0.02, 0.02)), [-0.12, 0, 0.18]);
-    } else {
-      place(sword, right.hand, rp, [1.2, 0, 0]);
-    }
+    place(sword, right.hand, handPos(right.hand).add(new THREE.Vector3(0, 0.02, 0.02)), [-0.12, 0, 0.18]);
     const shield = buildShield(m);
-    const lp = handPos(left.hand);
-    if (isMini) {
-      place(shield, left.hand, lp.add(new THREE.Vector3(0.03, 0.02, 0.07)), [0, 0.35, 0]);
-    } else {
-      place(shield, left.hand, lp.add(new THREE.Vector3(0, 0.05, 0.08)), [0, 0.2, 0]);
-    }
-    // A short cloak down the back.
-    const cape = raggedHem(new THREE.CylinderGeometry(0.21, 0.32, 0.86, 8, 1, true, Math.PI / 2, Math.PI), 8, 0.07);
-    part(body, cape, m.sashDouble, [0, 1.06, -0.02], [0.06, 0, 0], [1, 1, 0.85]);
+    place(shield, left.hand, handPos(left.hand).add(new THREE.Vector3(0.03, 0.02, 0.07)), [0, 0.35, 0]);
+  }
+}
+
+// Combat soldier: weapons live in the hand (wrist) frames so every shoulder,
+// elbow and wrist rotation carries them. The bow is the exception: it is
+// steered by the rig in spine space so it always faces the target, while the
+// string and nocked arrow follow the drawing hand.
+function armSoldier(kind, m, j) {
+  if (kind === 'sword') {
+    const sword = buildSword(m);
+    // Blade along the hand's +z: forward when the arm hangs, upright once the
+    // arm is raised in front of the body.
+    sword.rotation.x = Math.PI / 2;
+    sword.position.set(0, -0.01, 0.0);
+    j.wristR.add(sword);
+    j.sword = sword;
+
+    const shield = buildShield(m);
+    shield.rotation.x = Math.PI / 2;
+    shield.position.set(0, -0.06, 0);
+    j.wristL.add(shield);
+    j.shield = shield;
+    return;
   }
 
-  if (!isMini) {
-    right.arm.rotation.set(0, 0, 0);
-    left.arm.rotation.set(0, 0, 0);
-  }
+  const bow = buildBow(m, 0.95);
+  bow.userData.string.visible = false;
+  j.spine.add(bow);
+  j.bow = bow;
 
-  root.userData.limbs = { legL, legR, armL: left.arm, armR: right.arm, foreL: left.fore, foreR: right.fore };
-  return root;
+  const stringMat = m.steelDark;
+  const strGeo = new THREE.CylinderGeometry(0.006, 0.006, 1, 4);
+  j.stringTop = part(bow, strGeo, stringMat);
+  j.stringBot = part(bow, strGeo, stringMat);
+  j.bowTipTop = new THREE.Vector3(-0.04, 0.74, 0);
+  j.bowTipBot = new THREE.Vector3(-0.04, -0.74, 0);
+  j.nockRest = new THREE.Vector3(-0.045, 0, 0);
+
+  j.nockArrow = buildArrow(m, 0.62);
+  bow.add(j.nockArrow);
+
+  j.handArrow = buildArrow(m, 0.62);
+  j.handArrow.rotation.x = Math.PI / 2;
+  j.handArrow.position.set(0, -0.02, 0.18);
+  j.wristR.add(j.handArrow);
+
+  j.muzzle = new THREE.Object3D();
+  j.muzzle.position.set(0.2, 0, 0);
+  bow.add(j.muzzle);
 }

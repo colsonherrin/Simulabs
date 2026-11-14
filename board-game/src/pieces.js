@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildRanger, RANGER_PALETTES } from './ranger.js';
+import { createRig } from './rig.js';
 
 const MINI_SCALE = 0.045;
 
@@ -171,10 +172,12 @@ export function createArrowMesh(hex = 0xe8d2a0) {
 
 export function createSoldier(kind, colors) {
   const side = colors.side ?? (colors.metal === 0xf0d090 ? 0 : 1);
-  return buildRanger({
+  const figure = buildRanger({
     kind: kind === 'sword' ? 'sword' : 'archer',
     palette: RANGER_PALETTES[side],
     pose: 'soldier',
     eyeColor: kind === 'archer' ? 0xffe2a8 : 0xff5a3c,
   });
+  createRig(figure);
+  return figure;
 }

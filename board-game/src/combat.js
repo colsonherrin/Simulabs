@@ -44,6 +44,7 @@ const _swordTip = new THREE.Vector3(0, 0, -0.9);
 const _swordBase = new THREE.Vector3(0, 0, -0.14);
 const _look = new THREE.Vector3();
 const _lookQ = new THREE.Quaternion();
+const _aimWorld = new THREE.Vector3();
 
 function distPointSeg(p, a, b) {
   _ab.subVectors(b, a);
@@ -204,6 +205,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       kind: 'sword',
       alive: true,
       windup: 0,
+      swing: Math.floor(Math.random() * 2),
       seed: Math.random() * 10,
       dying: 0,
     });
@@ -223,6 +225,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         kind: 'archer',
         alive: true,
         cooldown: 0.8 + i * 0.55,
+        sinceShot: 9,
         seed: i,
         dying: 0,
       });
@@ -543,7 +546,9 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     for (const e of enemies) {
       if (e.dying) {
         e.dying += dt;
-        e.mesh.rotation.x = -Math.min(1.4, e.dying * 2.2);
+        // Knees buckle first, then the body topples back.
+        e.mesh.rotation.x = -Math.min(1.4, Math.max(0, e.dying - 0.12) * 2.6);
+        e.mesh.userData.rig?.drive(dt, { action: 'die', t: e.dying });
         if (e.dying > 0.8) {
           group.remove(e.mesh);
           e.dying = 0;
@@ -552,30 +557,27 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         continue;
       }
       if (!e.alive) continue;
-      const limbs = e.mesh.userData.limbs;
+      const rig = e.mesh.userData.rig;
       _dir.set(_player.x - e.mesh.position.x, 0, _player.z - e.mesh.position.z);
       const dist = Math.hypot(_dir.x, _dir.z) || 0.0001;
-      e.mesh.rotation.y = Math.atan2(_dir.x, _dir.z);
+      const yaw = Math.atan2(_dir.x, _dir.z);
+      const turn = Math.atan2(Math.sin(yaw - e.mesh.rotation.y), Math.cos(yaw - e.mesh.rotation.y));
+      e.mesh.rotation.y += turn * (1 - Math.exp(-10 * dt));
 
       if (e.kind === 'sword') {
         if (dist > 1.2) {
           const step = TUNING.meleeSpeed * dt;
           e.mesh.position.x += (_dir.x / dist) * step;
           e.mesh.position.z += (_dir.z / dist) * step;
-          const s = Math.sin(phaseT * 10 + e.seed);
-          limbs.legL.rotation.x = s * 0.7;
-          limbs.legR.rotation.x = -s * 0.7;
-          limbs.armL.rotation.x = -s * 0.45;
-          limbs.armR.rotation.x = s * 0.45 - 0.4;
+          rig?.drive(dt, { action: 'run', speed: TUNING.meleeSpeed, look: _camPos });
           e.windup = 0;
         } else {
-          limbs.legL.rotation.x = 0.15;
-          limbs.legR.rotation.x = -0.1;
           e.windup += dt;
-          limbs.armR.rotation.x = -1.3 + Math.sin(e.windup * 8) * 0.4;
+          rig?.drive(dt, { action: 'strike', t: e.windup, variant: e.swing, look: _camPos });
           if (e.windup > 0.62) {
             damagePlayer();
-            e.windup = -0.15;
+            e.windup = -0.28;
+            e.swing += 1;
           }
         }
         if (hot > 0 && usesSword()) {
@@ -586,18 +588,22 @@ export function createCombat({ scene, camera, renderer, hooks }) {
           if (blade || inFront(chest, 2.15, 0.2)) killEnemy(e, chest);
         }
       } else {
-        limbs.armL.rotation.x = -0.6;
-        const drawing = e.cooldown < 0.45;
-        limbs.armR.rotation.x = drawing ? -1.15 : -0.3;
+        group.localToWorld(_aimWorld.copy(_chest));
+        const draw = e.cooldown < 0.7 ? 1 - Math.max(0, e.cooldown) / 0.7 : 0;
+        e.sinceShot += dt;
+        rig?.drive(dt, { action: 'archer', draw, sinceShot: e.sinceShot, aim: _aimWorld });
         e.cooldown -= dt;
         if (e.cooldown <= 0 && vulnerable) {
-          const origin = _local.set(e.mesh.position.x, 1.35, e.mesh.position.z);
+          const origin = _local;
+          if (rig?.muzzle) group.worldToLocal(rig.muzzle.getWorldPosition(origin));
+          else origin.set(e.mesh.position.x, 1.35, e.mesh.position.z);
           _aim.set(_chest.x - origin.x, _chest.y - origin.y, _chest.z - origin.z);
           _aim.x += (Math.random() - 0.5) * 0.25;
           _aim.normalize();
           const arrow = launchArrow(origin, _aim, TUNING.enemyArrowSpeed, { owner: e });
           arrow.owner = e;
           e.cooldown = TUNING.archerInterval * (0.85 + Math.random() * 0.3);
+          e.sinceShot = 0;
           playArrow();
         }
       }

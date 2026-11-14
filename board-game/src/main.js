@@ -1018,6 +1018,9 @@ if (import.meta.env.DEV) {
     refresh: () => tabletop.refresh(game),
     win: () => combat.force(true),
     lose: () => combat.force(false),
+    // Start a clash directly, e.g. __crownfall.duel('S', 'A') for sword vs archers.
+    duel: (attackerType = 'S', defenderType = 'S', attackerSide = 0) =>
+      combat.start({ attackerType, defenderType, attackerSide }),
     restart,
     probe(r, c) {
       const p = this.screenOf(r, c);
