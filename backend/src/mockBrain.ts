@@ -28,6 +28,7 @@ export class MockBrain implements Brain {
 
   async onText(raw: string) {
     const text = raw.toLowerCase();
+    this.ctx.timer.begin('text', raw);
     this.ctx.send({ type: 'transcript', role: 'user', text: raw });
     const run = async (name: string, args: Record<string, unknown> = {}) => {
       const r = await this.ctx.skills.execute(name, args);

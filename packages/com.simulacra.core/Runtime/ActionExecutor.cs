@@ -21,6 +21,10 @@ namespace Simulacra
         private readonly SpatialProvider _provider;
         private readonly BackendClient _backend;
         private readonly MonoBehaviour _host;
+        private readonly GestureController _gestures;
+
+        /// <summary>Milliseconds the last movement spent on validation + path planning, measured on device.</summary>
+        public float LastPlanMs { get; private set; }
 
         private string _pendingFrameId;
         private JArray _pendingDetections;
@@ -28,13 +32,14 @@ namespace Simulacra
 
         public string LastAction { get; private set; } = "";
 
-        public ActionExecutor(WorldModel world, AvatarController avatar, SpatialProvider provider, BackendClient backend, MonoBehaviour host)
+        public ActionExecutor(WorldModel world, AvatarController avatar, SpatialProvider provider, BackendClient backend, MonoBehaviour host, GestureController gestures = null)
         {
             _world = world;
             _avatar = avatar;
             _provider = provider;
             _backend = backend;
             _host = host;
+            _gestures = gestures;
         }
 
         public void Handle(JObject msg)
@@ -58,9 +63,11 @@ namespace Simulacra
             {
                 switch (action)
                 {
-                    case "walk_to": WalkTo(target, reply); break;
-                    case "inspect_object": WalkTo(target, reply); break;
-                    case "approach_user": ApproachUser(reply); break;
+                    case "walk_to": WalkTo(id, target, reply); break;
+                    case "inspect_object": WalkTo(id, target, reply); break;
+                    case "approach_user": WalkTo(id, "user", reply); break;
+                    case "follow_user": FollowUser(id, reply); break;
+                    case "gesture": Gesture((string)p?["type"], reply); break;
                     case "look_at": LookAt(target, reply); break;
                     case "stop": _avatar.Stop(); reply(true, null, null); break;
                     case "register_marker": RegisterMarker((string)p?["label"], reply); break;
@@ -109,7 +116,19 @@ namespace Simulacra
             return false;
         }
 
-        private void WalkTo(string target, Action<bool, string, JObject> reply)
+        /// <summary>Tell the backend the body has begun: the end of the speech-to-action path.</summary>
+        private void ReportStarted(string id, float planMs, float pathMetres)
+        {
+            LastPlanMs = planMs;
+            _backend.Send(new JObject
+            {
+                ["type"] = "event",
+                ["name"] = "action_started",
+                ["data"] = new JObject { ["id"] = id, ["plan_ms"] = Mathf.Round(planMs * 10f) / 10f, ["path_m"] = Mathf.Round(pathMetres * 10f) / 10f },
+            });
+        }
+
+        private void WalkTo(string id, string target, Action<bool, string, JObject> reply)
         {
             if (!ResolveTarget(target, out Vector3 pos, out float standOff, out string error)) { reply(false, error, null); return; }
             if (!RoomNavMesh.IsBuilt) { reply(false, "no walkable floor has been mapped yet", null); return; }
@@ -117,24 +136,55 @@ namespace Simulacra
             if (gap.magnitude <= standOff + 0.25f)
             {
                 // Already there: just face it.
+                ReportStarted(id, 0f, 0f);
                 _avatar.Face(pos, (ok, reason) => reply(ok, reason, new JObject { ["metres_from_target"] = Mathf.Round(gap.magnitude * 10f) / 10f, ["note"] = "was already next to it" }));
                 return;
             }
-            if (!RoomNavMesh.FindStandPoint(pos, standOff, _avatar.transform.position, out Vector3 stand))
+
+            // The goal is a function, not a point: the controller re-evaluates it while walking, so a
+            // user who keeps moving (or an object whose position was refined) is followed locally.
+            Vector3 plannedFor = pos, plannedStand = default;
+            bool havePlan = false;
+            AvatarController.GoalProvider goal = (out Vector3 stand, out Vector3 face) =>
             {
-                reply(false, "there is no reachable floor next to " + target, null);
-                return;
-            }
-            _avatar.WalkTo(stand, pos, (ok, reason) =>
-            {
-                Vector3 flat = pos - _avatar.transform.position; flat.y = 0f;
-                reply(ok, reason, new JObject { ["metres_from_target"] = Mathf.Round(flat.magnitude * 10f) / 10f });
-            });
+                stand = default; face = default;
+                if (!ResolveTarget(target, out Vector3 now, out float off, out _)) return false;
+                face = now;
+                if (havePlan && (now - plannedFor).sqrMagnitude < 0.25f * 0.25f) { stand = plannedStand; return true; }
+                if (!RoomNavMesh.FindStandPoint(now, off, _avatar.transform.position, out stand)) return false;
+                plannedFor = now; plannedStand = stand; havePlan = true;
+                return true;
+            };
+
+            float started = Time.time;
+            _avatar.WalkTo(goal,
+                (ok, reason) =>
+                {
+                    ResolveTarget(target, out Vector3 at, out _, out _);
+                    Vector3 flat = at - _avatar.transform.position; flat.y = 0f;
+                    reply(ok, reason, new JObject
+                    {
+                        ["metres_from_target"] = Mathf.Round(flat.magnitude * 10f) / 10f,
+                        ["seconds"] = Mathf.Round((Time.time - started) * 10f) / 10f,
+                        ["plan_ms"] = Mathf.Round(LastPlanMs * 10f) / 10f,
+                    });
+                },
+                (planMs, pathMetres) => ReportStarted(id, planMs, pathMetres));
         }
 
-        private void ApproachUser(Action<bool, string, JObject> reply)
+        private void FollowUser(string id, Action<bool, string, JObject> reply)
         {
-            WalkTo("user", reply);
+            if (!RoomNavMesh.IsBuilt || !_avatar.OnNavMesh) { reply(false, "no walkable floor has been mapped yet", null); return; }
+            _avatar.Follow(UserFloorPosition, userDistance);
+            ReportStarted(id, 0f, 0f);
+            reply(true, null, new JObject { ["following"] = true, ["note"] = "keeps following until stop_moving or another movement" });
+        }
+
+        private void Gesture(string type, Action<bool, string, JObject> reply)
+        {
+            if (_gestures == null) { reply(false, "this body cannot gesture", null); return; }
+            if (!_gestures.Play(type)) { reply(false, "unknown gesture '" + type + "'", null); return; }
+            reply(true, null, null);
         }
 
         private void LookAt(string target, Action<bool, string, JObject> reply)

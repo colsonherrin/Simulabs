@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Brain, BrainContext } from './brain.js';
 import { Memory } from './memory.js';
+import { ClaudeBrain } from './claudeBrain.js';
+import { TurnTimer, type TurnRecord } from './latency.js';
 import { MockBrain } from './mockBrain.js';
+import { Ears, Mouth } from './speech.js';
 import { AUDIO_RATE, PROTOCOL_VERSION, type ActionName, type ActionResult, type BackendMessage, type DeviceMessage } from './protocol.js';
 import { RealtimeBrain } from './realtimeBrain.js';
 import { SkillExecutor, type DeviceLink } from './skills.js';
@@ -17,8 +20,23 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 export interface ServerOptions {
   port: number;
-  brain: 'realtime' | 'mock';
+  brain: 'claude' | 'realtime' | 'mock';
+  /** OpenAI key: realtime brain, and speech-to-text / text-to-speech / vision for the Claude brain. */
   apiKey?: string;
+  /** Claude brain. The key may be omitted to let the SDK resolve credentials from the environment. */
+  anthropicKey?: string;
+  anthropicBaseUrl?: string;
+  claudeModel?: string;
+  claudeEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  claudeFast?: boolean;
+  claudeThinkingOff?: boolean;
+  sttModel?: string;
+  ttsModel?: string;
+  ttsBaseUrl?: string;
+  /** Key for text-to-speech when it should differ from `apiKey` (benchmarks). */
+  ttsApiKey?: string;
+  stopReflex?: boolean;
+  worldEventMinGapSec?: number;
   realtimeModel: string;
   realtimeVoice: string;
   realtimeUrl?: string;
@@ -40,6 +58,9 @@ class Session implements DeviceLink {
   private refreshTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private device = 'unknown';
+  private timer = new TurnTimer();
+  private knownIds: Set<string> | null = null;
+  private userFar = false;
 
   constructor(
     private ws: WebSocket,
@@ -52,12 +73,32 @@ class Session implements DeviceLink {
       skills: this.skills,
       world: this.world,
       memory,
+      timer: this.timer,
       log: (level, message) => this.log(level, message),
     };
-    this.brain =
-      opts.brain === 'mock'
-        ? new MockBrain(ctx)
-        : new RealtimeBrain(ctx, { apiKey: opts.apiKey!, model: opts.realtimeModel, voice: opts.realtimeVoice, url: opts.realtimeUrl });
+    this.timer.onRecord = (r) => {
+      ALL_TURNS.push(r);
+      if (ALL_TURNS.length > 500) ALL_TURNS.shift();
+      this.log('info', `latency ${r.trigger} "${r.input}": ${Object.entries(r.ms).map(([k, v]) => `${k}=${v}ms`).join(' ')}${r.plan_ms !== undefined ? ` plan=${r.plan_ms}ms` : ''} llm_calls=${r.llm_calls}`);
+      this.send({ type: 'metrics', turn: r as unknown as Record<string, unknown> });
+    };
+    const log = (level: 'info' | 'warn' | 'error', m: string) => this.log(level, m);
+    if (opts.brain === 'mock') this.brain = new MockBrain(ctx);
+    else if (opts.brain === 'claude')
+      this.brain = new ClaudeBrain(ctx, {
+        apiKey: opts.anthropicKey,
+        baseURL: opts.anthropicBaseUrl,
+        model: opts.claudeModel ?? 'claude-opus-5-5',
+        effort: opts.claudeEffort ?? 'low',
+        fast: opts.claudeFast ?? false,
+        thinkingOff: opts.claudeThinkingOff ?? false,
+        // Claude has no audio interface: speech in and out are separate, swappable services.
+        ears: opts.apiKey ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl }, log) : null,
+        mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
+        stopReflex: opts.stopReflex ?? true,
+        worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
+      });
+    else this.brain = new RealtimeBrain(ctx, { apiKey: opts.apiKey!, model: opts.realtimeModel, voice: opts.realtimeVoice, url: opts.realtimeUrl });
     this.skills.onFeedback = (outcome) => {
       this.log('info', `feedback ${JSON.stringify(outcome).slice(0, 300)}`);
       this.brain.refreshContext(); // memory changed
@@ -106,6 +147,7 @@ class Session implements DeviceLink {
       }, timeoutMs);
       this.pending.set(id, { resolve, timer });
       this.send({ type: 'action', id, action, target_id, params, status: 'requested' });
+      this.timer.mark('action_dispatched');
     });
   }
 
@@ -135,6 +177,7 @@ class Session implements DeviceLink {
         break;
       case 'world': {
         this.world.update(msg.world);
+        this.detectWorldEvents();
         const sig = this.world.signature();
         if (sig !== this.worldSig) {
           this.worldSig = sig;
@@ -155,9 +198,34 @@ class Session implements DeviceLink {
         void this.onFrame(msg.id, msg.jpeg);
         break;
       case 'event':
-        this.log('info', `event ${msg.name} ${JSON.stringify(msg.data ?? {})}`);
+        if (msg.name === 'action_started') {
+          // The body began moving: this is the end of the speech-to-action path.
+          this.timer.mark('device_started');
+          this.timer.note({ plan_ms: Number(msg.data?.plan_ms ?? 0), path_m: Number(msg.data?.path_m ?? 0) });
+        } else this.log('info', `event ${msg.name} ${JSON.stringify(msg.data ?? {})}`);
         break;
     }
+  }
+
+  /**
+   * The world model updates continuously without involving the brain. Only meaningful changes
+   * become events: an object nobody asked about appearing or vanishing, or the user walking off.
+   */
+  private detectWorldEvents() {
+    const s = this.world.snapshot;
+    if (!s || !this.brain.onWorldEvent) return;
+    const ids = new Set(s.objects.map((o) => o.id));
+    if (this.knownIds && this.pending.size === 0) {
+      for (const o of s.objects) if (!this.knownIds.has(o.id)) this.brain.onWorldEvent(`A new object is now known: ${o.id} (${o.label}).`);
+      for (const id of this.knownIds) if (!ids.has(id)) this.brain.onWorldEvent(`Object ${id} is no longer known.`);
+    }
+    this.knownIds = ids;
+
+    const d = Math.hypot(s.avatar.pos[0] - s.user.pos[0], s.avatar.pos[2] - s.user.pos[2]);
+    if (!this.userFar && d > 3.5 && s.avatar.state === 'idle') {
+      this.userFar = true;
+      this.brain.onWorldEvent(`The user has moved away; they are now ${d.toFixed(1)} m from you.`);
+    } else if (this.userFar && d < 2.5) this.userFar = false;
   }
 
   private async onFrame(frameId: string, jpeg: string) {
@@ -188,6 +256,9 @@ class Session implements DeviceLink {
   }
 }
 
+/** Latency records from every session since the server started (served at /metrics). */
+const ALL_TURNS: TurnRecord[] = [];
+
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 
 export function startServer(opts: ServerOptions): Promise<{ server: Server; port: number; close: () => Promise<void> }> {
@@ -199,6 +270,11 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
     if (url.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, brain: opts.brain, protocol: PROTOCOL_VERSION }));
+      return;
+    }
+    if (url.pathname === '/metrics') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ brain: opts.brain, summary: TurnTimer.summarize(ALL_TURNS), turns: ALL_TURNS.slice(-50) }, null, 2));
       return;
     }
     const rel = normalize(url.pathname === '/' ? '/index.html' : url.pathname).replace(/^(\.\.[/\\])+/, '');
@@ -234,15 +310,25 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
 // ---- entry point
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const env = process.env;
-  let brain = (env.BRAIN ?? 'realtime') as 'realtime' | 'mock';
+  // Default: Claude plans if it has credentials; otherwise the speech-to-speech brain; otherwise the mock.
+  let brain = (env.BRAIN ?? (env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN ? 'claude' : env.OPENAI_API_KEY ? 'realtime' : 'mock')) as ServerOptions['brain'];
   if (brain === 'realtime' && !env.OPENAI_API_KEY) {
     console.warn('OPENAI_API_KEY is not set: starting with the MOCK brain (typed text, keyword rules, no AI, no voice).');
     brain = 'mock';
   }
+  if (brain === 'claude' && !env.OPENAI_API_KEY) console.warn('OPENAI_API_KEY is not set: Claude will work with typed text only (no speech-to-text, no voice, no camera detection).');
   const { port } = await startServer({
     port: Number(env.PORT ?? 8787),
     brain,
     apiKey: env.OPENAI_API_KEY,
+    anthropicKey: env.ANTHROPIC_API_KEY,
+    claudeModel: env.PLANNER_MODEL ?? 'claude-opus-5-5',
+    claudeEffort: (env.PLANNER_EFFORT as ServerOptions['claudeEffort']) ?? 'low',
+    claudeFast: env.PLANNER_FAST === '1',
+    claudeThinkingOff: env.PLANNER_THINKING === 'off',
+    sttModel: env.STT_MODEL,
+    ttsModel: env.TTS_MODEL,
+    stopReflex: env.STOP_REFLEX !== '0',
     realtimeModel: env.REALTIME_MODEL ?? 'gpt-realtime',
     realtimeVoice: env.REALTIME_VOICE ?? 'marin',
     visionModel: env.VISION_MODEL ?? 'gpt-4.1-mini',
@@ -251,6 +337,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   });
   console.log(`Simulacra backend up. brain=${brain}`);
   console.log(`  simulator:  http://localhost:${port}/`);
+  console.log(`  latency:    http://localhost:${port}/metrics`);
   for (const list of Object.values(networkInterfaces()))
     for (const ni of list ?? []) if (ni.family === 'IPv4' && !ni.internal) console.log(`  headset URL: ws://${ni.address}:${port}/device`);
 }

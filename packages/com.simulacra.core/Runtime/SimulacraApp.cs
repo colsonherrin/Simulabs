@@ -41,6 +41,8 @@ namespace Simulacra
         private MicStreamer _mic;
         private StreamingAudioPlayer _voice;
         private ActionExecutor _executor;
+        private GestureController _gestures;
+        private string _latency = "";
         private TextMesh _hud;
         private readonly List<string> _lines = new List<string>();
         private string _brain = "-", _status = "starting", _aiState = "";
@@ -74,7 +76,7 @@ namespace Simulacra
             _mic = gameObject.AddComponent<MicStreamer>();
             _mic.Chunk += pcm => Backend.Send(new JObject { ["type"] = "audio", ["pcm16"] = pcm });
 
-            _executor = new ActionExecutor(World, Avatar, provider, Backend, this);
+            _executor = new ActionExecutor(World, Avatar, provider, Backend, this, _gestures);
             _ready = true;
         }
 
@@ -114,9 +116,9 @@ namespace Simulacra
         private void SpawnAvatar()
         {
             GameObject body;
-            Transform head = null, mouth = null;
+            Transform head = null, mouth = null, rightArm = null, leftArm = null;
             if (avatarPrefab != null) body = Instantiate(avatarPrefab);
-            else body = PlaceholderAvatar.Create(out head, out mouth);
+            else body = PlaceholderAvatar.Create(out head, out mouth, out rightArm, out leftArm);
 
             var root = new GameObject("Simulacra Avatar");
             body.transform.SetParent(root.transform, false);
@@ -144,6 +146,14 @@ namespace Simulacra
             lips.voice = _voice;
             lips.head = avatarPrefab != null ? head : null; // do not bob the placeholder's head
             lips.mouthVisual = mouth;
+
+            _gestures = root.AddComponent<GestureController>();
+            if (avatarPrefab == null)
+            {
+                _gestures.head = head;
+                _gestures.rightUpperArm = rightArm;
+                _gestures.leftUpperArm = leftArm;
+            }
 
             Vector3 userPos = provider.Head.position;
             Vector3 fwd = provider.Head.forward; fwd.y = 0f;
@@ -180,6 +190,7 @@ namespace Simulacra
                 case "action": _executor.Handle(msg); _nextWorldSync = 0f; break;
                 case "detections": _executor.OnDetections(msg); break;
                 case "state": _aiState = (string)msg["status"]; break;
+                case "metrics": _latency = FormatLatency(msg["turn"] as JObject); break;
                 case "transcript": AddLine(((string)msg["role"] == "user" ? "You: " : "Sim: ") + (string)msg["text"]); break;
                 case "log":
                     AddLine("[" + (string)msg["level"] + "] " + (string)msg["message"]);
@@ -195,8 +206,9 @@ namespace Simulacra
             if (provider != null && _hudShown != showHud) { _hudShown = showHud; provider.SetDebugVisible(showHud); }
             if (!_ready) return;
 
-            // Room data improves while the user looks around. Never swap the NavMesh under a walking avatar.
-            if (_roomDirty && !Avatar.IsBusy)
+            // Room data improves while the user looks around. The NavMesh is rebuilt at once and a walk
+            // in progress replans locally (AvatarController.Reattach); nothing is cancelled.
+            if (_roomDirty)
             {
                 _roomDirty = false;
                 ApplyRoom();
@@ -228,6 +240,19 @@ namespace Simulacra
                 string state = Avatar.State == "idle" && _voice.IsSpeaking ? "speaking" : Avatar.State;
                 Backend.Send(new JObject { ["type"] = "world", ["world"] = World.ToJson(h.position, h.forward, a.position, a.forward, state) });
             }
+        }
+
+        /// <summary>One HUD line from the backend's per-turn latency record.</summary>
+        private static string FormatLatency(JObject turn)
+        {
+            if (turn == null) return "";
+            var ms = turn["ms"] as JObject;
+            if (ms == null) return "";
+            var sb = new System.Text.StringBuilder("latency:");
+            foreach (string key in new[] { "transcript", "llm_first_token", "action_dispatched", "device_started", "first_audio" })
+                if (ms[key] != null) sb.Append(' ').Append(key.Replace("_", " ")).Append(' ').Append((int)ms[key]).Append("ms");
+            if (turn["plan_ms"] != null) sb.Append(" (path plan ").Append((float)turn["plan_ms"]).Append("ms)");
+            return sb.ToString();
         }
 
         private void FaceUserWhenIdle()
@@ -286,6 +311,7 @@ namespace Simulacra
                   .Append(" vision=").Append(provider.HasVision ? "yes" : "no").Append('\n');
             if (_mic != null) sb.Append("mic=").Append(!_mic.IsCapturing ? "OFF" : _mic.Muted ? "muted" : "live").Append("  avatar=").Append(Avatar != null ? Avatar.State : "-").Append('\n');
             if (_executor != null && _executor.LastAction.Length > 0) sb.Append("action: ").Append(_executor.LastAction).Append('\n');
+            if (_latency.Length > 0) sb.Append(_latency).Append('\n');
             foreach (string l in _lines) sb.Append(l).Append('\n');
             _hud.text = sb.ToString();
         }

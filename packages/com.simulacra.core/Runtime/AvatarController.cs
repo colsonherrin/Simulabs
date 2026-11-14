@@ -6,19 +6,23 @@ using UnityEngine.AI;
 namespace Simulacra
 {
     /// <summary>
-    /// The avatar's body: NavMeshAgent locomotion plus Animator parameters derived from actual
-    /// movement. Knows nothing about the AI; it takes validated world positions and reports
-    /// success or failure.
+    /// The avatar's body: real-time local navigation plus Animator parameters derived from actual
+    /// movement. It runs every frame on the device and never waits for the AI: it plans paths,
+    /// replans when the destination moves or the NavMesh is rebuilt, detects being stuck, and
+    /// reports the outcome through a callback.
     ///
     /// Animator contract (all optional): float "Speed" (m/s), float "Turn" (-1..1), bool "Speaking".
     /// </summary>
     [RequireComponent(typeof(NavMeshAgent))]
     public class AvatarController : MonoBehaviour
     {
+        /// <summary>Returns where to stand and what to face, or false if the target cannot be reached right now.</summary>
+        public delegate bool GoalProvider(out Vector3 stand, out Vector3 face);
+
         public float walkSpeed = 0.9f;
         public float turnSpeedDegrees = 200f;
 
-        public string State { get; private set; } = "idle"; // idle | walking | turning
+        public string State { get; private set; } = "idle"; // idle | walking | turning | following
         public bool IsBusy => _routine != null;
 
         private NavMeshAgent _agent;
@@ -27,6 +31,7 @@ namespace Simulacra
         private Coroutine _routine;
         private Action<bool, string> _done;
         private float _animSpeed, _animTurn, _lastYaw;
+        private bool _replan;
 
         private void Awake()
         {
@@ -71,24 +76,39 @@ namespace Simulacra
 
         public bool OnNavMesh => _agent.enabled && _agent.isOnNavMesh;
 
-        /// <summary>Call after the NavMesh was rebuilt.</summary>
+        /// <summary>
+        /// Call after the NavMesh was rebuilt (room geometry changed). A walk in progress is not
+        /// cancelled: the body re-snaps to the new mesh and replans to the same goal by itself.
+        /// </summary>
         public void Reattach()
         {
-            Cancel("navmesh rebuilt");
             _agent.enabled = false;
             if (RoomNavMesh.Snap(transform.position, 3f, out Vector3 snapped))
             {
                 transform.position = snapped;
                 _agent.enabled = true;
             }
+            if (_routine != null) _replan = true;
         }
 
-        /// <summary>Walk to a point. The destination must already be validated to be on the NavMesh.</summary>
-        public void WalkTo(Vector3 destination, Vector3? faceAfter, Action<bool, string> done)
+        /// <summary>
+        /// Walk to wherever <paramref name="goal"/> says. The goal is re-evaluated while walking, so a
+        /// moving target (the user) or a changed room is handled locally with no AI involvement.
+        /// <paramref name="started"/> fires once the first path is planned: (planning ms, path metres).
+        /// </summary>
+        public void WalkTo(GoalProvider goal, Action<bool, string> done, Action<float, float> started = null)
         {
             Cancel("superseded by a newer action");
             _done = done;
-            _routine = StartCoroutine(WalkRoutine(destination, faceAfter));
+            _routine = StartCoroutine(WalkRoutine(goal, started));
+        }
+
+        /// <summary>Stay near a moving point until cancelled by Stop() or another action.</summary>
+        public void Follow(Func<Vector3> target, float distance)
+        {
+            Cancel("superseded by a newer action");
+            _done = null;
+            _routine = StartCoroutine(FollowRoutine(target, distance));
         }
 
         public void Face(Vector3 point, Action<bool, string> done)
@@ -106,61 +126,120 @@ namespace Simulacra
         private void Cancel(string reason)
         {
             if (_routine != null) StopCoroutine(_routine);
-            _routine = null;
-            if (_agent.enabled && _agent.isOnNavMesh) _agent.ResetPath();
-            State = "idle";
-            var cb = _done;
-            _done = null;
-            cb?.Invoke(false, reason);
+            Finish(false, reason);
         }
 
         private void Finish(bool ok, string reason)
         {
             _routine = null;
+            _replan = false;
             if (_agent.enabled && _agent.isOnNavMesh) _agent.ResetPath();
+            _agent.updateRotation = true;
             State = "idle";
             var cb = _done;
             _done = null;
             cb?.Invoke(ok, reason);
         }
 
-        private IEnumerator WalkRoutine(Vector3 destination, Vector3? faceAfter)
+        private bool Plan(Vector3 stand, NavMeshPath path)
+        {
+            return _agent.CalculatePath(stand, path) && path.status == NavMeshPathStatus.PathComplete;
+        }
+
+        private IEnumerator WalkRoutine(GoalProvider goal, Action<float, float> started)
         {
             if (!OnNavMesh) { Finish(false, "the avatar is not standing on walkable floor"); yield break; }
 
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             var path = new NavMeshPath();
-            if (!_agent.CalculatePath(destination, path) || path.status != NavMeshPathStatus.PathComplete)
-            {
-                Finish(false, "no clear path to that spot");
-                yield break;
-            }
+            if (!goal(out Vector3 stand, out Vector3 face)) { Finish(false, "there is no reachable floor next to the target"); yield break; }
+            if (!Plan(stand, path)) { Finish(false, "no clear path to that spot"); yield break; }
+            clock.Stop();
+            started?.Invoke((float)clock.Elapsed.TotalMilliseconds, PathLength(path));
 
-            if (Vector3.Distance(transform.position, destination) > 0.15f)
+            if (Vector3.Distance(transform.position, stand) > 0.15f)
             {
                 // Turn toward the first leg before stepping off, like a person would.
-                Vector3 firstLeg = path.corners.Length > 1 ? path.corners[1] : destination;
+                Vector3 firstLeg = path.corners.Length > 1 ? path.corners[1] : stand;
                 yield return TurnToward(firstLeg, 25f);
 
                 State = "walking";
                 _agent.updateRotation = true;
-                _agent.SetPath(path);
+                if (OnNavMesh) _agent.SetPath(path); else _replan = true;
 
-                float timeout = Time.time + 12f + PathLength(path) / Mathf.Max(0.1f, walkSpeed) * 2f;
+                float deadline = Time.time + 15f + PathLength(path) / Mathf.Max(0.1f, walkSpeed) * 2.5f;
                 Vector3 lastPos = transform.position;
-                float lastProgress = Time.time;
-                while (_agent.pathPending || _agent.remainingDistance > _agent.stoppingDistance + 0.03f)
+                float lastProgress = Time.time, nextGoalCheck = Time.time + 0.4f;
+                while (true)
                 {
-                    if (_agent.pathStatus != NavMeshPathStatus.PathComplete) { Finish(false, "the path became blocked"); yield break; }
+                    // Local replanning: the target moved, or the room geometry was rebuilt under us.
+                    if (_replan || Time.time >= nextGoalCheck)
+                    {
+                        bool forced = _replan;
+                        _replan = false;
+                        nextGoalCheck = Time.time + 0.4f;
+                        if (!OnNavMesh) { Finish(false, "lost the walkable floor while moving"); yield break; }
+                        if (goal(out Vector3 newStand, out Vector3 newFace))
+                        {
+                            face = newFace;
+                            if (forced || (newStand - stand).sqrMagnitude > 0.3f * 0.3f)
+                            {
+                                if (Plan(newStand, path))
+                                {
+                                    stand = newStand;
+                                    _agent.SetPath(path);
+                                    lastProgress = Time.time;
+                                }
+                                else if (forced) { Finish(false, "the path became blocked"); yield break; }
+                            }
+                        }
+                        else if (forced) { Finish(false, "the target is no longer reachable"); yield break; }
+                    }
+
+                    if (!_agent.pathPending && _agent.hasPath && _agent.pathStatus != NavMeshPathStatus.PathComplete) { Finish(false, "the path became blocked"); yield break; }
+                    if (!_agent.pathPending && _agent.remainingDistance <= _agent.stoppingDistance + 0.03f) break;
                     if (Vector3.Distance(transform.position, lastPos) > 0.05f) { lastPos = transform.position; lastProgress = Time.time; }
                     if (Time.time - lastProgress > 2.5f) { Finish(false, "got stuck on the way"); yield break; }
-                    if (Time.time > timeout) { Finish(false, "took too long to get there"); yield break; }
+                    if (Time.time > deadline) { Finish(false, "took too long to get there"); yield break; }
                     yield return null;
                 }
                 _agent.ResetPath();
             }
 
-            if (faceAfter.HasValue) yield return TurnToward(faceAfter.Value, 4f);
+            yield return TurnToward(face, 4f);
             Finish(true, null);
+        }
+
+        private IEnumerator FollowRoutine(Func<Vector3> target, float distance)
+        {
+            float nextPlan = 0f;
+            while (true)
+            {
+                State = "following";
+                if (OnNavMesh)
+                {
+                    Vector3 t = target();
+                    Vector3 gap = t - transform.position; gap.y = 0f;
+                    if (Time.time >= nextPlan || _replan)
+                    {
+                        _replan = false;
+                        nextPlan = Time.time + 0.4f;
+                        // Hysteresis: start walking when the user gets away, not on every small step.
+                        if (gap.magnitude > distance + 0.6f && RoomNavMesh.FindStandPoint(t, distance, transform.position, out Vector3 stand))
+                        {
+                            _agent.updateRotation = true;
+                            _agent.SetDestination(stand);
+                        }
+                    }
+                    bool moving = _agent.pathPending || (_agent.hasPath && _agent.remainingDistance > _agent.stoppingDistance + 0.03f);
+                    if (!moving && gap.sqrMagnitude > 0.01f && Vector3.Angle(transform.forward, gap) > 30f)
+                    {
+                        _agent.updateRotation = false;
+                        transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(gap.normalized, Vector3.up), turnSpeedDegrees * Time.deltaTime);
+                    }
+                }
+                yield return null;
+            }
         }
 
         private IEnumerator FaceRoutine(Vector3 point)

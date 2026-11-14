@@ -9,7 +9,8 @@ device-independent so XREAL and Spectacles clients can reuse them.
 > **Status — read this first.** Nothing here has run on a headset or inside a Unity editor yet;
 > that first run is yours. What has been verified:
 > - **Backend:** unit and end-to-end tests pass, and the simulator was driven in a real browser.
->   The OpenAI Realtime link has only been exercised against a fake upstream, not the live API.
+>   Claude, speech-to-text and text-to-speech have only been exercised against stand-in servers,
+>   not the live APIs; no live latency has been measured yet (`npm run bench` does that).
 > - **Quest C#:** every method body binds without errors against the real Meta SDK 85 source
 >   (MR Utility Kit + Core) and the real Unity 6000.0.66f2 assemblies.
 > - **XREAL C#:** same check against the real XREAL SDK 3.1.0, AR Foundation 5.2.0, Input System
@@ -20,28 +21,36 @@ device-independent so XREAL and Spectacles clients can reuse them.
 
 ## How it fits together
 
+Three layers, so the character never stands still waiting for a model:
+
 ```
- Headset (Unity)                                Laptop (Node)                       Cloud
-┌───────────────────────────────┐   WebSocket   ┌──────────────────────────┐
-│ SpatialProvider  (device layer)│   protocol v1 │ Session                  │
-│   Quest: MRUK room, depth      │◄─────────────►│  WorldModel (ids, no xyz │
-│   raycast, passthrough camera  │  audio, world,│   ever shown to the LLM) │      OpenAI Realtime
-│ WorldModel  id -> position     │  actions,     │  SkillExecutor + Memory  │◄────► (speech in/out,
-│ ActionExecutor  validate, act  │  results      │   Voyager-style skills   │       picks skills)
-│ RoomNavMesh + AvatarController │               │  Brain: realtime | mock  │      Vision model
-│ Mic / spatial voice / lip sync │               │  Vision (frame -> points)│◄────► (object detection)
-└───────────────────────────────┘               └──────────────────────────┘
+ MIND (laptop)                          NAVIGATION + BODY (headset, every frame)
+┌─────────────────────────────┐ action ┌──────────────────────────────────────┐
+│ Claude: understands, picks  │ ─────► │ World model: id -> position          │
+│ a skill and a target id.    │        │ NavMesh: plan, replan, stuck checks  │
+│ Called only on events: user │ ◄───── │ Avatar: walk/turn/idle from real     │
+│ spoke, action ended, room   │ result │ motion, gestures, lip sync           │
+│ changed. Skill library +    │        │ SpatialProvider: Quest / XREAL / sim │
+│ memory.                     │        └──────────────────────────────────────┘
+│ Ears (speech-to-text) and   │   one WebSocket, protocol v1: audio, world,
+│ Mouth (text-to-speech)      │   actions, results
+└─────────────────────────────┘
 ```
 
 - **The AI chooses what and when; it never chooses where.** It can only name an object id or
   `"user"`. The headset resolves ids to positions, finds a reachable standing point on the NavMesh,
   and either walks there or reports why it could not.
-- **Movement is asynchronous.** A walk returns `started`, the character says "on my way", and the
-  real outcome comes back as an `[action_result]` the model must react to. Failures are spoken, not
-  hidden.
+- **One model call starts an action; none are needed while it runs.** The action is sent to the
+  headset the moment Claude finishes writing it, while the rest of the reply is still streaming.
+  Walking, following, replanning around a moving user or a changed room, gestures and speech
+  playback all happen locally. Claude hears back once, when the action ends.
+- **Failures are spoken, not hidden.** A refused or failed action goes straight back to Claude.
 - **Provenance is tracked.** Every object carries its origin: `detected` (camera + vision model),
-  `room_scan` (your Quest Space Setup), `manual` (you pointed and named it), `simulated`. The model
-  is told which is which and instructed not to claim it "sees" anything that is not `detected`.
+  `room_scan`, `manual` (you pointed and named it), `simulated`. The model is told which is which
+  and instructed not to claim it "sees" anything that is not `detected`.
+
+Design, the latency budget, measurements and the V-JEPA 2 evaluation are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Run it
 
@@ -56,14 +65,24 @@ npm install
 ```bash
 cp .env.example .env
 ```
-Put your `OPENAI_API_KEY` in `.env`, then:
+Put `ANTHROPIC_API_KEY` (Claude, the planner) and `OPENAI_API_KEY` (speech-to-text, the voice and
+camera detection) in `.env`, then:
 ```bash
 npm start
 ```
 
 Open `http://localhost:8787/` — the browser simulator. Click **Mic on** and talk, or type. This is
-the fastest way to work on the AI without a headset. With no key the server starts a **mock brain**
-(keyword rules, typed text only, clearly labelled, not AI) so wiring can still be tested.
+the fastest way to work on the AI without a headset. The latency of each turn is shown above the
+log, and `http://localhost:8787/metrics` has the running medians.
+
+Which mind runs is set by `BRAIN` in `.env`: `claude` (default when the Anthropic key is present),
+`realtime` (one OpenAI speech-to-speech model does everything; needs only the OpenAI key) or `mock`
+(keyword rules, typed text, not AI; what you get with no keys). With only the Anthropic key, Claude
+works from typed text and answers in text. To measure Claude's response time against the live API:
+
+```bash
+npm run bench
+```
 
 ```bash
 npm test
@@ -161,17 +180,20 @@ you get the talk clip plus a head bob. Check the licence of whatever model you u
 
 | Skill | What happens |
 |---|---|
-| `get_world_state()` | Distances, directions, origins, what the user is looking toward. No coordinates. |
+| world state | Prefetched into every Claude turn: distances, directions, origins, what the user is looking toward. No coordinates. |
 | `look_at(target)` | Turn to face an object or the user. |
 | `walk_to(target)` | Path-plan to a standing point beside it; async result. |
-| `approach_user()` | Walk to ~1.2 m from the user and face them. |
+| `approach_user()` | Walk to ~1.2 m from the user and face them, tracking them if they move. |
+| `follow_user()` | Keep following until told to stop. Runs entirely on the headset. |
+| `gesture(type)` | `wave`, `nod`, `shake_head`, `shrug`. |
+| `run_sequence(steps, save_as)` | Several steps in one go with no model call in between; remembered as a skill if it works. |
 | `inspect_object(id)` | Walk up, face it, return its record plus saved notes. |
 | `remember_object(id, note)` | Long-term note, kept across sessions. |
 | `scan_surroundings()` | Camera frame → vision model → depth raycast → new `detected` objects. |
 | `register_marker(label)` | "This is my desk" while pointing: stores a `manual` object. |
 | `stop_moving()` | Halt. |
 | `save_skill(...)` / `run_skill(...)` | Compose primitives into a reusable named skill (`$target` placeholder) and replay it. |
-| speak | The model's own voice; there is no separate tool. |
+| speak | Claude's text is spoken; with an action, the line rides in the action's `say` field so it starts with the movement. |
 
 Memory (`backend/data/memory.json`) keeps per-skill success/failure counts with the last failure
 reason, an episode log, object notes and composed skills, and feeds them back into the prompt. This
@@ -211,6 +233,10 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
   isolation on Wi-Fi. Use `adb reverse` over USB.
 - **HUD `brain=-` and a `[error] brain failed to start`:** bad/missing `OPENAI_API_KEY`, or the
   account has no access to `REALTIME_MODEL`. Change the model in `.env`.
+- **`[error] Claude rejected the request`:** a planner setting the model does not accept; clear
+  `PLANNER_FAST` / `PLANNER_THINKING` or change `PLANNER_MODEL`.
+- **It hears you but never answers aloud:** speech-to-text or text-to-speech failed; the HUD shows
+  the error. Both need `OPENAI_API_KEY`. `BRAIN=realtime` is the fallback that needs no Claude key.
 - **It talks over itself / cuts itself off:** half-duplex is on by default (mic muted while it
   speaks; press **A** to cut in). If you turned it off, turn it back on.
 - **`room=fallback_open_floor`:** no Space Setup data or the Spatial data permission was denied.
@@ -224,8 +250,8 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
   the avatar to stand still); if it does, raise `Min Update Interval` on the provider.
 - **A package version changed:** the SDK-specific code is only in `QuestSpatialProvider.cs`,
   `XrealSpatialProvider.cs` and the two scene builders.
-- **Model/vision IDs:** `REALTIME_MODEL`, `REALTIME_VOICE` and `VISION_MODEL` in `.env` are defaults,
-  not verified against your account.
+- **Model IDs:** `REALTIME_MODEL`, `REALTIME_VOICE`, `STT_MODEL`, `TTS_MODEL` and `VISION_MODEL` in
+  `.env` are defaults, not verified against your account.
 
 ## Repository layout
 

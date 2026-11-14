@@ -18,7 +18,7 @@
   input[type=text] { flex:1; min-width:0; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; }
   button { padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); font:inherit; cursor:pointer; }
   button.on { background:var(--accent); color:var(--bg); border-color:var(--accent); }
-  #log { height:340px; overflow:auto; font:12px/1.5 ui-monospace, monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+  #log { height:300px; overflow:auto; font:12px/1.5 ui-monospace, monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
   .user { color:var(--accent); } .err { color:var(--warn); } .dim { color:var(--muted); }
   #status { font-weight:600; }
 </style>
@@ -38,6 +38,7 @@
   </section>
   <section class="panel">
     <div><span id="status">connecting</span> <span id="brain" class="dim"></span></div>
+    <p id="lat" class="dim" style="margin:6px 0 8px">Latency of the last turn appears here (milliseconds from the end of your input).</p>
     <div id="log" aria-live="polite"></div>
   </section>
 </main>
@@ -48,7 +49,7 @@ const log = (text, cls = '') => { const d = document.createElement('div'); d.cla
 
 // ---- world (device side). x right, z up-screen, matching Unity's floor plane.
 const user = { pos: [0, 1.6, -2.2], yaw: 0 };
-const avatar = { pos: [0, 0, 0.2], yaw: Math.PI, state: 'idle', goal: null, face: null, done: null };
+const avatar = { pos: [0, 0, 0.2], yaw: Math.PI, state: 'idle', goal: null, face: null, done: null, follow: false };
 const objects = [
   { id: 'table_1', label: 'table', pos: [-1.4, 0.4, 1.0], size: [1.4, 0.75, 0.8], source: 'simulated', confidence: 1, born: Date.now() },
   { id: 'chair_1', label: 'chair', pos: [1.5, 0.45, 1.6], size: [0.5, 0.9, 0.5], source: 'simulated', confidence: 1, born: Date.now() },
@@ -83,16 +84,20 @@ function handleAction(m) {
   const target = m.action === 'approach_user' ? 'user' : m.target_id;
   switch (m.action) {
     case 'walk_to': case 'inspect_object': case 'approach_user': {
+      const planT0 = performance.now();
       const t = resolve(target); if (!t) return reply(false, `unknown target '${target}'`);
       if (avatar.done) finish(false, 'superseded by a newer action');
       const p = dist(avatar.pos, t.pos) <= t.r + 0.25 ? avatar.pos : standPoint(t.pos, t.r);
       if (!p) return reply(false, `there is no reachable floor next to ${target}`);
-      avatar.goal = p; avatar.face = t.pos; avatar.state = 'walking';
+      avatar.goal = p; avatar.face = t.pos; avatar.state = 'walking'; avatar.follow = false;
+      send({ type: 'event', name: 'action_started', data: { id: m.id, plan_ms: +(performance.now() - planT0).toFixed(1), path_m: +dist(avatar.pos, p).toFixed(1) } });
       avatar.done = (ok, reason) => reply(ok, reason, { metres_from_target: +dist(avatar.pos, t.pos).toFixed(1) });
       return;
     }
     case 'look_at': { const t = resolve(target); if (!t) return reply(false, `unknown target '${target}'`); if (avatar.done) finish(false, 'superseded'); avatar.goal = avatar.pos; avatar.face = t.pos; avatar.state = 'turning'; avatar.done = (ok, r) => reply(ok, r); return; }
-    case 'stop': if (avatar.done) finish(false, 'stopped'); return reply(true);
+    case 'follow_user': if (avatar.done) finish(false, 'superseded by a newer action'); avatar.follow = true; send({ type: 'event', name: 'action_started', data: { id: m.id, plan_ms: 0, path_m: 0 } }); return reply(true, undefined, { following: true });
+    case 'gesture': if (!['wave', 'nod', 'shake_head', 'shrug'].includes(m.params?.type)) return reply(false, `unknown gesture '${m.params?.type}'`); avatar.gesture = m.params.type; avatar.gestureUntil = performance.now() + 1500; return reply(true);
+    case 'stop': avatar.follow = false; if (avatar.done) finish(false, 'stopped'); return reply(true);
     case 'register_marker': {
       const label = String(m.params?.label ?? 'object').toLowerCase().replace(/[^a-z0-9]+/g, '_'); const f = fwd(user.yaw);
       const p = [user.pos[0] + f[0] * 1.5, 0.3, user.pos[2] + f[2] * 1.5];
@@ -106,6 +111,15 @@ function handleAction(m) {
 let last = performance.now();
 function tick(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  // Follow mode runs entirely here, like the headset's local controller: no backend involved.
+  if (avatar.follow && !avatar.done) {
+    const u = [user.pos[0], 0, user.pos[2]], d = dist(avatar.pos, u);
+    const want = Math.atan2(u[0] - avatar.pos[0], u[2] - avatar.pos[2]);
+    const diff = Math.atan2(Math.sin(want - avatar.yaw), Math.cos(want - avatar.yaw));
+    avatar.yaw += Math.sign(diff) * Math.min(Math.abs(diff), 3.5 * dt);
+    if (d > 1.5 && Math.abs(diff) < 0.5) { const s = Math.min(d - 1.2, 0.9 * dt), p = [avatar.pos[0] + Math.sin(want) * s, 0, avatar.pos[2] + Math.cos(want) * s]; if (inRoom(p) && !blocked(p)) avatar.pos = p; }
+    avatar.state = 'following';
+  }
   if (avatar.goal) {
     const d = dist(avatar.pos, avatar.goal);
     const aim = d > 0.03 ? avatar.goal : avatar.face;
@@ -127,7 +141,7 @@ function draw() {
   g.clearRect(0, 0, cv.width, cv.height); g.font = '14px system-ui'; g.textAlign = 'center';
   for (const o of objects) { const [x, y] = px(o.pos); g.fillStyle = o.source === 'manual' ? css('--warn') : css('--obst'); g.fillRect(x - o.size[0] * S / 2, y - o.size[2] * S / 2, o.size[0] * S, o.size[2] * S); g.fillStyle = css('--ink'); g.fillText(o.id, x, y - o.size[2] * S / 2 - 6); }
   const body = (p, yaw, color, name) => { const [x, y] = px(p); const f = fwd(yaw); g.fillStyle = color; g.beginPath(); g.arc(x, y, 0.2 * S, 0, 7); g.fill(); g.strokeStyle = color; g.lineWidth = 3; g.beginPath(); g.moveTo(x, y); g.lineTo(x + f[0] * 0.5 * S, y - f[2] * 0.5 * S); g.stroke(); g.fillStyle = css('--ink'); g.fillText(name, x, y + 0.2 * S + 16); };
-  body(user.pos, user.yaw, '#3b82f6', 'you'); body(avatar.pos, avatar.yaw, css('--accent'), 'Sim · ' + avatar.state);
+  body(user.pos, user.yaw, '#3b82f6', 'you'); body(avatar.pos, avatar.yaw, css('--accent'), 'Sim · ' + avatar.state + (performance.now() < (avatar.gestureUntil ?? 0) ? ' · ' + avatar.gesture : ''));
 }
 let drag = false;
 const toWorld = (e) => { const r = cv.getBoundingClientRect(); return [((e.clientX - r.left) / r.width - 0.5) * SIZE, 0, -((e.clientY - r.top) / r.height - 0.5) * SIZE]; };
@@ -149,6 +163,7 @@ function connect() {
     else if (m.type === 'audio_stop') flush();
     else if (m.type === 'action') handleAction(m);
     else if (m.type === 'transcript') log(`${m.role === 'user' ? 'You' : 'Sim'}: ${m.text}`, m.role === 'user' ? 'user' : '');
+    else if (m.type === 'metrics') { const t = m.turn; $('lat').textContent = Object.entries(t.ms).map(([k, v]) => `${k.replace(/_/g, ' ')} ${v} ms`).join(' · ') + (t.plan_ms !== undefined ? ` · path plan ${t.plan_ms} ms` : '') + ` · model calls ${t.llm_calls}`; }
     else if (m.type === 'log') log(`[${m.level}] ${m.message}`, 'err');
   };
 }
