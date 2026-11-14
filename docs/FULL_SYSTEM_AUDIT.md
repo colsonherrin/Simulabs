@@ -34,7 +34,7 @@ sees or hears, it is NOT TESTED and the hardware procedure is given.
 
 | Label used below | Meaning |
 |---|---|
-| **backend test** | `backend/test/*.test.ts`, 17 tests. Real server, real WebSockets and HTTP. Claude, speech-to-text, text-to-speech and the headset are stand-in servers. No live API. |
+| **backend test** | `backend/test/*.test.ts`, 21 tests (4 of them the Spectacles client core). Real server, real WebSockets and HTTP. Claude, speech-to-text, text-to-speech and the headset are stand-in servers. No live API. |
 | **headless** | `tools/headless-tests`, 38 checks. The real `RoomGeometry.cs`, `WorldModel.cs` and `AvatarFit.Math.cs` compiled outside Unity against a small stand-in for Unity's vector maths. |
 | **editor test** | `packages/com.simulacra.core/Tests/Editor`, 10 tests using the real engine (NavMesh, renderers). **Written and compile-checked, not run**: they need a Unity editor. |
 | **simulator** | Browser stand-in for the headset driven by Playwright against the real backend with the mock (keyword) brain. Exercises the protocol, not AI and not Unity. |
@@ -200,7 +200,7 @@ the system does with Claude's output. It says nothing about how well live Claude
 | # | Question | Result | Evidence and what remains |
 |---|---|---|---|
 | 46 | Quest 3S builds, deploys, runs | NOT TESTED | compile check: 0 errors against the real SDK. No build has been made. |
-| 47 | XREAL Air 2 Ultra works, incl. depth meshing and anchors | NOT TESTED | S5. Anchor: on by default; HUD shows `anchor=tracking`. Depth mesh: implemented, **off** by default (tick **Use Depth Mesh** on the `Simulacra` object to try it). Never run. |
+| 47 | XREAL Air 2 Ultra works, incl. depth meshing and anchors | NOT TESTED | S5. Start-up now waits for a usable floor patch (2.5 m²) instead of starting on a sliver, and the scene is lit brighter for the additive display. Anchor: on by default; HUD shows `anchor=tracking`. Depth mesh: implemented, **off** by default (tick **Use Depth Mesh** on the `Simulacra` object to try it). Never run. |
 | 48 | Features adapted to each headset's limits | PASS | Code read and backend test: XREAL declares no camera, so `scan_surroundings` is refused with an explanation and the AI is told to use pointing; no shadow is drawn on its additive display; spawn distance suits its field of view. Nothing unsupported is reported as working. |
 | 49 | New user completes the demo with no developer help | NOT TESTED | S6. During the demo nothing needs a developer: no HUD to hide, no coordinates, no scripted replies, the chair is remembered. Before it, once: two API keys, Space Setup on the Quest, build and install, register the chair by pointing. Each session: `npm start` on a laptop and the headset on USB or the same network. Unproven until someone does it. |
 | 50 | Does it feel like an intelligent human is present? | NOT TESTED | Cannot be claimed. See below. |
@@ -239,7 +239,20 @@ the system does with Claude's output. It says nothing about how well live Claude
 | Character | bundled, procedural animation, untested | same |
 | Verdict | the demo target; partially ready | second target; do not demo before Quest works |
 
-Snap Spectacles: no client exists. Future work.
+### Snap Spectacles (2024)
+
+A Lens Studio client now exists (`spectacles/`). It is outside the 50 questions, which were
+written for the Unity headsets, so it is reported separately:
+
+| Part | Status | Evidence |
+|---|---|---|
+| Protocol, world model, movement, follow, marker registration, mic framing, audio decoding (`SimulacraCore.ts`) | PASS | 4 backend tests run the real file against the real backend: spawn in front of the user, "come over here", register a chair, walk to it, follow, stop, blocked and unknown targets, 16 kHz → 24 kHz mic framing, coordinate conversion |
+| Glasses binding: WebSocket, microphone, speaker, floor hit tests, pinch, character pose (`SimulacraLens.ts`, `SimulacraBody.ts`) | NOT TESTED | Written from API usage in Snap's official `5.15.4` samples; type-checks against declarations derived from those samples; never opened in Lens Studio |
+| Navigation around furniture | NOT TESTED | No path planner on this device: straight lines with side-stepping from hit tests |
+| Camera object detection, occlusion | not implemented | Camera with open internet needs further permissions; no occlusion |
+| Publishable | no | Microphone + own-server WebSocket requires Experimental APIs and Extended Permissions |
+
+Needs Lens Studio 5.15.4 and the glasses on the same Wi-Fi as the backend. Setup: `spectacles/README.md`.
 
 ## Hardware checklist
 

@@ -17,7 +17,8 @@ device-independent so XREAL and Spectacles clients can reuse them.
 >   and Unity 2022.3.62f2 assemblies.
 > - **Not verifiable without the hardware:** scene assembly in the editor, tracking quality, plane
 >   detection behaviour, audio levels, frame rate. See [Troubleshooting](#troubleshooting).
-> - **Snap Spectacles:** not built yet. The backend and protocol are ready for it.
+> - **Snap Spectacles (2024):** a Lens Studio client exists in `spectacles/`. Its core logic is
+>   tested against the real backend; the Lens Studio binding has never been compiled or run.
 
 ## How it fits together
 
@@ -242,9 +243,9 @@ transform, a `RoomGeometry` (floor boxes + obstacle boxes), and optionally an en
 a camera frame grabber and two buttons. `QuestSpatialProvider` and `XrealSpatialProvider` are about
 200 lines each; `EditorSimProvider` is about 80.
 
-**Snap Spectacles (Lens Studio / TypeScript)** is not built yet. It cannot use Unity, so it
-implements the device side of the protocol in TypeScript; `backend/public/index.html` is a complete
-reference client (world snapshots, action handling, PCM16 audio both ways). The backend is unchanged.
+**Snap Spectacles (2024)** cannot use Unity, so `spectacles/` holds a Lens Studio TypeScript
+client for the same backend. Its platform-free core is tested here against the real backend; the
+part that touches the glasses has never been run. Setup and limits: [spectacles/README.md](spectacles/README.md).
 
 The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one WebSocket at
 `/device`, audio as base64 PCM16 mono 24 kHz.
@@ -280,7 +281,8 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
 ```bash
 cd backend && npm test
 ```
-17 backend tests (real server, WebSockets and HTTP; cloud services and headset are stand-ins).
+21 backend tests (real server, WebSockets and HTTP; cloud services and headset are stand-ins),
+including the Spectacles client core.
 
 ```bash
 cd tools/headless-tests && dotnet run
@@ -302,6 +304,7 @@ backend/                       Node/TypeScript brain: protocol, world model, ski
 packages/com.simulacra.core/   shared Unity package: world model, NavMesh, avatar, audio, backend link,
                                editor simulator, avatar importer, in-editor tests
 tools/headless-tests/          runs the package's geometry and world-model code outside Unity
+spectacles/                    Lens Studio client for Snap Spectacles (2024)
 unity-quest/                   Unity 6000.0.66f2 project for Quest 3 / 3S   (Assets/Simulacra/Quest)
 unity-xreal/                   Unity 2022.3.62f2 project for XREAL glasses  (Assets/Simulacra/Xreal)
 ```

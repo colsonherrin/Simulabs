@@ -56,6 +56,21 @@ export interface AvatarPose {
   gesture: string;
 }
 
+/** Lens Studio world space (centimetres, right-handed, cameras look down -Z) to protocol space. */
+export function lensToProtocol(x: number, y: number, z: number): Vec {
+  return { x: x / 100, y: y / 100, z: -z / 100 };
+}
+
+/** Protocol space (metres, left-handed) to Lens Studio world space, as plain numbers in centimetres. */
+export function protocolToLens(p: Vec): Vec {
+  return { x: p.x * 100, y: p.y * 100, z: -p.z * 100 };
+}
+
+/** The Lens Studio direction (unit vector) an avatar with this protocol yaw is facing. */
+export function yawToLensDirection(yaw: number): Vec {
+  return { x: Math.sin(yaw), y: 0, z: -Math.cos(yaw) };
+}
+
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 /** PCM16 little-endian samples to base64, without relying on any platform helper. */

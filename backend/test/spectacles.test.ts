@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import WebSocket from 'ws';
-import { base64ToPcm16, pcm16ToBase64, SimulacraCore, type Host, type Vec } from '../../spectacles/Assets/Scripts/SimulacraCore.js';
+import { base64ToPcm16, lensToProtocol, pcm16ToBase64, protocolToLens, SimulacraCore, yawToLensDirection, type Host, type Vec } from '../../spectacles/Assets/Scripts/SimulacraCore.js';
 import { startServer } from '../src/server.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -58,6 +58,21 @@ test('spectacles core: base64 PCM16 conversion matches a reference implementatio
     assert.equal(b64, Buffer.from(samples.buffer, 0, n * 2).toString('base64'), `encode ${n} samples`);
     assert.deepEqual(Array.from(base64ToPcm16(b64)), Array.from(samples), `decode ${n} samples`);
   }
+});
+
+test('spectacles core: Lens Studio (cm, right-handed, camera looks down -Z) maps to protocol space correctly', () => {
+  const same = (got: Vec, want: Vec, what: string) => assert.ok(Math.abs(got.x - want.x) + Math.abs(got.y - want.y) + Math.abs(got.z - want.z) < 1e-9, `${what}: got ${JSON.stringify(got)}`);
+  // A point 2 m in front of a default Lens Studio camera is at z = -200 cm.
+  same(lensToProtocol(0, 0, -200), { x: 0, y: 0, z: 2 }, 'point ahead');
+  // The looking direction of that camera is minus its transform.forward (0,0,1): protocol +z, i.e. "ahead".
+  const f = { x: 0, y: 0, z: 1 };
+  same(lensToProtocol(-f.x * 100, -f.y * 100, -f.z * 100), { x: 0, y: 0, z: 1 }, 'gaze direction');
+  // The wearer's right-hand side (+x in Lens Studio) stays +x: with +z ahead that is "right" for the backend.
+  same(lensToProtocol(150, -140, 0), { x: 1.5, y: -1.4, z: 0 }, 'point to the right, on the floor');
+  same(protocolToLens(lensToProtocol(12, 34, -56)), { x: 12, y: 34, z: -56 }, 'round trip');
+  // An avatar with yaw 0 faces protocol +z, which is Lens Studio -z; a quarter turn right faces +x in both.
+  same(yawToLensDirection(0), { x: 0, y: 0, z: -1 }, 'yaw 0');
+  same(yawToLensDirection(Math.PI / 2), { x: 1, y: 0, z: 0 }, 'yaw 90');
 });
 
 test('spectacles core: the demo interaction against the real backend', async () => {
