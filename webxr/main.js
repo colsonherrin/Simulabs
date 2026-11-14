@@ -801,6 +801,7 @@ function note(text) {
 function statusText() {
   const lines = [];
   lines.push(core.connected ? 'Backend connected · brain: ' + core.brain : 'Connecting to the backend…');
+  if (core.connected && core.brain === 'mock') lines.push('No AI keys yet: open /setup on the computer running the backend');
   if (!core.placed) lines.push(room.floorY === null ? 'Looking for the floor…' : 'Finding a clear spot on the floor: look at open floor in front of you');
   if (core.lastTranscript) lines.push(core.lastTranscript);
   if (core.lastAction) lines.push('Action: ' + core.lastAction);

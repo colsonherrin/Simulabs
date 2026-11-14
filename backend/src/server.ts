@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -42,6 +42,38 @@ export interface ServerOptions {
   visionModel: string;
   memoryPath: string | null;
   quiet?: boolean;
+  /** Where the setup page saves keys (backend/.env). Unset: keys apply until the server stops. */
+  envPath?: string;
+  /** BRAIN was set by hand: the setup page must not switch minds when keys change. */
+  brainFixed?: boolean;
+  /** Override for the key check in tests. */
+  openaiBaseUrl?: string;
+}
+
+/** Which mind runs with the keys at hand: Claude if it has a key, else OpenAI speech-to-speech, else keyword rules. */
+export function pickBrain(anthropicKey?: string, openaiKey?: string): ServerOptions['brain'] {
+  return anthropicKey ? 'claude' : openaiKey ? 'realtime' : 'mock';
+}
+
+/** Ask the provider whether a key is accepted. 'unknown' means the provider could not be reached. */
+async function checkKey(url: string, headers: Record<string, string>): Promise<'ok' | 'rejected' | 'unknown'> {
+  try {
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+    return r.ok ? 'ok' : r.status === 401 || r.status === 403 ? 'rejected' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** Set or replace NAME=value lines in an env file, leaving everything else as it is. */
+function saveEnv(path: string, values: Record<string, string>): void {
+  let text = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  for (const [name, value] of Object.entries(values)) {
+    const line = `${name}=${value}`;
+    const re = new RegExp(`^${name}=.*$`, 'm');
+    text = re.test(text) ? text.replace(re, line) : text + (text === '' || text.endsWith('\n') ? '' : '\n') + line + '\n';
+  }
+  writeFileSync(path, text, { mode: 0o600 });
 }
 
 /** One connected headset: its world model, its skill executor, its brain. */
@@ -281,6 +313,59 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
       res.end(JSON.stringify({ brain: opts.brain, summary: TurnTimer.summarize(ALL_TURNS), turns: ALL_TURNS.slice(-50) }, null, 2));
       return;
     }
+    if (url.pathname === '/setup/status') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ brain: opts.brain, anthropic: !!opts.anthropicKey, openai: !!opts.apiKey, voice: !!opts.apiKey, saved: !!opts.envPath }));
+      return;
+    }
+    if (url.pathname === '/setup' && req.method === 'POST') {
+      // Keys are accepted from this computer only (a headset on USB also counts: it arrives through adb's tunnel).
+      const from = req.socket.remoteAddress ?? '';
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(from)) {
+        res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Open this page on the computer that runs the backend.' }));
+        return;
+      }
+      let body = '';
+      req.on('data', (c) => {
+        if (body.length < 10_000) body += c;
+      });
+      req.on('end', async () => {
+        let input: { anthropicKey?: string; openaiKey?: string };
+        try {
+          input = JSON.parse(body);
+        } catch {
+          res.writeHead(400).end('bad request');
+          return;
+        }
+        const clean = (v: unknown) => (typeof v === 'string' ? v.trim().replace(/^["']|["']$/g, '') : '');
+        const a = clean(input.anthropicKey);
+        const o = clean(input.openaiKey);
+        const [anthropic, openai] = await Promise.all([
+          a ? checkKey((opts.anthropicBaseUrl ?? 'https://api.anthropic.com') + '/v1/models', { 'x-api-key': a, 'anthropic-version': '2023-06-01' }) : 'skipped',
+          o ? checkKey((opts.openaiBaseUrl ?? 'https://api.openai.com') + '/v1/models', { authorization: 'Bearer ' + o }) : 'skipped',
+        ]);
+        // A rejected key is not kept. One that could not be checked (no internet right now) is kept and reported as such.
+        const save: Record<string, string> = {};
+        if (a && anthropic !== 'rejected') save.ANTHROPIC_API_KEY = opts.anthropicKey = a;
+        if (o && openai !== 'rejected') save.OPENAI_API_KEY = opts.apiKey = o;
+        if (!opts.brainFixed) opts.brain = pickBrain(opts.anthropicKey, opts.apiKey);
+        let saved = false;
+        if (opts.envPath && Object.keys(save).length > 0) {
+          try {
+            saveEnv(opts.envPath, save);
+            saved = true;
+          } catch {
+            /* reported below: the keys still apply until the server stops */
+          }
+        }
+        // Connected headsets and simulators reconnect by themselves and come back with the new mind.
+        if (Object.keys(save).length > 0) for (const client of wss.clients) client.close();
+        if (!opts.quiet && Object.keys(save).length > 0) console.log(`Keys updated from the setup page. brain=${opts.brain}, voice=${opts.apiKey ? 'on' : 'off'}`);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ anthropic, openai, brain: opts.brain, voice: !!opts.apiKey, saved }));
+      });
+      return;
+    }
     if (url.pathname === '/xr') {
       res.writeHead(302, { location: '/xr/' }).end();
       return;
@@ -293,7 +378,7 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
       return;
     }
     let root = publicDir;
-    let path = url.pathname === '/' ? '/index.html' : url.pathname;
+    let path = url.pathname === '/' ? '/index.html' : url.pathname === '/setup' ? '/setup.html' : url.pathname;
     if (path === '/xr/') {
       root = WEBXR_DIR;
       path = '/index.html';
@@ -335,7 +420,7 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const env = process.env;
   // Default: Claude plans if it has credentials; otherwise the speech-to-speech brain; otherwise the mock.
-  let brain = (env.BRAIN ?? (env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN ? 'claude' : env.OPENAI_API_KEY ? 'realtime' : 'mock')) as ServerOptions['brain'];
+  let brain = (env.BRAIN ?? pickBrain(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN, env.OPENAI_API_KEY)) as ServerOptions['brain'];
   if (brain === 'realtime' && !env.OPENAI_API_KEY) {
     console.warn('OPENAI_API_KEY is not set: starting with the MOCK brain (typed text, keyword rules, no AI, no voice).');
     brain = 'mock';
@@ -355,7 +440,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     realtimeVoice: env.REALTIME_VOICE ?? 'marin',
     visionModel: env.VISION_MODEL ?? 'gpt-4.1-mini',
     memoryPath: env.MEMORY_PATH ?? join(HERE, '..', 'data', 'memory.json'),
+    envPath: join(HERE, '..', '.env'),
+    brainFixed: !!env.BRAIN,
   });
+  if (!env.ANTHROPIC_API_KEY || !env.OPENAI_API_KEY) console.log(`\n  >>> Keys missing. Open http://localhost:${port}/setup on this computer and paste them in. No restart needed.\n`);
   console.log(`Simulacra backend up. brain=${brain}`);
   console.log(`  simulator:  http://localhost:${port}/`);
   console.log(`  latency:    http://localhost:${port}/metrics`);

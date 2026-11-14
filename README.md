@@ -66,16 +66,15 @@ cd backend
 npm install
 ```
 ```bash
-cp .env.example .env
+npm start
 ```
-Put `ANTHROPIC_API_KEY` (Claude, the planner) and `OPENAI_API_KEY` (speech-to-text, the voice and
-camera detection) in `.env`. Check them, and get the address the headset should use, with:
+Then open **http://localhost:8787/setup** on the same computer, paste your keys and press Save.
+They are checked, saved to `backend/.env` and used straight away, with no restart. An OpenAI key
+alone is enough to talk to the character; adding an Anthropic key lets Claude do the thinking.
+(Editing `.env` by hand from `.env.example` still works.) To check the keys and get the address
+the headset should use:
 ```bash
 npm run doctor
-```
-Then start it:
-```bash
-npm start
 ```
 
 Open `http://localhost:8787/` — the browser simulator. Click **Mic on** and talk, or type. This is
