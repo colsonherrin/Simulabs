@@ -93,3 +93,19 @@ test('hearing over plain HTTPS: silence is ignored, an utterance is uploaded onc
   ears.close();
   cloud.close();
 });
+
+test('with the live speech-to-speech service unreachable, the session falls back to the gpt mind', async () => {
+  const cloud = await standIn();
+  const { port, close } = await startServer(opts({ url: cloud.url }, { brain: 'realtime', apiKey: 'k', gptBaseUrl: cloud.url, realtimeUrl: 'ws://127.0.0.1:9' }));
+  const dev = fakeDevice(port, () => ({ status: 'succeeded' }));
+  try {
+    await dev.ready;
+    assert.equal(dev.got.find((m) => m.type === 'ready').brain, 'gpt');
+    dev.send({ type: 'text', text: 'Hey, come over here.' });
+    assert.equal((await dev.waitFor((m) => m.type === 'action')).action, 'approach_user');
+  } finally {
+    dev.ws.close();
+    await close();
+    cloud.close();
+  }
+});

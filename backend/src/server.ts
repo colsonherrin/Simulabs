@@ -47,6 +47,8 @@ export interface ServerOptions {
   realtimeModel: string;
   realtimeVoice: string;
   realtimeUrl?: string;
+  /** How long a pause ends the user's turn. Shorter answers sooner but may cut in on a hesitation. */
+  realtimeSilenceMs?: number;
   visionModel: string;
   memoryPath: string | null;
   quiet?: boolean;
@@ -58,9 +60,13 @@ export interface ServerOptions {
   openaiBaseUrl?: string;
 }
 
-/** Which mind runs with the keys at hand: Claude if it has a key, else an OpenAI model, else keyword rules. */
+/**
+ * Which mind runs with the keys at hand. With an OpenAI key: its live speech-to-speech model, the
+ * only one fast enough to feel like a conversation. Claude alone has no voice, so it is the
+ * default only without an OpenAI key (BRAIN=claude selects it explicitly).
+ */
 export function pickBrain(anthropicKey?: string, openaiKey?: string): ServerOptions['brain'] {
-  return anthropicKey ? 'claude' : openaiKey ? 'gpt' : 'mock';
+  return openaiKey ? 'realtime' : anthropicKey ? 'claude' : 'mock';
 }
 
 /** Ask the provider whether a key is accepted. 'unknown' means the provider could not be reached. */
@@ -120,6 +126,16 @@ class Session implements DeviceLink {
       this.send({ type: 'metrics', turn: r as unknown as Record<string, unknown> });
     };
     const log = (level: 'info' | 'warn' | 'error', m: string) => this.log(level, m);
+    const gpt = () =>
+      new OpenAIBrain(ctx, {
+        apiKey: opts.apiKey ?? '',
+        baseUrl: opts.gptBaseUrl,
+        model: opts.gptModel ?? 'gpt-5.4-mini',
+        effort: opts.gptEffort ?? 'none',
+        ears: opts.apiKey && !opts.gptBaseUrl ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl, mode: opts.sttMode }, log) : null,
+        mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
+        worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
+      });
     if (opts.brain === 'mock') this.brain = new MockBrain(ctx);
     else if (opts.brain === 'claude')
       this.brain = new ClaudeBrain(ctx, {
@@ -133,17 +149,8 @@ class Session implements DeviceLink {
         mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
         worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
       });
-    else if (opts.brain === 'gpt')
-      this.brain = new OpenAIBrain(ctx, {
-        apiKey: opts.apiKey ?? '',
-        baseUrl: opts.gptBaseUrl,
-        model: opts.gptModel ?? 'gpt-5.4-mini',
-        effort: opts.gptEffort ?? 'none',
-        ears: opts.apiKey && !opts.gptBaseUrl ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl, mode: opts.sttMode }, log) : null,
-        mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
-        worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
-      });
-    else this.brain = new RealtimeBrain(ctx, { apiKey: opts.apiKey!, model: opts.realtimeModel, voice: opts.realtimeVoice, url: opts.realtimeUrl });
+    else if (opts.brain === 'gpt') this.brain = gpt();
+    else this.brain = new RealtimeBrain(ctx, { apiKey: opts.apiKey!, model: opts.realtimeModel, voice: opts.realtimeVoice, url: opts.realtimeUrl, silenceMs: opts.realtimeSilenceMs });
     this.skills.onFeedback = (outcome) => {
       this.log('info', `feedback ${JSON.stringify(outcome).slice(0, 300)}`);
       this.brain.refreshContext(); // memory changed
@@ -163,12 +170,22 @@ class Session implements DeviceLink {
     ws.on('close', () => this.dispose());
     ws.on('error', () => this.dispose());
 
+    const ready = () => this.send({ type: 'ready', protocol: PROTOCOL_VERSION, brain: this.brain.name, audioRate: AUDIO_RATE });
     this.brain
       .start()
-      .then(() => this.send({ type: 'ready', protocol: PROTOCOL_VERSION, brain: this.brain.name, audioRate: AUDIO_RATE }))
+      .then(ready)
       .catch((e) => {
+        // The live speech-to-speech connection is the fastest mind but needs WebSockets to OpenAI.
+        // If it cannot be opened, think, hear and speak through separate requests instead: slower, but it works.
+        if (this.brain.name === 'realtime' && !opts.brainFixed && opts.apiKey) {
+          this.log('warn', `live speech-to-speech is unavailable (${e?.message ?? e}); using the slower 'gpt' mind instead.`);
+          this.brain.close();
+          this.brain = gpt();
+          return this.brain.start().then(ready);
+        }
         this.log('error', `brain failed to start: ${e?.message ?? e}. Check OPENAI_API_KEY / network.`);
-      });
+      })
+      .catch((e) => this.log('error', `brain failed to start: ${e?.message ?? e}. Check OPENAI_API_KEY / network.`));
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string) {
@@ -459,6 +476,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     ttsModel: env.TTS_MODEL,
     realtimeModel: env.REALTIME_MODEL ?? 'gpt-realtime',
     realtimeVoice: env.REALTIME_VOICE ?? 'marin',
+    realtimeSilenceMs: env.REALTIME_SILENCE_MS ? Number(env.REALTIME_SILENCE_MS) : undefined,
     visionModel: env.VISION_MODEL ?? 'gpt-4.1-mini',
     memoryPath: env.MEMORY_PATH ?? join(HERE, '..', 'data', 'memory.json'),
     envPath: join(HERE, '..', '.env'),

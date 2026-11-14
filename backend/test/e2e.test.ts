@@ -131,6 +131,7 @@ test('realtime brain: tool call round trip against a fake Realtime upstream', as
   // Fake OpenAI Realtime server: on user text, emit a function call; after the tool output, emit audio.
   const upstream = new WebSocketServer({ port: 0 });
   const upstreamGot: any[] = [];
+  let turnEndedAt = 0;
   upstream.on('connection', (ws) => {
     let turn = 0;
     ws.on('message', (raw) => {
@@ -139,7 +140,15 @@ test('realtime brain: tool call round trip against a fake Realtime upstream', as
       if (ev.type !== 'response.create') return;
       turn++;
       ws.send(JSON.stringify({ type: 'response.created' }));
-      if (turn === 1) ws.send(JSON.stringify({ type: 'response.done', response: { status: 'completed', output: [{ type: 'function_call', name: 'walk_to', call_id: 'c1', arguments: '{"target_id":"chair_1"}' }] } }));
+      if (turn === 1) {
+        // As the real service does: the finished call is announced first, the end of the turn later.
+        const call = { type: 'function_call', name: 'walk_to', call_id: 'c1', arguments: '{"target_id":"chair_1"}' };
+        ws.send(JSON.stringify({ type: 'response.output_item.done', item: call }));
+        setTimeout(() => {
+          turnEndedAt = performance.now();
+          ws.send(JSON.stringify({ type: 'response.done', response: { status: 'completed', output: [call] } }));
+        }, 300);
+      }
       else {
         ws.send(JSON.stringify({ type: 'response.output_audio.delta', delta: 'AAAA' }));
         ws.send(JSON.stringify({ type: 'response.output_audio_transcript.done', transcript: `turn ${turn}` }));
@@ -160,16 +169,25 @@ test('realtime brain: tool call round trip against a fake Realtime upstream', as
   const action = await dev.waitFor((m) => m.type === 'action');
   assert.equal(action.action, 'walk_to');
   assert.equal(action.target_id, 'chair_1');
+  assert.equal(turnEndedAt, 0, 'the body was told to move before the model finished its turn');
   await dev.waitFor((m) => m.type === 'audio' && m.pcm16 === 'AAAA'); // acknowledgement speech
-  await dev.waitFor((m) => m.type === 'transcript' && m.text === 'turn 3'); // reaction to [action_result]
+  // The walk finished while the model's first turn was still ending, so one spoken turn covers both
+  // the started skill and its result: no second, redundant reply.
+  await dev.waitFor((m) => m.type === 'transcript' && m.text === 'turn 2');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(upstreamGot.filter((e) => e.type === 'response.create').length, 2);
+  const order = upstreamGot.map((e) => (e.type === 'response.create' ? 'create' : e.item?.content?.[0]?.text?.startsWith('[action_result]') ? 'result' : '')).filter(Boolean);
+  assert.deepEqual(order, ['create', 'result', 'create'], 'the model saw the result before it spoke');
 
+  assert.equal(dev.got.filter((m: any) => m.type === 'action').length, 1, 'the call announced twice ran once');
   const session = upstreamGot.find((e) => e.type === 'session.update');
   assert.ok(session.session.tools.some((t: any) => t.name === 'walk_to'));
+  assert.ok(!session.session.tools.some((t: any) => t.name === 'get_world_state'), 'the situation is in the instructions, not behind a round trip');
   const toolOut = upstreamGot.find((e) => e.item?.type === 'function_call_output');
   assert.equal(JSON.parse(toolOut.item.output).status, 'started');
   const fb = upstreamGot.find((e) => e.item?.content?.[0]?.text?.startsWith('[action_result]'));
   assert.match(fb.item.content[0].text, /"status":"succeeded"/);
-  assert.ok(upstreamGot.filter((e) => e.type === 'session.update').some((e) => /chair_1: a chair, registered by the user/.test(e.session.instructions)));
+  assert.ok(upstreamGot.filter((e) => e.type === 'session.update').some((e) => /Current situation[\s\S]*chair_1[\s\S]*registered by the user/.test(e.session.instructions)));
 
   dev.ws.close();
   await srv.close();

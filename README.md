@@ -81,11 +81,18 @@ Open `http://localhost:8787/` — the browser simulator. Click **Mic on** and ta
 the fastest way to work on the AI without a headset. The latency of each turn is shown above the
 log, and `http://localhost:8787/metrics` has the running medians.
 
-Which mind runs is set by `BRAIN` in `.env`: `claude` (default when the Anthropic key is present;
-Claude plans, OpenAI hears and speaks), `gpt` (default with only an OpenAI key; an OpenAI chat
-model plans, default `gpt-5.4-mini`), `realtime` (one OpenAI speech-to-speech model does
-everything) or `mock` (keyword rules, typed text, not AI). **`gpt` is the only mind that has been
-run against the real service**; `claude` and `realtime` have only run against stand-ins.
+Which mind runs is set by `BRAIN` in `.env`:
+
+| `BRAIN` | What it is | Speed | Run against the real service? |
+|---|---|---|---|
+| `realtime` (default with an OpenAI key) | OpenAI's live speech-to-speech model hears, thinks and speaks over one connection | the fastest: built for conversation | **no**: checked against OpenAI's published API types and a stand-in only |
+| `gpt` (automatic fallback if the live connection cannot open) | an OpenAI chat model plans; separate speech-to-text and text-to-speech | about 1.5 to 2.5 s from end of speech to voice | **yes** |
+| `claude` | Claude plans; OpenAI hears and speaks | similar to `gpt` or slower | no (no Anthropic key was available) |
+| `mock` | keyword rules, typed text, not AI | instant | n/a |
+
+In every mind the body starts moving the moment the model's skill call is complete, without
+waiting for the rest of its reply. `REALTIME_SILENCE_MS` (default 350) is the pause that ends your
+turn: lower answers sooner, higher interrupts you less.
 
 Hearing uses a live speech-to-text socket and falls back by itself to plain HTTPS uploads if the
 network blocks it (`STT_MODE=http` forces that).
