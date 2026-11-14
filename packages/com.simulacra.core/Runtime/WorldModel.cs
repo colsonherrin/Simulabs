@@ -34,6 +34,15 @@ namespace Simulacra
         }
     }
 
+    /// <summary>A room feature a platform already knows about (e.g. a couch from Quest room setup).</summary>
+    public struct ObjectSeed
+    {
+        public string label;
+        public Vector3 position;
+        public Vector3 size;
+        public ObjectSource source;
+    }
+
     /// <summary>
     /// Device-side world model: the single place that maps ids like "chair_1" to positions.
     /// The AI only ever names ids; positions are resolved and validated here.
@@ -100,6 +109,21 @@ namespace Simulacra
             return obj;
         }
 
+        /// <summary>
+        /// Bring platform-known room objects (room scan, simulator) in line with a fresh list without
+        /// renaming the ones that are still there: an object the AI knows as "table_1" must stay
+        /// "table_1" however often the room data is refreshed. Objects no longer present are dropped.
+        /// </summary>
+        public void SyncSeeds(IEnumerable<ObjectSeed> seeds)
+        {
+            var present = new HashSet<string>();
+            foreach (ObjectSeed seed in seeds) present.Add(Upsert(seed.label, seed.position, seed.size, seed.source, 1f).id);
+            var gone = new List<string>();
+            foreach (var kv in objects)
+                if ((kv.Value.source == ObjectSource.RoomScan || kv.Value.source == ObjectSource.Simulated) && !present.Contains(kv.Key)) gone.Add(kv.Key);
+            foreach (string id in gone) objects.Remove(id);
+        }
+
         public bool Remove(string id)
         {
             return TryGet(id, out var o) && objects.Remove(o.id);
@@ -124,6 +148,23 @@ namespace Simulacra
             if (!RoomNavMesh.IsBuilt) return;
             foreach (var o in objects.Values)
                 o.reachable = RoomNavMesh.FindStandPoint(o.position, StandOff(o), from, out _);
+        }
+
+        private int _reachCursor;
+
+        /// <summary>Re-check one object per call (round robin), so the periodic refresh never causes a frame hitch.</summary>
+        public void RefreshNextReachability(Vector3 from)
+        {
+            if (!RoomNavMesh.IsBuilt || objects.Count == 0) return;
+            _reachCursor %= objects.Count;
+            int i = 0;
+            foreach (var o in objects.Values)
+            {
+                if (i++ != _reachCursor) continue;
+                o.reachable = RoomNavMesh.FindStandPoint(o.position, StandOff(o), from, out _);
+                break;
+            }
+            _reachCursor++;
         }
 
         public static string Sanitize(string label)

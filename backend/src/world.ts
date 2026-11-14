@@ -133,7 +133,7 @@ export class WorldModel {
       lines.push('objects:');
       for (const o of s.objects)
         lines.push(
-          `- ${o.id}: ${o.label}, ${SOURCE_TEXT[o.source] ?? o.source}, ${flatDist(o.pos, s.avatar.pos).toFixed(1)} m from you, ${flatDist(o.pos, s.user.pos).toFixed(1)} m from the user (${WorldModel.bearing(s.user, o.pos)} for them)${o.reachable === false ? ', NOT reachable on foot' : ''}`,
+          `- ${o.id}: ${o.label}, ${SOURCE_TEXT[o.source] ?? o.source}, ${flatDist(o.pos, s.avatar.pos).toFixed(1)} m from you, ${flatDist(o.pos, s.user.pos).toFixed(1)} m from the user (${WorldModel.bearing(s.user, o.pos)} for them)${o.source === 'detected' ? `, last seen ${Math.round(o.lastSeen)} s ago, confidence ${o.confidence.toFixed(1)}` : ''}${o.reachable === false ? ', NOT reachable on foot' : ''}`,
         );
     }
     return lines.join('\n');

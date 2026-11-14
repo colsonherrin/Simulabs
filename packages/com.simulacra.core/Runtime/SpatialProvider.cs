@@ -4,15 +4,6 @@ using UnityEngine;
 
 namespace Simulacra
 {
-    /// <summary>A room feature a platform already knows about (e.g. a couch from Quest room setup).</summary>
-    public struct ObjectSeed
-    {
-        public string label;
-        public Vector3 position;
-        public Vector3 size;
-        public ObjectSource source;
-    }
-
     /// <summary>
     /// The device layer. Everything hardware specific sits behind this class; the world model, agent
     /// skills, navigation, audio and backend link never reference a platform SDK. To port Simulacra to
@@ -65,6 +56,58 @@ namespace Simulacra
 
         /// <summary>Called when the debug HUD is shown or hidden, so providers can hide their own debug visuals too.</summary>
         public virtual void SetDebugVisible(bool visible) { }
+
+        /// <summary>True while the push-to-talk control is held (Quest: right index trigger).</summary>
+        public virtual bool TalkHeld => false;
+
+        /// <summary>
+        /// True if rendering black darkens the real world (video passthrough). False on optical
+        /// see-through displays, where black is simply invisible and a drawn shadow cannot work.
+        /// </summary>
+        public virtual bool CanDarkenWorld => true;
+
+        /// <summary>Give the provider a chance to adapt a freshly spawned avatar (e.g. depth occlusion).</summary>
+        public virtual void PrepareAvatar(GameObject avatarRoot) { }
+
+        /// <summary>
+        /// Live obstacle check: is there a real surface along this ray right now? Uses the device's
+        /// depth sensing where it exists; false where it does not. Lets the body notice things the
+        /// room scan does not contain (a chair that was moved, a bag on the floor).
+        /// </summary>
+        public virtual bool ProbeObstacle(Vector3 origin, Vector3 direction, float maxDistance, out Vector3 point)
+        {
+            point = default;
+            return false;
+        }
+
+        /// <summary>
+        /// A coordinate frame fixed to the physical room that is the same every session (Quest: the
+        /// floor anchor of the scanned room), with a key identifying the room. Lets user-registered
+        /// objects be remembered across launches. False where no such frame exists.
+        /// </summary>
+        public virtual bool TryGetRoomFrame(out string roomKey, out Pose frame)
+        {
+            roomKey = null;
+            frame = default;
+            return false;
+        }
+
+        /// <summary>Average brightness of the real room, 0 (dark) to 1 (bright), if the device can tell.</summary>
+        public virtual bool TryEstimateBrightness(out float brightness)
+        {
+            brightness = 0f;
+            return false;
+        }
+
+        /// <summary>
+        /// Raised when the device corrects its idea of where the room is (tracking relocalised): the
+        /// matrix maps old world positions to new ones. Everything placed in the room follows it.
+        /// </summary>
+        public event Action<Matrix4x4> WorldShifted;
+        protected void RaiseWorldShifted(Matrix4x4 oldToNew) => WorldShifted?.Invoke(oldToNew);
+
+        /// <summary>Short provider-specific note for the debug HUD (e.g. "occlusion=on").</summary>
+        public virtual string DebugStatus => "";
 
         /// <summary>True during the frame the user pressed "interrupt" (Quest: A).</summary>
         public virtual bool InterruptPressed => false;

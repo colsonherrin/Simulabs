@@ -75,7 +75,7 @@ speech playback cost none.
 
 `backend/src/claudeBrain.ts` keeps a single-flight loop fed by an inbox:
 
-- **user spoke** → call now; if a call is already in flight it is aborted and speech is cut (barge-in);
+- **user spoke** (real words arrived, not just noise) → call now; a call already in flight is aborted and speech is cut (barge-in);
 - **action succeeded / failed** → call when the loop is free;
 - **room changed** (an object nobody asked for appeared or vanished, the user walked off) →
   batched and rate-limited, attached to the next turn or one quiet call of its own;
@@ -87,8 +87,8 @@ told. A `say` line attached to a refused action is never spoken.
 ## Skill library and memory (Voyager-inspired)
 
 Fixed primitives, composed as data: `run_sequence(steps, save_as)` runs a plan locally and, if every
-step succeeds and `save_as` is given, stores it as a named skill; `save_skill` / `run_skill` store
-and replay sequences with a `$target` placeholder. `backend/data/memory.json` keeps per-skill
+step succeeds and `save_as` is given, stores it as a named skill (with a `$target` placeholder when
+all steps concern one object); `run_skill` replays it on any object. `backend/data/memory.json` keeps per-skill
 success counts with the last failure reason, an episode log and object notes, all fed back into
 each turn. This is skill memory, not reinforcement learning, and no model-written code is executed.
 

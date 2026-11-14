@@ -12,15 +12,13 @@ export interface ClaudeBrainOptions {
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   fast: boolean; // fast output mode (costs more; only on models that support it)
-  thinkingOff: boolean; // only valid on models that accept disabled thinking
   ears: Ears | null;
   mouth: Mouth | null;
-  stopReflex: boolean;
   worldEventMinGapMs: number;
 }
 
 /** Tools whose arguments may carry a line to speak the instant the action starts. */
-const SPEAKING_TOOLS = new Set(['walk_to', 'approach_user', 'follow_user', 'inspect_object', 'look_at', 'gesture', 'scan_surroundings', 'run_sequence', 'run_skill', 'stop_moving', 'register_marker']);
+export const SPEAKING_TOOLS = new Set(['walk_to', 'approach_user', 'follow_user', 'inspect_object', 'look_at', 'gesture', 'scan_surroundings', 'run_sequence', 'run_skill', 'stop_moving', 'register_marker']);
 
 /** Claude gets the world prefetched into every turn, so it has no world-query tool: that would cost a round trip. */
 const CLAUDE_TOOLS: Anthropic.Beta.BetaTool[] = TOOLS.filter((t) => t.name !== 'get_world_state').map((t) => {
@@ -29,7 +27,7 @@ const CLAUDE_TOOLS: Anthropic.Beta.BetaTool[] = TOOLS.filter((t) => t.name !== '
   return { name: t.name, description: t.description, input_schema: schema, eager_input_streaming: true };
 });
 
-const SYSTEM = `You are Sim, an embodied AI companion. You have a human body standing on the floor of the user's real room, seen through their AR headset. You hear the user by voice and you can walk around their room.
+export const SYSTEM = `You are Sim, an embodied AI companion. You have a human body standing on the floor of the user's real room, seen through their AR headset. You hear the user by voice and you can walk around their room.
 
 # How you act
 You are the mind; a separate local controller is the body. You decide WHAT to do and name a target. The body plans the path, avoids obstacles, animates and replans by itself, and tells you how it went. You never plan steps of a walk, never check on a walk in progress and never ask for confirmation before a simple movement.
@@ -48,12 +46,12 @@ Be truthful about how you know things: only objects marked "seen by the headset 
 Messages are not always the user speaking. [action_result] reports how an action ended. [world_event] reports a change in the room. [note] is information only. If an event needs no words and no action, reply with exactly <silent> and nothing else.
 
 # Learning
-When a sequence of steps works and would be useful again, pass save_as to run_sequence or call save_skill with "$target" so it generalises. Prefer run_skill for things you already learned. Use remember_object for facts worth keeping about a thing.
+When a sequence of steps would be useful again, pass save_as to run_sequence; if it works it is remembered. Prefer run_skill (with a target_id) for things you already learned. Use remember_object for facts worth keeping about a thing.
 
 Stay at a comfortable distance and never walk into the user.`;
 
 /** Minimal check that eager-streamed tool input matches its schema before the body acts on it. */
-function validateInput(schema: any, input: unknown): string | null {
+export function validateInput(schema: any, input: unknown): string | null {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return 'input must be a JSON object';
   for (const key of schema.required ?? []) if (!(key in (input as any))) return `missing required field "${key}"`;
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
@@ -98,16 +96,15 @@ export class ClaudeBrain implements Brain {
     private ctx: BrainContext,
     private opts: ClaudeBrainOptions,
   ) {
-    this.client = new Anthropic({ ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(opts.baseURL ? { baseURL: opts.baseURL } : {}), maxRetries: 1 });
+    this.client = new Anthropic({ ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(opts.baseURL ? { baseURL: opts.baseURL } : {}), maxRetries: 1, timeout: 20_000 }); // a hung request must not freeze the character
     if (opts.mouth) {
       opts.mouth.onAudio = (pcm16) => this.ctx.send({ type: 'audio', pcm16 });
       opts.mouth.onFirstAudio = () => this.ctx.timer.mark('first_audio');
     }
     if (opts.ears) {
-      opts.ears.onSpeechStart = () => {
-        this.ctx.send({ type: 'state', status: 'listening' });
-        this.cutOff(); // barge-in: stop talking and stop thinking about the old request
-      };
+      // A noise burst also looks like "speech started". Nothing is cut off until real words arrive
+      // (see heard()), so background noise can neither silence the character nor drop a request.
+      opts.ears.onSpeechStart = () => this.ctx.send({ type: 'state', status: 'listening' });
       opts.ears.onSpeechEnd = () => (this.speechEndAt = performance.now());
       opts.ears.onTranscript = (text) => this.heard(text, 'voice');
     }
@@ -123,7 +120,6 @@ export class ClaudeBrain implements Brain {
   }
 
   onText(text: string) {
-    this.cutOff();
     this.heard(text, 'text');
   }
 
@@ -137,8 +133,13 @@ export class ClaudeBrain implements Brain {
     void this.pump();
   }
 
-  onWorldEvent(description: string) {
+  onWorldEvent(description: string, urgent: boolean) {
     this.inbox.push({ kind: 'note', text: `[world_event] ${description}` });
+    // Noticing an object is not a reason to speak: it just rides along with the next turn.
+    if (!urgent) {
+      if (this.inbox.filter((i) => i.kind === 'note').length > 12) this.inbox.splice(this.inbox.findIndex((i) => i.kind === 'note'), 1);
+      return;
+    }
     // Room changes are batched and rate limited; they ride along with the next turn, or trigger
     // one quiet call of their own if nothing else is going on.
     if (this.worldEventTimer) return;
@@ -154,11 +155,6 @@ export class ClaudeBrain implements Brain {
     /* context is rebuilt from the live world model on every turn */
   }
 
-  onIdle() {
-    this.inbox.push({ kind: 'event', text: '[world_event] The user has been quiet for a while. If something in the room is worth a look, or you are far from the user, you may do one thing about it. Otherwise reply <silent>.' });
-    void this.pump();
-  }
-
   close() {
     this.closed = true;
     this.cutOff();
@@ -169,12 +165,15 @@ export class ClaudeBrain implements Brain {
   // ---- input
 
   private heard(text: string, trigger: 'voice' | 'text') {
+    // Speech-to-text returns punctuation or nothing for coughs and clatter: not a turn.
+    if (!/\p{L}{2,}/u.test(text)) return;
+    this.cutOff(); // barge-in on real words: stop talking and abandon the reply to the old request
     this.ctx.send({ type: 'transcript', role: 'user', text });
     this.ctx.timer.begin(trigger, text, trigger === 'voice' && this.speechEndAt ? this.speechEndAt : performance.now());
     if (trigger === 'voice') this.ctx.timer.mark('transcript');
 
     // Safety reflex: a bare "stop" halts the body locally, before any model call.
-    if (this.opts.stopReflex && /^\s*(stop|wait|hold on|freeze|halt)\b[\s.!]*$/i.test(text)) {
+    if (/^\s*(stop|wait|hold on|freeze|halt)\b[\s.!]*$/i.test(text)) {
       void this.ctx.skills.execute('stop_moving', {});
       this.inbox.push({ kind: 'note', text: '[note] The body was already stopped by a local reflex when the user said this.' });
     }
@@ -238,7 +237,6 @@ export class ClaudeBrain implements Brain {
       tools: CLAUDE_TOOLS,
       messages: this.history,
       output_config: { effort: opts.effort },
-      ...(opts.thinkingOff ? { thinking: { type: 'disabled' as const } } : {}),
       ...(opts.fast ? { speed: 'fast' as const } : {}),
       // A safety decline is retried server-side on a fallback model instead of leaving the character mute.
       ...(supportsFallback ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),

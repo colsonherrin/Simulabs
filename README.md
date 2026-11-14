@@ -17,7 +17,10 @@ device-independent so XREAL and Spectacles clients can reuse them.
 >   and Unity 2022.3.62f2 assemblies.
 > - **Not verifiable without the hardware:** scene assembly in the editor, tracking quality, plane
 >   detection behaviour, audio levels, frame rate. See [Troubleshooting](#troubleshooting).
-> - **Snap Spectacles:** not built yet. The backend and protocol are ready for it.
+> - **Snap Spectacles (2024):** a Lens Studio client exists in `spectacles/`. Its core logic is
+>   tested against the real backend; the Lens Studio binding has never been compiled or run.
+> - **WebXR (browser):** a no-install client is served at `/xr/`. It passes in a desktop browser
+>   and in an emulated Quest 3 AR session; it has never run on a physical headset.
 
 ## How it fits together
 
@@ -63,22 +66,29 @@ cd backend
 npm install
 ```
 ```bash
-cp .env.example .env
-```
-Put `ANTHROPIC_API_KEY` (Claude, the planner) and `OPENAI_API_KEY` (speech-to-text, the voice and
-camera detection) in `.env`, then:
-```bash
 npm start
+```
+Then open **http://localhost:8787/setup** on the same computer, paste your keys and press Save.
+They are checked, saved to `backend/.env` and used straight away, with no restart. An OpenAI key
+alone is enough to talk to the character; adding an Anthropic key lets Claude do the thinking.
+(Editing `.env` by hand from `.env.example` still works.) To check the keys and get the address
+the headset should use:
+```bash
+npm run doctor
 ```
 
 Open `http://localhost:8787/` — the browser simulator. Click **Mic on** and talk, or type. This is
 the fastest way to work on the AI without a headset. The latency of each turn is shown above the
 log, and `http://localhost:8787/metrics` has the running medians.
 
-Which mind runs is set by `BRAIN` in `.env`: `claude` (default when the Anthropic key is present),
-`realtime` (one OpenAI speech-to-speech model does everything; needs only the OpenAI key) or `mock`
-(keyword rules, typed text, not AI; what you get with no keys). With only the Anthropic key, Claude
-works from typed text and answers in text. To measure Claude's response time against the live API:
+Which mind runs is set by `BRAIN` in `.env`: `claude` (default when the Anthropic key is present;
+Claude plans, OpenAI hears and speaks), `gpt` (default with only an OpenAI key; an OpenAI chat
+model plans, default `gpt-5.4-mini`), `realtime` (one OpenAI speech-to-speech model does
+everything) or `mock` (keyword rules, typed text, not AI). **`gpt` is the only mind that has been
+run against the real service**; `claude` and `realtime` have only run against stand-ins.
+
+Hearing uses a live speech-to-text socket and falls back by itself to plain HTTPS uploads if the
+network blocks it (`STT_MODE=http` forces that).
 
 ```bash
 npm run bench
@@ -91,25 +101,32 @@ npm test
 ### 2. Quest 3S
 
 1. Open `unity-quest/` with **Unity 6000.0.66f2** (or a newer 6000.0 LTS) with Android Build Support.
-   First import pulls the Meta packages (MR Utility Kit 85 and its dependencies).
+   First import pulls the Meta packages (MR Utility Kit 85 and its dependencies) and Unity's
+   OpenXR Meta package, which depth occlusion needs. If that package causes trouble, delete the
+   `com.unity.xr.meta-openxr` line from `Packages/manifest.json`; only occlusion is lost.
 2. **File > Build Profiles > Android > Switch Platform.** If **Meta > Tools > Project Setup Tool**
    lists issues, press **Fix All**.
 3. Menu **Simulacra > 1. Create Quest Scene.** This generates the passthrough scene (camera rig,
    passthrough underlay, MRUK, depth raycast, passthrough camera, the `Simulacra` object) and makes
    it the build scene.
 4. Select the `Simulacra` object and set **Backend Url**:
-   - USB (most reliable on hackathon Wi-Fi): keep `ws://127.0.0.1:8787/device` and run
-     ```bash
-     adb reverse tcp:8787 tcp:8787
-     ```
+   - USB (most reliable on hackathon Wi-Fi): keep `ws://127.0.0.1:8787/device`. The backend sets
+     up the USB tunnel itself whenever a headset is plugged in (it needs `adb` on the laptop).
    - Wi-Fi: `ws://<laptop-ip>:8787/device` (the backend prints its addresses on start). If the
      network isolates clients, use a phone hotspot.
 5. On the headset, run **Settings > Environment setup > Space Setup** once so the room has a floor,
    walls and furniture. Label a couch/table/bed if you have one.
 6. **Build And Run.** Accept the Spatial data, Headset camera and Microphone prompts.
 
-You should see a placeholder mannequin ~1.8 m in front of you with a green debug HUD.
-**A** = interrupt the AI, **B** = hide/show the HUD. Say *"Hey, can you come over here?"*
+You should see the character about 1.8 m in front of you, and a green debug HUD that disappears
+by itself once everything is ready (it comes back if something breaks).
+**A** = interrupt the AI, **B** = show/hide the HUD. Say *"Hey, can you come over here?"*
+
+Point the right controller at something and say *"this is a chair"* to register it; it is
+remembered for that room on later launches.
+
+In a loud room tick **Push To Talk** on the `Simulacra` object (or put `"pushToTalk": true` in
+`simulacra.json`): the microphone then only listens while the right index trigger is held.
 
 To change the URL without rebuilding:
 ```bash
@@ -159,22 +176,33 @@ and a chair, real NavMesh navigation, the same code path as the headset minus th
 
 ## Avatar
 
-The project runs with a primitive mannequin until you add a rigged human. Fastest route:
+A realistic adult ships with the project (Microsoft Rocketbox, MIT licence; see
+`packages/com.simulacra.core/Avatar/Rocketbox/README.md`). Creating the scene prepares it
+automatically: materials are rebuilt from its textures and a prefab is saved. It needs no animation
+files: walking, idling and looking at you are generated from the skeleton, the mouth and a slight
+smile follow the voice, and it blinks.
 
-1. On [Mixamo](https://www.mixamo.com/) pick a character and download it as **FBX for Unity**, T-pose,
-   *with skin*.
-2. Download animations for the same character, **without skin**, 30 fps: an idle, a walk with
-   **In Place** ticked, and a talking loop. Optional: left turn, right turn.
-3. Name the files so they contain `idle`, `walk`, `talk`, `turn_left`, `turn_right` and drop
-   everything into `unity-quest/Assets/Simulacra/Avatar/` (or `unity-xreal/Assets/Simulacra/Avatar/`).
-4. **Simulacra > 3. Setup Avatar.** It sets the rigs to Humanoid, loops the clips, builds an Animator
-   Controller with the `Speed` / `Turn` / `Speaking` parameters, saves a prefab and assigns it.
+To use your own character instead, put a rigged FBX in `Assets/Simulacra/Avatar/` of the Unity
+project and run **Simulacra > 3. Setup Avatar**. Alone, it is animated procedurally like the
+bundled one (its bones are found by Unity's Humanoid mapping or by name: Biped, Mixamo and generic
+names work). If you add animation files whose names contain `idle`, `walk` (exported **in place**),
+`talk`, `turn_left`, `turn_right`, they are used instead, through an Animator Controller with the
+parameters `Speed` (0 standing to 1 walking), `Turn` (−1..1), `MotionSpeed` and `Speaking`.
 
-Any humanoid works (VRM via UniVRM, Ready Player Me, your own). The contract is just: an `Animator`
-with optional `Speed` (float, m/s), `Turn` (float, −1..1), `Speaking` (bool). Animation is driven by
-how the body is actually moving, not by what was requested. Mouth: a blendshape named like
-`jawOpen` / `viseme_aa` / `mouthOpen` or a humanoid jaw bone is driven by voice loudness; otherwise
-you get the talk clip plus a head bob. Check the licence of whatever model you use.
+Whatever the model, it is measured at spawn: rescaled to 1.72 m only if its height is implausible
+for a human, and its soles put on the floor wherever its pivot is. Check the licence of any model
+you add.
+
+Settings you may want, on the `Simulacra` object or in `simulacra.json` on the headset:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `pushToTalk` | off | Listen only while the right index trigger is held (loud rooms) |
+| `dynamicObstacles` | on | Sense unmapped obstacles with depth while walking and go around them |
+| `autoScanSeconds` | 20 | Quiet background camera scans for objects. **Sends room images to the vision provider.** 0 = only when asked |
+| `hudAutoHideSeconds` | 8 | Hide the debug HUD once everything is ready. 0 = keep it |
+| Depth Occlusion (Quest object only) | on | Real furniture hides the character; turns itself off if unsupported |
+| Use Depth Mesh (XREAL object only) | off | Feed the reconstructed mesh to navigation |
 
 ## Skills
 
@@ -192,7 +220,7 @@ you get the talk clip plus a head bob. Check the licence of whatever model you u
 | `scan_surroundings()` | Camera frame → vision model → depth raycast → new `detected` objects. |
 | `register_marker(label)` | "This is my desk" while pointing: stores a `manual` object. |
 | `stop_moving()` | Halt. |
-| `save_skill(...)` / `run_skill(...)` | Compose primitives into a reusable named skill (`$target` placeholder) and replay it. |
+| `run_skill(name, target_id)` | Replay a sequence that was saved with `save_as`, on any object. |
 | speak | Claude's text is spoken; with an action, the line rides in the action's `say` field so it starts with the movement. |
 
 Memory (`backend/data/memory.json`) keeps per-skill success/failure counts with the last failure
@@ -220,9 +248,19 @@ transform, a `RoomGeometry` (floor boxes + obstacle boxes), and optionally an en
 a camera frame grabber and two buttons. `QuestSpatialProvider` and `XrealSpatialProvider` are about
 200 lines each; `EditorSimProvider` is about 80.
 
-**Snap Spectacles (Lens Studio / TypeScript)** is not built yet. It cannot use Unity, so it
-implements the device side of the protocol in TypeScript; `backend/public/index.html` is a complete
-reference client (world snapshots, action handling, PCM16 audio both ways). The backend is unchanged.
+**Snap Spectacles (2024)** cannot use Unity, so `spectacles/` holds a Lens Studio TypeScript
+client for the same backend. Its platform-free core is tested here against the real backend; the
+part that touches the glasses has never been run. Setup and limits: [spectacles/README.md](spectacles/README.md).
+
+**WebXR:** `webxr/` is a browser client served by the backend at `/xr/`: open it in Meta Quest
+Browser and press Enter AR, with nothing to build. It shares its behaviour with the Spectacles
+core. Details and limits: [webxr/README.md](webxr/README.md).
+
+| Device | Unity | WebXR | Other |
+|---|---|---|---|
+| Quest 3 / 3S | `unity-quest` | yes, Meta Quest Browser | |
+| XREAL Air 2 Ultra | `unity-xreal` | not expected: no known browser on it offers AR sessions | |
+| Snap Spectacles (2024) | no (Unity is not supported) | unknown: untested, and it would have no room scan | Lens Studio client, `spectacles/` |
 
 The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one WebSocket at
 `/device`, audio as base64 PCM16 mono 24 kHz.
@@ -234,9 +272,9 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
 - **HUD `brain=-` and a `[error] brain failed to start`:** bad/missing `OPENAI_API_KEY`, or the
   account has no access to `REALTIME_MODEL`. Change the model in `.env`.
 - **`[error] Claude rejected the request`:** a planner setting the model does not accept; clear
-  `PLANNER_FAST` / `PLANNER_THINKING` or change `PLANNER_MODEL`.
+  `PLANNER_FAST` or change `PLANNER_MODEL`.
 - **It hears you but never answers aloud:** speech-to-text or text-to-speech failed; the HUD shows
-  the error. Both need `OPENAI_API_KEY`. `BRAIN=realtime` is the fallback that needs no Claude key.
+  the error. Both need `OPENAI_API_KEY`. `BRAIN=gpt` is the fallback that needs no Claude key.
 - **It talks over itself / cuts itself off:** half-duplex is on by default (mic muted while it
   speaks; press **A** to cut in). If you turned it off, turn it back on.
 - **`room=fallback_open_floor`:** no Space Setup data or the Spatial data permission was denied.
@@ -253,13 +291,36 @@ The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one 
 - **Model IDs:** `REALTIME_MODEL`, `REALTIME_VOICE`, `STT_MODEL`, `TTS_MODEL` and `VISION_MODEL` in
   `.env` are defaults, not verified against your account.
 
+## Tests
+
+```bash
+cd backend && npm test
+```
+21 backend tests (real server, WebSockets and HTTP; cloud services and headset are stand-ins),
+including the Spectacles client core.
+
+```bash
+cd tools/headless-tests && dotnet run
+```
+38 checks of the real geometry, world-model and avatar-fit code outside Unity.
+
+In either Unity project: **Window > General > Test Runner > EditMode > Run All** runs the NavMesh,
+obstacle-avoidance, spawn-placement and avatar-scale tests against the real engine.
+
+The audit of all of this, with what is and is not verified, is in
+[docs/FULL_SYSTEM_AUDIT.md](docs/FULL_SYSTEM_AUDIT.md); the complexity review is in
+[docs/SIMPLIFICATION_AUDIT.md](docs/SIMPLIFICATION_AUDIT.md).
+
 ## Repository layout
 
 ```
 backend/                       Node/TypeScript brain: protocol, world model, skills, memory, voice, vision
   public/                      browser simulator (also the reference client for non-Unity devices)
 packages/com.simulacra.core/   shared Unity package: world model, NavMesh, avatar, audio, backend link,
-                               editor simulator, avatar importer
+                               editor simulator, avatar importer, in-editor tests
+tools/headless-tests/          runs the package's geometry and world-model code outside Unity
+spectacles/                    Lens Studio client for Snap Spectacles (2024); its core is shared with webxr/
+webxr/                         browser (WebXR) client, served by the backend at /xr/
 unity-quest/                   Unity 6000.0.66f2 project for Quest 3 / 3S   (Assets/Simulacra/Quest)
 unity-xreal/                   Unity 2022.3.62f2 project for XREAL glasses  (Assets/Simulacra/Xreal)
 ```

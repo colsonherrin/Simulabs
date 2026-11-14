@@ -18,3 +18,5 @@ node_modules/
 backend/.env
 backend/data/memory.json
 .DS_Store
+tools/headless-tests/bin/
+tools/headless-tests/obj/

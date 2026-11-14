@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "commonjs",
+    "strict": false,
+    "noEmit": true,
+    "experimentalDecorators": true,
+    "skipLibCheck": true,
+    "lib": ["ES2019"],
+    "types": []
+  },
+  "files": ["lens-studio-stubs.d.ts", "../Assets/Scripts/SimulacraCore.ts", "../Assets/Scripts/SimulacraBody.ts", "../Assets/Scripts/SimulacraLens.ts"]
+}

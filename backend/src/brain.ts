@@ -27,10 +27,11 @@ export interface Brain {
   onFeedback(outcome: Record<string, unknown>, respond: boolean): void;
   /** World or memory changed enough that the standing context should be refreshed. */
   refreshContext(): void;
-  /** Something meaningful changed in the room (object appeared, user walked off). Optional. */
-  onWorldEvent?(description: string): void;
-  /** Nothing has happened for a while: the brain may choose its own goal. */
-  onIdle(): void;
+  /**
+   * Something changed in the room. `urgent` changes (the user walked off) may trigger a reaction;
+   * the rest (an object was noticed) is only passed along with the next turn. Optional.
+   */
+  onWorldEvent?(description: string, urgent: boolean): void;
   close(): void;
 }
 
@@ -43,7 +44,7 @@ How to behave:
 - Before describing the room, call get_world_state. Only talk about objects it lists. "Over there" or "that" usually means what the user is looking toward.
 - Be truthful about how you know things. Objects marked as seen by the headset camera you can say you see. Objects from the room setup scan or registered by the user you know about because the user told the system; do not claim you visually detected them.
 - You never choose coordinates. Targets are object ids or "user". If you need something that is not in the world state, use scan_surroundings (if available) or ask the user to point at it and tell you what it is, then use register_marker.
-- When a sequence of skills works well and would be useful again, store it with save_skill, using "$target" so it generalises. Prefer run_skill for things you have already learned.
+- For multi-step requests use run_sequence; pass save_as when the sequence would be useful again. Prefer run_skill for things you have already learned.
 - Use remember_object for facts worth keeping about a thing.
 - Keep a comfortable distance; do not walk into the user.`;
 

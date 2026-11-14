@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using Meta.XR;
+using Meta.XR.EnvironmentDepth;
 using Meta.XR.MRUtilityKit;
 using UnityEngine;
 
@@ -28,12 +29,25 @@ namespace Simulacra
         public float roomWaitSeconds = 10f;
         public float fallbackFloorSide = 4f;
         public int frameWidth = 768;
+        [Tooltip("Tick if last_scan.jpg (saved next to simulacra.json after each scan) is upside down.")]
+        public bool flipScanImage = false;
+        [Tooltip("Let real furniture hide the avatar (Depth API). Needs the com.unity.xr.meta-openxr package and Meta's Project Setup Tool 'Fix All'. Does nothing if the device or project does not support it.")]
+        public bool depthOcclusion = true;
+
+        private const string OcclusionShader = "Meta/EnvironmentDepth/Built-in Render Pipeline/OcclusionSurfaceLit";
+        private string _occlusion = "occlusion=off";
+        private MRUKAnchor _floorAnchor;
+        private string _roomKey;
+        private bool _roomEventsHooked;
+
+        public override string DebugStatus => _occlusion;
 
         public override string DeviceName => "quest";
         public override Transform Head => rig.centerEyeAnchor;
         public override bool HasVision => cameraAccess != null && cameraAccess.isActiveAndEnabled && cameraAccess.IsPlaying;
         public override bool InterruptPressed => OVRInput.GetDown(OVRInput.Button.One);
         public override bool ToggleHudPressed => OVRInput.GetDown(OVRInput.Button.Two);
+        public override bool TalkHeld => OVRInput.Get(OVRInput.Button.PrimaryIndexTrigger, OVRInput.Controller.RTouch);
 
         public override Ray PointerRay
         {
@@ -112,6 +126,10 @@ namespace Simulacra
                 {
                     _sceneCallbackRegistered = true;
                     MRUK.Instance.RegisterSceneLoadedCallback(OnSceneLoaded);
+                    // If the room scan is changed while the app runs (Space Setup redone, a volume
+                    // added), rebuild from it. The SDK raises this; nothing is polled.
+                    MRUK.Instance.RoomUpdatedEvent.AddListener(_ => OnSceneLoaded());
+                    MRUK.Instance.RoomCreatedEvent.AddListener(_ => OnSceneLoaded());
                 }
                 if (!HasScenePermission())
                 {
@@ -156,6 +174,7 @@ namespace Simulacra
                     Rect r = anchor.PlaneRect.Value;
                     geometry.floor.Add(UprightBox.FromOriented(t.TransformPoint(r.center), t.rotation, new Vector3(r.width, r.height, 0.02f)));
                     geometry.floorY = t.position.y;
+                    _floorAnchor = anchor;
                     continue;
                 }
                 if (labels.Contains("CEILING") || labels.Contains("GLOBAL_MESH") || labels.Contains("INVISIBLE")) continue;
@@ -191,9 +210,82 @@ namespace Simulacra
                 Debug.LogWarning("[Simulacra] Scene loaded without a floor anchor; ignoring it.");
                 return;
             }
+            _roomKey = mrukRoom.Anchor.Uuid.ToString();
             Debug.Log($"[Simulacra] MRUK room: {geometry.obstacles.Count} obstacles, {Seeds.Count} labelled objects");
             Room = geometry;
             RaiseRoomChanged();
+        }
+
+        /// <summary>The floor anchor is fixed to the physical room and identical every session.</summary>
+        public override bool TryGetRoomFrame(out string roomKey, out Pose frame)
+        {
+            roomKey = _roomKey;
+            frame = default;
+            if (_floorAnchor == null || string.IsNullOrEmpty(_roomKey)) return false;
+            frame = new Pose(_floorAnchor.transform.position, _floorAnchor.transform.rotation);
+            return true;
+        }
+
+        /// <summary>Live depth: is there a real surface along this ray, visible from the headset right now?</summary>
+        public override bool ProbeObstacle(Vector3 origin, Vector3 direction, float maxDistance, out Vector3 point)
+        {
+            point = default;
+            if (raycastManager == null || !raycastManager.isActiveAndEnabled || !EnvironmentRaycastManager.IsSupported) return false;
+            // Only a definite hit counts: occluded or out-of-view rays say nothing either way.
+            if (!raycastManager.Raycast(new Ray(origin, direction), out var hit, maxDistance) || hit.status != EnvironmentRaycastHitStatus.Hit) return false;
+            point = hit.point;
+            return true;
+        }
+
+        /// <summary>Mean luminance of the passthrough camera image.</summary>
+        public override bool TryEstimateBrightness(out float brightness)
+        {
+            brightness = 0f;
+            if (!HasVision) return false;
+            var pixels = cameraAccess.GetColors();
+            if (!pixels.IsCreated || pixels.Length == 0) return false;
+            long sum = 0;
+            int n = 0;
+            for (int i = 0; i < pixels.Length; i += 997)
+            {
+                Color32 c = pixels[i];
+                sum += (c.r * 54 + c.g * 183 + c.b * 19) >> 8; // Rec. 709 luma
+                n++;
+            }
+            brightness = Mathf.Clamp01(sum / (n * 255f) * 1.6f); // camera images of ordinary rooms sit well below full scale
+            return true;
+        }
+
+        /// <summary>
+        /// Depth occlusion: real furniture in front of the avatar hides it. Opaque avatar materials are
+        /// switched to the SDK's occlusion surface shader (albedo, tint, smoothness and metallic carry
+        /// over by name). Skipped entirely, leaving the avatar untouched, if depth is unsupported in
+        /// this project or the shader is not in the build.
+        /// </summary>
+        public override void PrepareAvatar(GameObject avatarRoot)
+        {
+            if (!depthOcclusion) { _occlusion = "occlusion=off (disabled)"; return; }
+            if (!EnvironmentDepthManager.IsSupported) { _occlusion = "occlusion=off (depth not supported: add com.unity.xr.meta-openxr, run Meta Project Setup Tool > Fix All)"; return; }
+            Shader shader = Shader.Find(OcclusionShader);
+            if (shader == null || !shader.isSupported) { _occlusion = "occlusion=off (shader not in build: re-run Simulacra > 1. Create Quest Scene)"; return; }
+
+            var depth = FindObjectOfType<EnvironmentDepthManager>();
+            if (depth == null) depth = new GameObject("EnvironmentDepth").AddComponent<EnvironmentDepthManager>();
+            depth.OcclusionShadersMode = OcclusionShadersMode.SoftOcclusion;
+
+            int swapped = 0;
+            foreach (Renderer r in avatarRoot.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (Material m in r.materials)
+                {
+                    // Opaque lit surfaces only; hair cards, lashes and the contact shadow keep their own shaders.
+                    if (m == null || m.renderQueue >= 2450 || !m.HasProperty("_MainTex") || !m.HasProperty("_Color")) continue;
+                    if (m.shader.name != "Standard" && m.shader.name != "Standard (Specular setup)") continue;
+                    m.shader = shader;
+                    swapped++;
+                }
+            }
+            _occlusion = swapped > 0 ? $"occlusion=on ({swapped} materials)" : "occlusion=off (no Standard materials on the avatar)";
         }
 
         public override bool RaycastEnvironment(Ray ray, out Vector3 point)
@@ -226,7 +318,8 @@ namespace Simulacra
             int w = Mathf.Min(frameWidth, size.x);
             int h = Mathf.RoundToInt(w * (size.y / (float)size.x));
             RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
-            Graphics.Blit(_full, rt);
+            if (flipScanImage) Graphics.Blit(_full, rt, new Vector2(1f, -1f), new Vector2(0f, 1f));
+            else Graphics.Blit(_full, rt);
             RenderTexture previous = RenderTexture.active;
             RenderTexture.active = rt;
             if (_small == null || _small.width != w || _small.height != h) _small = new Texture2D(w, h, TextureFormat.RGB24, false);
@@ -235,6 +328,8 @@ namespace Simulacra
             RenderTexture.active = previous;
             RenderTexture.ReleaseTemporary(rt);
             jpeg = _small.EncodeToJPG(70);
+            // Keep the last frame for inspection: `adb pull /sdcard/Android/data/<package>/files/last_scan.jpg`.
+            try { System.IO.File.WriteAllBytes(System.IO.Path.Combine(Application.persistentDataPath, "last_scan.jpg"), jpeg); } catch (Exception) { /* diagnostics only */ }
 
             locate = imagePoint =>
             {

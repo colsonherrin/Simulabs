@@ -11,7 +11,10 @@ namespace Simulacra
     {
         public const int TargetRate = 24000;
 
-        /// <summary>While true nothing is sent (used for half-duplex echo suppression).</summary>
+        /// <summary>
+        /// While true the stream carries silence instead of the microphone. The stream itself never
+        /// stops: speech-to-text needs continuous audio to notice that the user finished talking.
+        /// </summary>
         public bool Muted { get; set; }
         public bool IsCapturing => _clip != null;
         public float Level { get; private set; }
@@ -100,7 +103,8 @@ namespace Simulacra
         {
             int n = _outCount;
             _outCount = 0;
-            if (Muted || Chunk == null) return;
+            if (Chunk == null) return;
+            if (Muted) Array.Clear(_out, 0, n);
             if (_bytes == null || _bytes.Length != n * 2) _bytes = new byte[n * 2];
             Buffer.BlockCopy(_out, 0, _bytes, 0, n * 2);
             Chunk.Invoke(Convert.ToBase64String(_bytes));
