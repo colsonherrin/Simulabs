@@ -141,11 +141,39 @@ test('spectacles core: blocked and unknown targets fail with a reason; microphon
   act({ id: 'u1', action: 'walk_to', target_id: 'sofa_9' });
   assert.match(result('u1').reason, /unknown target/);
 
-  // An object in the middle of the table island beyond reach of any straight line from here.
-  dev.core.register('vase', { x: 0, y: -0.6, z: 5 }, 'manual'); // outside the mapped floor
+  // An object outside the mapped floor cannot be reached by any path.
+  dev.core.register('vase', { x: 0, y: -0.6, z: 5 }, 'manual');
   act({ id: 'u2', action: 'walk_to', target_id: 'vase_1' });
   assert.equal(result('u2').status, 'failed');
-  assert.match(result('u2').reason, /no clear straight path/);
+  assert.match(result('u2').reason, /no reachable floor/);
+
+  // Path planning: the table sits between the avatar and a point behind it. The planner goes around.
+  const start = { x: 0, y: -1.4, z: -0.4 };
+  const behind = { x: 0, y: -1.4, z: 2.2 };
+  const path = dev.core.planPath(start, behind)!;
+  assert.ok(path.length >= 2, `a detour has corners (${path.length} points)`);
+  let prev = start, length = 0;
+  for (const p of path) {
+    for (let t = 0; t <= 1; t += 0.05) {
+      const q = { x: prev.x + (p.x - prev.x) * t, z: prev.z + (p.z - prev.z) * t };
+      assert.ok(!(Math.abs(q.x - dev.table.x) < dev.table.hx && Math.abs(q.z - dev.table.z) < dev.table.hz), `path crosses the table at ${q.x.toFixed(2)},${q.z.toFixed(2)}`);
+    }
+    length += dev.flat(prev, p);
+    prev = p;
+  }
+  assert.ok(dev.flat(prev, behind) < 1e-9 && length > 2.6 + 0.3 && length < 6, `detour length ${length.toFixed(2)} m`);
+  assert.equal(dev.core.planPath(start, { x: 0, y: -1.4, z: 0.8 }), null, 'a point inside the table is unreachable');
+  const t0 = performance.now();
+  for (let i = 0; i < 20; i++) dev.core.planPath(start, behind);
+  assert.ok((performance.now() - t0) / 20 < 20, 'planning is fast enough to redo while walking');
+
+  // And the walk itself follows that path: a target behind the table is reached, not refused.
+  dev.core.avatar.pos = { ...start };
+  dev.core.register('plant', { x: 0, y: -1.0, z: 2.6 }, 'manual');
+  act({ id: 'p1', action: 'walk_to', target_id: 'plant_1' });
+  await dev.run(15, () => !!result('p1'));
+  assert.equal(result('p1').status, 'succeeded', JSON.stringify(result('p1')));
+  assert.ok(dev.flat(dev.core.avatar.pos, { x: 0, y: 0, z: 2.6 }) < 1.3);
 
   act({ id: 'u3', action: 'scan_surroundings' });
   assert.match(result('u3').reason, /not available on this device/);

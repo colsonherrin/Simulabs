@@ -248,11 +248,24 @@ written for the Unity headsets, so it is reported separately:
 |---|---|---|
 | Protocol, world model, movement, follow, marker registration, mic framing, audio decoding (`SimulacraCore.ts`) | PASS | 4 backend tests run the real file against the real backend: spawn in front of the user, "come over here", register a chair, walk to it, follow, stop, blocked and unknown targets, 16 kHz → 24 kHz mic framing, coordinate conversion |
 | Glasses binding: WebSocket, microphone, speaker, floor hit tests, pinch, character pose (`SimulacraLens.ts`, `SimulacraBody.ts`) | NOT TESTED | Written from API usage in Snap's official `5.15.4` samples; type-checks against declarations derived from those samples; never opened in Lens Studio |
-| Navigation around furniture | NOT TESTED | No path planner on this device: straight lines with side-stepping from hit tests |
+| Navigation around furniture | core PASS, device NOT TESTED | A* path planning was added to the shared core (tested: detours around a table, refuses unreachable points). On the glasses the floor knowledge comes from hit tests, which has never been run |
 | Camera object detection, occlusion | not implemented | Camera with open internet needs further permissions; no occlusion |
 | Publishable | no | Microphone + own-server WebSocket requires Experimental APIs and Extended Permissions |
 
 Needs Lens Studio 5.15.4 and the glasses on the same Wi-Fi as the backend. Setup: `spectacles/README.md`.
+
+### WebXR (browser)
+
+Added after the sprint (`webxr/`, served at `/xr/`). Also outside the 50 questions.
+
+| Part | Status | Evidence |
+|---|---|---|
+| Serving and bundling | PASS | `backend/test/webxr.test.ts`: page, bundle, character files served; nothing else reachable |
+| Preview mode (simulated room, desktop browser) | PASS | `webxr/check.cjs` in headless Chromium, mock brain: bundled character loads with skeleton; the three demo steps complete (1.2 m from user; names the chair looked at; walks around the table to 0.7 m from the chair, never off the floor). The chair there is a simulated object, labelled as such |
+| AR code path | PASS in an emulator only | Same script, Meta's IWER emulating Quest 3 with a captured living room: session starts with every requested feature; 1 floor outline, 8 obstacles, 12 labelled room-scan objects; avatar placed on the floor and walked to the farthest object with no sample off the floor |
+| On a physical Quest | NOT TESTED | No hardware. Unknown: what Quest Browser reports for a real room, depth occlusion (the emulator logs a WebGL warning on the occlusion draw), microphone echo, frame rate |
+| On XREAL or Spectacles | NOT TESTED, not expected to work fully | No known AR-capable browser on XREAL; Spectacles browser untested and without room scan |
+| Camera object detection | not implemented | Refused with an explanation; objects come from the headset's room scan labels and from pointing |
 
 ## Hardware checklist
 

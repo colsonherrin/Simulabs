@@ -56,7 +56,7 @@ the memory are unchanged; this folder is only the device side.
 | | Spectacles |
 |---|---|
 | Room | Floor height from a gaze hit test; "is this floor?" from vertical hit tests cached in 25 cm cells |
-| Navigation | No path planner. Straight lines with side-stepping around what the hit tests find. It gets around a chair, not out of a maze, and reports "the way became blocked" when stuck |
+| Navigation | Shortest path on a 20 cm grid over the floor cells the hit tests have confirmed (cells not yet probed count as walkable), plus side-stepping. Tested in the shared core, never on the glasses. Reports "the way became blocked" when stuck |
 | Objects | Pointing and naming only. No camera detection (camera + open internet needs further permissions) |
 | Occlusion | None |
 | Voice | Mic is muted while the character speaks; pinch to cut in |

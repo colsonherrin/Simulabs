@@ -19,6 +19,8 @@ device-independent so XREAL and Spectacles clients can reuse them.
 >   detection behaviour, audio levels, frame rate. See [Troubleshooting](#troubleshooting).
 > - **Snap Spectacles (2024):** a Lens Studio client exists in `spectacles/`. Its core logic is
 >   tested against the real backend; the Lens Studio binding has never been compiled or run.
+> - **WebXR (browser):** a no-install client is served at `/xr/`. It passes in a desktop browser
+>   and in an emulated Quest 3 AR session; it has never run on a physical headset.
 
 ## How it fits together
 
@@ -247,6 +249,16 @@ a camera frame grabber and two buttons. `QuestSpatialProvider` and `XrealSpatial
 client for the same backend. Its platform-free core is tested here against the real backend; the
 part that touches the glasses has never been run. Setup and limits: [spectacles/README.md](spectacles/README.md).
 
+**WebXR:** `webxr/` is a browser client served by the backend at `/xr/`: open it in Meta Quest
+Browser and press Enter AR, with nothing to build. It shares its behaviour with the Spectacles
+core. Details and limits: [webxr/README.md](webxr/README.md).
+
+| Device | Unity | WebXR | Other |
+|---|---|---|---|
+| Quest 3 / 3S | `unity-quest` | yes, Meta Quest Browser | |
+| XREAL Air 2 Ultra | `unity-xreal` | not expected: no known browser on it offers AR sessions | |
+| Snap Spectacles (2024) | no (Unity is not supported) | unknown: untested, and it would have no room scan | Lens Studio client, `spectacles/` |
+
 The protocol is defined in `backend/src/protocol.ts`: JSON text frames over one WebSocket at
 `/device`, audio as base64 PCM16 mono 24 kHz.
 
@@ -304,7 +316,8 @@ backend/                       Node/TypeScript brain: protocol, world model, ski
 packages/com.simulacra.core/   shared Unity package: world model, NavMesh, avatar, audio, backend link,
                                editor simulator, avatar importer, in-editor tests
 tools/headless-tests/          runs the package's geometry and world-model code outside Unity
-spectacles/                    Lens Studio client for Snap Spectacles (2024)
+spectacles/                    Lens Studio client for Snap Spectacles (2024); its core is shared with webxr/
+webxr/                         browser (WebXR) client, served by the backend at /xr/
 unity-quest/                   Unity 6000.0.66f2 project for Quest 3 / 3S   (Assets/Simulacra/Quest)
 unity-xreal/                   Unity 2022.3.62f2 project for XREAL glasses  (Assets/Simulacra/Xreal)
 ```

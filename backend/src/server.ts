@@ -245,7 +245,25 @@ class Session implements DeviceLink {
 /** Latency records from every session since the server started (served at /metrics). */
 const ALL_TURNS: TurnRecord[] = [];
 
-const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.fbx': 'application/octet-stream' };
+
+/** The WebXR client: sources live in /webxr, shared logic in the Spectacles core, bundled on first request. */
+const WEBXR_DIR = join(HERE, '..', '..', 'webxr');
+const AVATAR_DIR = join(HERE, '..', '..', 'packages', 'com.simulacra.core', 'Avatar', 'Rocketbox');
+const bundles = new Map<string, Promise<string>>();
+function webxrBundle(entry: string): Promise<string> {
+  let b = bundles.get(entry);
+  if (!b) {
+    b = import('esbuild').then((esbuild) =>
+      esbuild
+        .build({ entryPoints: [join(WEBXR_DIR, entry)], bundle: true, format: 'esm', target: 'es2020', write: false, minify: true, nodePaths: [join(HERE, '..', 'node_modules')], logLevel: 'silent' })
+        .then((r) => r.outputFiles[0].text),
+    );
+    b.catch(() => bundles.delete(entry));
+    bundles.set(entry, b);
+  }
+  return b;
+}
 
 export function startServer(opts: ServerOptions): Promise<{ server: Server; port: number; close: () => Promise<void> }> {
   const memory = new Memory(opts.memoryPath);
@@ -263,9 +281,29 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
       res.end(JSON.stringify({ brain: opts.brain, summary: TurnTimer.summarize(ALL_TURNS), turns: ALL_TURNS.slice(-50) }, null, 2));
       return;
     }
-    const rel = normalize(url.pathname === '/' ? '/index.html' : url.pathname).replace(/^(\.\.[/\\])+/, '');
-    const file = join(publicDir, rel);
-    if (!file.startsWith(publicDir) || !existsSync(file) || !statSync(file).isFile()) {
+    if (url.pathname === '/xr') {
+      res.writeHead(302, { location: '/xr/' }).end();
+      return;
+    }
+    if (url.pathname === '/xr/app.js' || url.pathname === '/xr/emulator.js') {
+      webxrBundle(url.pathname === '/xr/app.js' ? 'main.js' : 'emulator.js').then(
+        (js) => res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-cache' }).end(js),
+        (e) => res.writeHead(500, { 'content-type': 'text/plain' }).end('WebXR client failed to build: ' + (e?.message ?? e)),
+      );
+      return;
+    }
+    let root = publicDir;
+    let path = url.pathname === '/' ? '/index.html' : url.pathname;
+    if (path === '/xr/') {
+      root = WEBXR_DIR;
+      path = '/index.html';
+    } else if (path.startsWith('/xr/avatar/')) {
+      root = AVATAR_DIR;
+      path = path.slice('/xr/avatar'.length);
+    }
+    const rel = normalize(path).replace(/^(\.\.[/\\])+/, '');
+    const file = join(root, rel);
+    if (!file.startsWith(root) || !existsSync(file) || !statSync(file).isFile()) {
       res.writeHead(404).end('not found');
       return;
     }

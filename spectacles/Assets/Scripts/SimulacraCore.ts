@@ -32,6 +32,8 @@ export interface Host {
   /** Drop queued speech. */
   stopAudio(): void;
   log(message: string): void;
+  /** Optional: where the floor and obstacle knowledge comes from, and how many obstacles are known. */
+  roomInfo?(): { source: string; obstacles: number };
 }
 
 export interface WorldObject {
@@ -69,6 +71,16 @@ export function protocolToLens(p: Vec): Vec {
 /** The Lens Studio direction (unit vector) an avatar with this protocol yaw is facing. */
 export function yawToLensDirection(yaw: number): Vec {
   return { x: Math.sin(yaw), y: 0, z: -Math.cos(yaw) };
+}
+
+/** WebXR / three.js space (metres, right-handed, cameras look down -Z) to protocol space. */
+export function xrToProtocol(x: number, y: number, z: number): Vec {
+  return { x: x, y: y, z: -z };
+}
+
+/** Protocol space to WebXR / three.js space. */
+export function protocolToXr(p: Vec): Vec {
+  return { x: p.x, y: p.y, z: -p.z };
 }
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -152,6 +164,10 @@ export class SimulacraCore {
   private goal: Vec | null = null;
   private face: Vec | null = null;
   private goalTarget = '';
+  private pendingGesture = '';
+  /** Waypoints still to visit after `goal` (the path found around obstacles). */
+  private route: Vec[] = [];
+  private planned: Vec[] = [];
   private following = false;
   private done: ((ok: boolean, reason: string) => void) | null = null;
   private stuckFor = 0;
@@ -276,6 +292,35 @@ export class SimulacraCore {
     return obj;
   }
 
+  /**
+   * Add or refresh an object the device knows by a stable id of its own (a scanned piece of
+   * furniture, a simulated prop). Ids never change between refreshes.
+   */
+  upsert(id: string, label: string, pos: Vec, size: Vec, source: WorldObject['source']): WorldObject {
+    let o = this.find(id);
+    if (!o) {
+      o = { id: id, label: label, pos: pos, size: size, source: source, confidence: 1, seenAt: this.clock };
+      this.objects.push(o);
+    }
+    o.label = label;
+    o.pos = pos;
+    o.size = size;
+    o.seenAt = this.clock;
+    return o;
+  }
+
+  /** Forget objects from one source whose ids are not in `keep` (furniture that left the room scan). */
+  prune(source: WorldObject['source'], keep: string[]): void {
+    for (let i = this.objects.length - 1; i >= 0; i--) {
+      if (this.objects[i].source === source && keep.indexOf(this.objects[i].id) < 0) this.objects.splice(i, 1);
+    }
+  }
+
+  /** Typed input instead of speech (desktop preview and tests). */
+  sendText(text: string): void {
+    this.sendJson({ type: 'text', text: text });
+  }
+
   /** Put the avatar in front of the user, facing them, on real floor. Call once the floor is known. */
   placeInFrontOfUser(distance: number): boolean {
     const floorY = this.host.floorY();
@@ -316,7 +361,92 @@ export class SimulacraCore {
     return true;
   }
 
-  /** A reachable spot on a ring around a target, nearest side first. No path planner on this device: straight lines only. */
+  /**
+   * Path from a to b over real floor: the straight line if it is clear, otherwise a shortest path
+   * on a 20 cm grid (A*), simplified to its corners. Returns the points to walk through, ending
+   * at b, or null if b cannot be reached. Runs on the device in well under a frame.
+   */
+  planPath(a: Vec, b: Vec): Vec[] | null {
+    if (this.clearLine(a, b)) return [b];
+    const cell = 0.2;
+    const span = 60; // cells each way from the start: 12 m
+    const key = (i: number, j: number): number => (i + span) * (2 * span + 1) + (j + span);
+    const at = (i: number, j: number): Vec => ({ x: a.x + i * cell, y: a.y, z: a.z + j * cell });
+    const gi = Math.round((b.x - a.x) / cell);
+    const gj = Math.round((b.z - a.z) / cell);
+    if (Math.abs(gi) > span || Math.abs(gj) > span) return null;
+    const walk: { [k: number]: boolean } = {};
+    const free = (i: number, j: number): boolean => {
+      if (Math.abs(i) > span || Math.abs(j) > span) return false;
+      const k = key(i, j);
+      if (walk[k] === undefined) walk[k] = (i === 0 && j === 0) || this.host.isFloor(at(i, j));
+      return walk[k];
+    };
+    if (!free(gi, gj)) return null;
+
+    const open: number[][] = [[0, 0, 0, 0]]; // i, j, cost so far, estimate
+    const cost: { [k: number]: number } = {};
+    const from: { [k: number]: number[] } = {};
+    cost[key(0, 0)] = 0;
+    const steps = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    let found = false;
+    for (let guard = 0; guard < 6000 && open.length > 0; guard++) {
+      let best = 0;
+      for (let n = 1; n < open.length; n++) if (open[n][3] < open[best][3]) best = n;
+      const cur = open.splice(best, 1)[0];
+      if (cur[0] === gi && cur[1] === gj) {
+        found = true;
+        break;
+      }
+      if (cur[2] > cost[key(cur[0], cur[1])]) continue;
+      for (let s = 0; s < steps.length; s++) {
+        const ni = cur[0] + steps[s][0];
+        const nj = cur[1] + steps[s][1];
+        if (!free(ni, nj)) continue;
+        // No cutting corners between two blocked cells.
+        if (steps[s][0] !== 0 && steps[s][1] !== 0 && (!free(cur[0] + steps[s][0], cur[1]) || !free(cur[0], cur[1] + steps[s][1]))) continue;
+        const c = cur[2] + (steps[s][0] !== 0 && steps[s][1] !== 0 ? 1.414 : 1);
+        const k = key(ni, nj);
+        if (cost[k] !== undefined && cost[k] <= c) continue;
+        cost[k] = c;
+        from[k] = [cur[0], cur[1]];
+        const di = Math.abs(gi - ni);
+        const dj = Math.abs(gj - nj);
+        open.push([ni, nj, c, c + Math.max(di, dj) + 0.414 * Math.min(di, dj)]);
+      }
+    }
+    if (!found) return null;
+
+    const cells: Vec[] = [];
+    let ci = gi;
+    let cj = gj;
+    while (!(ci === 0 && cj === 0)) {
+      cells.unshift(at(ci, cj));
+      const prev = from[key(ci, cj)];
+      ci = prev[0];
+      cj = prev[1];
+    }
+    cells[cells.length - 1] = b;
+    // Keep only the corners: from each point, skip ahead to the farthest one in a clear straight line.
+    const out: Vec[] = [];
+    let here = a;
+    let idx = 0;
+    while (idx < cells.length) {
+      let far = idx;
+      for (let n = cells.length - 1; n > idx; n--) {
+        if (this.clearLine(here, cells[n])) {
+          far = n;
+          break;
+        }
+      }
+      out.push(cells[far]);
+      here = cells[far];
+      idx = far + 1;
+    }
+    return out;
+  }
+
+  /** A reachable spot on a ring around a target, nearest side first, with the path to it. */
   private standPoint(target: Vec, radius: number): Vec | null {
     const from = this.avatar.pos;
     const base = Math.atan2(from.x - target.x, from.z - target.z);
@@ -325,7 +455,11 @@ export class SimulacraCore {
       for (let i = 0; i < 12; i++) {
         const a = base + Math.ceil(i / 2) * (Math.PI / 6) * (i % 2 === 0 ? -1 : 1);
         const p = { x: target.x + Math.sin(a) * radii[r], y: from.y, z: target.z + Math.cos(a) * radii[r] };
-        if (this.host.isFloor(p) && this.clearLine(from, p)) return p;
+        if (!this.host.isFloor(p)) continue;
+        const path = this.planPath(from, p);
+        if (path === null) continue;
+        this.planned = path;
+        return p;
       }
     }
     return null;
@@ -344,6 +478,7 @@ export class SimulacraCore {
   private finish(ok: boolean, reason: string): void {
     const cb = this.done;
     this.goal = null;
+    this.route = [];
     this.face = null;
     this.done = null;
     this.goalTarget = '';
@@ -373,8 +508,9 @@ export class SimulacraCore {
       this.following = false;
       const near = flat(this.avatar.pos, t.pos) <= t.standOff + 0.25;
       const stand = near ? this.avatar.pos : this.standPoint(t.pos, t.standOff);
-      if (!stand) return reply(false, 'there is no clear straight path to ' + target + ' on this device');
-      this.goal = stand;
+      if (!stand) return reply(false, 'there is no reachable floor next to ' + target);
+      this.route = near ? [] : this.planned.slice(1);
+      this.goal = near ? stand : this.planned[0];
       this.face = t.pos;
       this.goalTarget = target;
       this.stuckFor = 0;
@@ -390,6 +526,7 @@ export class SimulacraCore {
       if (!t) return reply(false, "unknown target '" + target + "'");
       if (this.done) this.finish(false, 'superseded by a newer action');
       this.goal = this.avatar.pos;
+      this.route = [];
       this.face = t.pos;
       this.avatar.state = 'turning';
       this.done = (ok, reason) => reply(ok, reason);
@@ -412,7 +549,7 @@ export class SimulacraCore {
     if (action === 'gesture') {
       const type = String((m.params && m.params.type) || '');
       if (['wave', 'nod', 'shake_head', 'shrug'].indexOf(type) < 0) return reply(false, "unknown gesture '" + type + "'");
-      this.avatar.gesture = type;
+      this.pendingGesture = type; // shown for exactly one update, whenever the message arrived
       return reply(true, '');
     }
     if (action === 'register_marker') {
@@ -477,7 +614,8 @@ export class SimulacraCore {
   /** Advance the avatar. Call every frame; read `avatar` afterwards. Runs with or without a connection. */
   update(dt: number): void {
     this.clock += dt;
-    this.avatar.gesture = '';
+    this.avatar.gesture = this.pendingGesture;
+    this.pendingGesture = '';
     if (this.speakingFor > 0) this.speakingFor = Math.max(0, this.speakingFor - dt);
     let moved = 0;
     const floorY = this.host.floorY();
@@ -490,7 +628,14 @@ export class SimulacraCore {
         if (flat(u, this.face) > 0.3) {
           this.face = u;
           const p = flat(this.avatar.pos, u) <= this.userDistance + 0.25 ? this.avatar.pos : this.standPoint(u, this.userDistance);
-          if (p) this.goal = p;
+          if (p === this.avatar.pos) {
+            this.goal = p;
+            this.route = [];
+          } else if (p) {
+            this.goal = this.planned[0];
+            this.route = this.planned.slice(1);
+            this.bestDistance = flat(this.avatar.pos, this.goal);
+          }
         }
       }
       const d = flat(this.avatar.pos, this.goal);
@@ -514,6 +659,12 @@ export class SimulacraCore {
             if (this.stuckFor > (moved > 0 ? 4.0 : 1.0)) this.finish(false, 'the way became blocked');
           }
         }
+      } else if (this.route.length > 0) {
+        // Corner reached: head for the next one.
+        this.goal = this.route.shift() as Vec;
+        this.bestDistance = flat(this.avatar.pos, this.goal as Vec);
+        this.stuckFor = 0;
+        this.sideBias = 0;
       } else if (this.turnToward(this.face, dt) < 0.06) this.finish(true, '');
       else this.avatar.state = 'turning';
     } else if (this.following) {
@@ -535,6 +686,7 @@ export class SimulacraCore {
   private sendWorld(): void {
     const v = (p: Vec): number[] => [Math.round(p.x * 1000) / 1000, Math.round(p.y * 1000) / 1000, Math.round(p.z * 1000) / 1000];
     const floorY = this.host.floorY();
+    const info = this.host.roomInfo ? this.host.roomInfo() : null;
     const objects = [];
     for (let i = 0; i < this.objects.length; i++) {
       const o = this.objects[i];
@@ -547,7 +699,7 @@ export class SimulacraCore {
         user: { pos: v(this.host.headPosition()), fwd: v(this.host.headForward()) },
         avatar: { pos: v(this.avatar.pos), fwd: v({ x: Math.sin(this.avatar.yaw), y: 0, z: Math.cos(this.avatar.yaw) }), state: state },
         objects: objects,
-        room: { source: floorY === null ? 'unknown' : 'surface_hit_test', floorY: floorY === null ? 0 : Math.round(floorY * 1000) / 1000, obstacles: 0, navmesh: false },
+        room: { source: floorY === null ? 'unknown' : info ? info.source : 'surface_hit_test', floorY: floorY === null ? 0 : Math.round(floorY * 1000) / 1000, obstacles: info ? info.obstacles : 0, navmesh: false },
       },
     });
   }
