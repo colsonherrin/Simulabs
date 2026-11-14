@@ -26,6 +26,24 @@ namespace Simulacra
         }
 
         /// <summary>
+        /// Turn the body so that it faces the same way as its parent. Models are exported with
+        /// different "front" conventions; without this a character can walk backwards or sideways.
+        /// Returns the correction applied, in degrees (0 if the skeleton was not recognised).
+        /// </summary>
+        public static float AlignFacing(GameObject body)
+        {
+            Transform left = BoneFinder.Find(body, HumanBodyBones.LeftUpperArm), right = BoneFinder.Find(body, HumanBodyBones.RightUpperArm);
+            if (left == null || right == null) return 0f;
+            Transform parent = body.transform.parent;
+            Vector3 l = parent != null ? parent.InverseTransformPoint(left.position) : left.position;
+            Vector3 r = parent != null ? parent.InverseTransformPoint(right.position) : right.position;
+            float yaw = FacingCorrectionYaw(l, r);
+            if (Mathf.Abs(yaw) < 20f) return 0f; // already facing forward, within the slack of an asymmetric pose
+            body.transform.localRotation = Quaternion.Euler(0f, yaw, 0f) * body.transform.localRotation;
+            return yaw;
+        }
+
+        /// <summary>
         /// Scale and lift <paramref name="body"/> (a child of the avatar root, root at identity) so it
         /// is life-sized with its soles on the root's origin. Returns the final height in metres and a
         /// one-line report for the log / HUD.

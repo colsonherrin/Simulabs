@@ -1,3 +1,5 @@
+using UnityEngine;
+
 namespace Simulacra
 {
     /// <summary>The pure arithmetic of avatar fitting, kept free of engine types so it can be tested anywhere.</summary>
@@ -22,5 +24,20 @@ namespace Simulacra
 
         /// <summary>Local Y to give the body so its lowest point sits exactly at the parent's origin.</summary>
         public static float LiftFor(float lowestPointY, float currentLocalY) => currentLocalY - lowestPointY;
+
+        /// <summary>
+        /// Which way a skeleton faces, from its shoulder line: a person's forward is perpendicular to
+        /// the line from their left shoulder to their right shoulder. Returns the yaw, in degrees,
+        /// to turn the body by so that it faces +Z (Unity's forward). 0 if the shoulders coincide.
+        /// </summary>
+        public static float FacingCorrectionYaw(Vector3 leftShoulder, Vector3 rightShoulder)
+        {
+            Vector3 across = rightShoulder - leftShoulder;
+            across.y = 0f;
+            if (across.sqrMagnitude < 1e-6f) return 0f;
+            Vector3 facing = Vector3.Cross(across, Vector3.up); // +Z for a body whose right side is +X
+            float yaw = Mathf.Atan2(facing.x, facing.z) * Mathf.Rad2Deg;
+            return -yaw;
+        }
     }
 }

@@ -180,7 +180,9 @@ namespace Simulacra
             body.transform.localRotation = Quaternion.identity;
 
             // Life-size check and feet-on-origin, before anything is measured from the body.
+            float turned = avatarPrefab != null ? AvatarFit.AlignFacing(body) : 0f;
             float height = AvatarFit.Apply(body, avatarHeight, out _avatarReport);
+            if (turned != 0f) _avatarReport += $", turned {turned:0} deg to face forward";
             Debug.Log("[Simulacra] " + _avatarReport);
 
             root.AddComponent<NavMeshAgent>();

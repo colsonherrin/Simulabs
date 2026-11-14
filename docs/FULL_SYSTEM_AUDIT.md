@@ -35,7 +35,7 @@ sees or hears, it is NOT TESTED and the hardware procedure is given.
 | Label used below | Meaning |
 |---|---|
 | **backend test** | `backend/test/*.test.ts`, 17 tests. Real server, real WebSockets and HTTP. Claude, speech-to-text, text-to-speech and the headset are stand-in servers. No live API. |
-| **headless** | `tools/headless-tests`, 34 checks. The real `RoomGeometry.cs`, `WorldModel.cs` and `AvatarFit.Math.cs` compiled outside Unity against a small stand-in for Unity's vector maths. |
+| **headless** | `tools/headless-tests`, 38 checks. The real `RoomGeometry.cs`, `WorldModel.cs` and `AvatarFit.Math.cs` compiled outside Unity against a small stand-in for Unity's vector maths. |
 | **editor test** | `packages/com.simulacra.core/Tests/Editor`, 10 tests using the real engine (NavMesh, renderers). **Written and compile-checked, not run**: they need a Unity editor. |
 | **simulator** | Browser stand-in for the headset driven by Playwright against the real backend with the mock (keyword) brain. Exercises the protocol, not AI and not Unity. |
 | **compile check** | Every C# method body bound against the real Meta SDK 85, XREAL SDK 3.1.0, AR Foundation 5.2 sources and the real Unity 6000.0.66f2 / 2022.3.62f2 assemblies: 0 errors on both targets. |
@@ -91,6 +91,8 @@ New defects found during the sprint and fixed:
 | 22 | Mouth blendshape and jaw bone were both driven | Mouth opens twice as far as intended | Jaw bone only when there is no mouth shape | compile check |
 | 23 | Noticing a new object triggered a model call | The character could start talking unprompted every time something was detected | Object notices ride along with the next turn; only the user walking away triggers a reaction | backend test |
 | 24 | Idle sway was applied to the lower spine | On Biped rigs the thighs hang off the spine, so idle sway would drag the feet | Sway moved to the chest | code read |
+| 25 | Nothing checked which way an imported character faces | A model exported with a different "front" walks backwards or sideways | Facing is read from the shoulder line at spawn and corrected; the HUD reports any correction | headless test |
+| 26 | One backend test raced the stand-in speech service, and a failing test left servers open | The suite failed about one run in four and then hung instead of reporting | Assertion waits for the event; the runner is forced to exit | 6 consecutive full runs pass |
 
 Not used, by decision: the bundled character's own animation files. They have no in-place walk
 (the root travels 1.46 m per cycle), no mesh, and a different node hierarchy; the procedural gait

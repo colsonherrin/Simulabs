@@ -285,7 +285,7 @@ cd backend && npm test
 ```bash
 cd tools/headless-tests && dotnet run
 ```
-32 checks of the real geometry, world-model and avatar-fit code outside Unity.
+38 checks of the real geometry, world-model and avatar-fit code outside Unity.
 
 In either Unity project: **Window > General > Test Runner > EditMode > Run All** runs the NavMesh,
 obstacle-avoidance, spawn-placement and avatar-scale tests against the real engine.

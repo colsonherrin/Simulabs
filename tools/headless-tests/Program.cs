@@ -26,6 +26,14 @@ static class T
         Check("grounding: a pivot at the hips (soles 0.95 m below) is lifted by 0.95 m", Near(AvatarFit.LiftFor(-0.95f, 0f), 0.95f));
         Check("grounding: a body floating 3 cm above its pivot is lowered", Near(AvatarFit.LiftFor(0.03f, 0f), -0.03f));
 
+        // Facing: a body's forward is perpendicular to its shoulder line.
+        Check("facing: right shoulder at +X means already facing +Z (no correction)", Near(AvatarFit.FacingCorrectionYaw(new Vector3(-0.2f, 1.4f, 0f), new Vector3(0.2f, 1.4f, 0f)), 0f, 0.1f));
+        Check("facing: a model exported facing -Z is turned half a circle", Near(MathF.Abs(AvatarFit.FacingCorrectionYaw(new Vector3(0.2f, 1.4f, 0f), new Vector3(-0.2f, 1.4f, 0f))), 180f, 0.1f));
+        float sideways = AvatarFit.FacingCorrectionYaw(new Vector3(0f, 1.4f, 0.2f), new Vector3(0f, 1.4f, -0.2f)); // right shoulder at -Z: facing +X
+        Vector3 after = Quaternion.Euler(0f, sideways, 0f) * new Vector3(1f, 0f, 0f);
+        Check("facing: a model facing +X is turned so its front becomes +Z", Near(after, new Vector3(0f, 0f, 1f), 0.01f), $"yaw {sideways} -> {after}");
+        Check("facing: coincident shoulders give no correction", AvatarFit.FacingCorrectionYaw(Vector3.one, Vector3.one) == 0f);
+
         // ---- B. Room anchors -> upright boxes (the one coordinate reduction every platform goes through)
         // Quest floor anchor: local XY is the plane, local +Z is the normal (up). 4 x 3 m, rotated 30 deg about up.
         Quaternion floorRot = Quaternion.Euler(0f, 30f, 0f) * Quaternion.Euler(-90f, 0f, 0f);
