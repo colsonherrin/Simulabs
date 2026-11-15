@@ -18,7 +18,7 @@ export const INLINE_ARENA = { x: 0, y: -40, z: 0, eye: 1.62 };
 const TUNING = {
   // Two waves of ten swordsmen, each staggered in over about two seconds;
   // the second charges once the first is down to its last three. Archer
-  // fights come in two volleys of four.
+  // fights come in two volleys of eight.
   meleeQuota: 20,
   waveSize: 10,
   archerWaves: 2,
@@ -27,7 +27,7 @@ const TUNING = {
   // around the player and wait their turn (all of them once few are left).
   maxEngaged: 2,
   meleeSpeed: 3.7,
-  archerCount: 4,
+  archerCount: 8,
   archerInterval: 3.05,
   hearts: 8,
   enemyArrowSpeed: 8.2,
@@ -408,7 +408,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     const n = TUNING.archerCount;
     for (let i = 0; i < n; i++) {
       const mesh = createSoldier('archer', paletteForEnemy(attackerSide));
-      const spread = 0.8;
+      const spread = 1.35;
       const a = -spread / 2 + (spread * i) / Math.max(1, n - 1);
       const dist = 7.4;
       mesh.position.set(Math.sin(a) * dist, 0, -Math.cos(a) * dist);
