@@ -322,7 +322,7 @@ export function startMusic() {
   const c = ac();
   if (music) return;
   const g = c.createGain();
-  g.gain.value = muted ? 0 : 0.016;
+  g.gain.value = 0;
   const filter = c.createBiquadFilter();
   filter.type = 'lowpass';
   filter.frequency.value = 380;
@@ -355,14 +355,14 @@ export function setMusicTension(on) {
   tension = on;
   const now = ctx.currentTime;
   music.filter.frequency.linearRampToValueAtTime(on ? 980 : 380, now + 0.45);
-  if (!muted) music.g.gain.linearRampToValueAtTime(on ? 0.028 : 0.016, now + 0.45);
+  music.g.gain.linearRampToValueAtTime(!on || muted ? 0 : 0.028, now + 0.45);
 }
 
 export function toggleMute() {
   muted = !muted;
   if (music && ctx) {
     music.g.gain.cancelScheduledValues(ctx.currentTime);
-    music.g.gain.linearRampToValueAtTime(muted ? 0 : tension ? 0.028 : 0.016, ctx.currentTime + 0.05);
+    music.g.gain.linearRampToValueAtTime(muted || !tension ? 0 : 0.028, ctx.currentTime + 0.05);
   }
   return muted;
 }

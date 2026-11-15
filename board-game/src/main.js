@@ -611,10 +611,6 @@ function haptic(strength) {
 
 function unlockAudio() {
   resumeAudio();
-  if (!musicOn) {
-    startMusic();
-    musicOn = true;
-  }
 }
 
 function toast(text) {
@@ -688,6 +684,10 @@ function onCombatView(enter) {
       savedBoardPos.copy(board.position);
       savedBoardQuat.copy(board.quaternion);
       swapSession('vr');
+    }
+    if (!musicOn) {
+      startMusic();
+      musicOn = true;
     }
     setMusicTension(true);
   } else {
