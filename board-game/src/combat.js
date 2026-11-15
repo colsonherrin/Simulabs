@@ -117,9 +117,11 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   const war = createWarZone(group);
   function applyArenaMode() {
     const ar = !!hooks.isAR?.();
-    for (const obj of arenaBackdrop) obj.visible = !ar;
+    // The plain night arena only shows if the battlefield failed to load.
+    for (const obj of arenaBackdrop) obj.visible = !ar && !war.hasField();
     war.setAR(ar);
   }
+  war.onFieldLoaded(() => applyArenaMode());
 
   const sword = createBattleSword(0xf0d090);
   const bow = createBattleBow(0xf0d090);
@@ -376,7 +378,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     sparks.burst(point || e.mesh.position.clone().setY(1.2), 0xffe1b0, 10, 3.5);
     playHit();
     hooks.haptic?.(0.7);
-    if (navigator.vibrate) navigator.vibrate(18);
+    // Browsers refuse vibration until the page has been tapped.
+    if (navigator.vibrate && navigator.userActivation?.isActive) navigator.vibrate(18);
   }
 
   function damagePlayer() {
@@ -386,7 +389,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     playHurt();
     hooks.haptic?.(1);
     hooks.hurt?.();
-    if (navigator.vibrate) navigator.vibrate(40);
+    if (navigator.vibrate && navigator.userActivation?.isActive) navigator.vibrate(40);
   }
 
   function reflectArrow(arrow, owner) {
@@ -1162,10 +1165,11 @@ function buildArena(group) {
   group.add(moon);
   backdrop.push(moon);
 
-  const hemi = new THREE.HemisphereLight(0xffd2b0, 0x2a1a12, 0.85);
+  // Warm, smoky daylight: a low sun (matching the sky) and a dusty fill.
+  const hemi = new THREE.HemisphereLight(0xc49a72, 0x2a1d14, 0.8);
   group.add(hemi);
-  const moonLight = new THREE.DirectionalLight(0xc9d4ff, 1.15);
-  moonLight.position.set(-4, 8, -2);
+  const moonLight = new THREE.DirectionalLight(0xffb878, 2.1);
+  moonLight.position.set(-4.5, 2.2, -8.6);
   group.add(moonLight);
 
   for (let i = 0; i < 5; i++) {

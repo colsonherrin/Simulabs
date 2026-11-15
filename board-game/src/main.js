@@ -550,7 +550,8 @@ function onCombatView(enter) {
     savedFov = camera.fov;
     controls.enabled = false;
     // Night fog belongs to the virtual arena; in AR it would tint the real room.
-    scene.fog = xrKind === 'ar' && renderer.xr.isPresenting ? null : new THREE.Fog(0x120e0c, 7, 21);
+    // Warm battlefield haze that softens the far ruins; none in AR.
+    scene.fog = xrKind === 'ar' && renderer.xr.isPresenting ? null : new THREE.FogExp2(0x5e4635, 0.024);
     if (!renderer.xr.isPresenting) {
       camera.fov = 72;
       camera.updateProjectionMatrix();
