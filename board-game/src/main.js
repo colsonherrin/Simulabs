@@ -1551,6 +1551,7 @@ $('btn-sim').addEventListener('click', () => {
   unlockAudio();
   talkToSim();
 });
+$('sim-build').textContent = 'Build ' + (typeof __BUILD__ === 'string' ? __BUILD__ : 'dev');
 sim.canGoLive().then((can) => { if (can && !sim.hasKey()) $('sim-status').textContent = 'Sim’s live voice is ready: it starts when you start a game. No key needed.'; });
 $('sim-status').textContent = sim.hasKey() ? 'A key is saved: her voice starts when you start a game.' : 'No key needed to play: Sim talks with the browser’s built-in voice and coaches you. Add an OpenAI key if you want to talk back to her.';
 btnAr.addEventListener('click', () => voiceThenStart(() => enterXR('ar')));

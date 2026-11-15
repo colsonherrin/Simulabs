@@ -85,6 +85,57 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
   let nextGesture = '';
   let voiceLevel = 0;
 
+  // A small sign over her head saying what her voice is doing, so that in a headset (where the
+  // page's own text is out of sight) a silent Sim always explains herself.
+  const sign = (() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 160;
+    const g = canvas.getContext('2d');
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+    sprite.scale.set(0.9, 0.14, 1);
+    sprite.renderOrder = 20;
+    sprite.visible = false;
+    scene.add(sprite);
+    let shown = '';
+    return {
+      sprite,
+      set(text) {
+        if (text === shown) return;
+        shown = text;
+        g.clearRect(0, 0, 1024, 160);
+        if (!text) return;
+        g.fillStyle = 'rgba(14,12,10,0.78)';
+        g.beginPath();
+        g.roundRect(0, 0, 1024, 160, 30);
+        g.fill();
+        g.fillStyle = '#f3e7c9';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        let size = 54;
+        do { g.font = size + 'px system-ui, sans-serif'; size -= 4; } while (g.measureText(text).width > 980 && size > 20);
+        g.fillText(text, 512, 82);
+        texture.needsUpdate = true;
+      },
+    };
+  })();
+  let liveSince = 0;
+  function voiceSign(now) {
+    const st = voice.state();
+    if (st === 'connecting') return 'Connecting my voice…';
+    if (st === 'failed') return 'No voice: ' + (voice.problem() || 'could not connect').slice(0, 60);
+    if (st === 'live') {
+      if (!liveSince) liveSince = now;
+      if (!voice.heardHer()) return now - liveSince < 12000 ? 'Voice connected. Say hello!' : 'Connected, but no sound yet. Is the volume up?';
+      return '';
+    }
+    liveSince = 0;
+    return wantsVoice ? 'Voice not started' : '';
+  }
+  let wantsVoice = false;
+
   /** Look at a square and reach toward it: she is making a move there. */
   function reachFor(r, c) {
     squareLocal(r, c, pointAt);
@@ -95,6 +146,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
 
   function update(dt, { visible, floorY }) {
     avatar.root.visible = visible && loaded;
+    sign.sprite.visible = false;
     if (!avatar.root.visible) return;
     // Her place: across the board from the user (Violet's side), a step back from its edge, feet on the floor.
     board.updateMatrixWorld(true);
@@ -114,6 +166,10 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     lookAt.copy(attendBoardFor > 0 ? pointAt : eyes);
     voiceLevel = Math.max(voice.level(), fallback.level(), builtIn.level());
     avatar.animate(dt, pose, voiceLevel, lookAt, pointAt);
+    const text = voiceSign(performance.now());
+    sign.set(text);
+    sign.sprite.visible = !!text;
+    sign.sprite.position.set(pose.x, pose.y + 1.9, pose.z);
   }
 
   // ---------------------------------------------------------------- voice
@@ -208,6 +264,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
         conv = null;
         state = 'failed';
         problem = (e && e.message) || String(e);
+        if (/permission|notallowed|denied/i.test((e && e.name) + ' ' + problem)) problem = 'microphone not allowed';
         queued.length = 0;
         log('FAILED to start: ' + problem);
       }
@@ -525,6 +582,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
   }
   const boardNow = () => `\nBoard now:\n${boardText(getGame().board)}`;
 
+  let retries = 0;
   return {
     update,
     record,
@@ -544,10 +602,16 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     },
     /** Start (or restart) the live voice. Call from a tap. Resolves when it is live or has failed. */
     async startVoice() {
+      wantsVoice = true;
       // First choice: the site's ElevenLabs agent (Claude). Nothing to type.
       const agent = await agentId('crownfallAgentId');
       if (agent) {
         await eleven.start(agent);
+        // A failed start is retried a few times by itself: networks and permissions are often slow the first time.
+        if (eleven.state() !== 'live' && retries < 3) {
+          retries += 1;
+          setTimeout(() => { if (eleven.state() === 'failed') this.startVoice(); }, 6000);
+        } else if (eleven.state() === 'live') retries = 0;
         return eleven.state() === 'live';
       }
       let key = '';
