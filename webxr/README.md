@@ -107,7 +107,7 @@ Quest Browser offers the outward camera.
 
 ## Hosted page: no backend needed
 
-`https://<you>.github.io/simulacra/` runs by itself. Paste an OpenAI key into the page and press
+`https://<you>.github.io/<repository>/` runs by itself. Paste an OpenAI key into the page and press
 Save; the page then talks to OpenAI directly, using the same session code as the backend (bundled
 into the page). No laptop, no USB. On a Quest: open the address in Meta Quest Browser, paste the
 key, press Enter AR.

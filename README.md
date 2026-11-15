@@ -6,7 +6,7 @@ Sundai is an embodied AI companion that sees, speaks, moves, and interacts with 
 her in **Swords and Arrows**, an immersive AR/VR strategy game where chess meets medieval combat.
 
 **Play it on a Meta Quest 3 or 3S:** open
-**https://colsonherrin.github.io/simulacra/crownfall/** in the Quest Browser and press
+**https://colsonherrin.github.io/Simulabs/crownfall/** in the Quest Browser and press
 **Talk to Sundai**. Allow the microphone and camera when asked. There is nothing to install and
 nothing to type.
 
