@@ -164,6 +164,23 @@ function defaultBackend() {
   return '';
 }
 
+let heard = '';
+let reply = '';
+
+function takeMessage(text) {
+  try {
+    const m = JSON.parse(text);
+    if (m && m.type === 'transcript' && m.text) {
+      const line = String(m.text).replace(/\s+/g, ' ').trim();
+      if (m.role === 'user') {
+        heard = line;
+        reply = '…';
+      } else reply = line;
+    }
+  } catch (e) { /* the core still reads the message */ }
+  core.onMessage(text);
+}
+
 function connectLocal(key) {
   const mine = ++generation;
   if (local) {
@@ -176,7 +193,7 @@ function connectLocal(key) {
   }
   setStatus('Starting her voice in this game…');
   try {
-    local = startLocal(key, (text) => { if (mine === generation) core.onMessage(text); }, media, params.get('mind') === 'audio' ? 'audio' : 'realtime');
+    local = startLocal(key, (text) => { if (mine === generation) takeMessage(text); }, media, params.get('mind') === 'audio' ? 'audio' : 'realtime');
   } catch (e) {
     setStatus('Her voice could not start. ' + (e && e.message ? e.message : e));
     return;
@@ -211,7 +228,7 @@ function connect(base) {
     const link = $('companion-link');
     if (link) link.hidden = true;
   };
-  socket.onmessage = (e) => { if (typeof e.data === 'string' && mine === generation) core.onMessage(e.data); };
+  socket.onmessage = (e) => { if (typeof e.data === 'string' && mine === generation) takeMessage(e.data); };
   socket.onclose = () => {
     if (mine !== generation) return;
     core.onClose();
@@ -555,21 +572,35 @@ const voiceCamP = new THREE.Vector3();
 const voiceCamD = new THREE.Vector3();
 const voiceWant = new THREE.Vector3();
 
+function wrapLabeled(label, text, width) {
+  const words = String(text || '').split(' ').filter(Boolean);
+  const indent = ' '.repeat(label.length + 2);
+  const lines = [];
+  let cur = label + '  ';
+  for (const word of words.length ? words : ['(nothing yet)']) {
+    if (cur.trim() !== label && (cur + word).length > width) {
+      lines.push(cur.replace(/\s+$/, ''));
+      cur = indent;
+    }
+    cur += word + ' ';
+  }
+  lines.push(cur.replace(/\s+$/, ''));
+  return lines;
+}
+
 function voiceDebugText() {
-  const sentAge = voiceDbg.sentAt ? (performance.now() - voiceDbg.sentAt) / 1000 : null;
   const loud = Math.max(0, Math.min(10, Math.round(micLevel * 18)));
   const meter = '█'.repeat(loud) + '·'.repeat(10 - loud);
   const mic = !micOn ? 'OFF — press A or Talk' : userMuted ? 'muted  ' + meter : core.micMuted ? 'quiet while she talks  ' + meter : 'LIVE  ' + meter;
-  const hearing = voiceDbg.sent === 0 ? 'nothing sent yet' : voiceDbg.sent + ' frames' + (sentAge === null ? '' : ', last ' + sentAge.toFixed(1) + 's ago');
-  return [
+  const lines = [
     'VOICE',
-    'link ' + (core.connected ? 'connected' : 'down') + '   brain ' + core.brain + '   sound ' + (audio ? audio.state : 'off'),
     'mic  ' + mic,
-    'out  ' + hearing + '   voice back ' + (voiceAnalyser ? 'live call' : voiceDbg.rxAudio + ' packets'),
-    core.lastTranscript || 'you  (nothing heard yet)',
-    core.lastAction ? 'do   ' + core.lastAction : 'do   (no action yet)',
-    voiceDbg.micError ? 'err  ' + voiceDbg.micError : core.lastError ? 'err  ' + core.lastError : '',
-  ].filter(Boolean).join('\n');
+    ...wrapLabeled('you', heard || '(nothing heard yet)', 42),
+    ...wrapLabeled('her', reply || '(nothing said yet)', 42),
+  ];
+  const err = voiceDbg.micError || core.lastError;
+  if (err) lines.push('err  ' + err);
+  return lines.slice(0, 16).join('\n');
 }
 
 function ensureVoicePanel(scene) {
@@ -608,10 +639,10 @@ function updateVoicePanel(ctx, dt, text) {
     voiceCanvasCtx.roundRect(0, 0, 1024, 768, 28);
     voiceCanvasCtx.fill();
     voiceCanvasCtx.font = '30px ui-monospace, monospace';
-    text.split('\n').slice(0, 16).forEach((line, i) => {
-      voiceCanvasCtx.fillStyle = i === 0 ? '#f4c06a' : line.startsWith('err') || line.includes('failed') ? '#ff8d7a' : '#e7f0df';
-      voiceCanvasCtx.fillText(line.length > 48 ? line.slice(0, 47) + '…' : line, 36, 58 + i * 44);
-    });
+        text.split('\n').slice(0, 16).forEach((line, i) => {
+          voiceCanvasCtx.fillStyle = i === 0 || line.startsWith('you') ? '#f4c06a' : line.startsWith('her') ? '#9fd0ff' : line.startsWith('err') || line.includes('failed') ? '#ff8d7a' : '#e7f0df';
+          voiceCanvasCtx.fillText(line.length > 46 ? line.slice(0, 45) + '…' : line, 36, 58 + i * 44);
+        });
     voiceTex.needsUpdate = true;
   }
   if (!voiceHold) {
