@@ -1047,7 +1047,7 @@ function placeExitPlaque() {
     exitPlaque.position.copy(_cam).addScaledVector(_exitFwd, 0.6).addScaledVector(left, 0.45);
     exitPlaque.position.y -= 0.42;
     exitPlaque.scale.setScalar(2);
-    exitPlaque.lookAt(_cam);
+    exitPlaque.rotation.set(-0.9, 0.35, 0);
   } else if (!fighting && exitPlaque.parent !== board) {
     board.add(exitPlaque);
     exitPlaque.position.copy(_exitHome.position);

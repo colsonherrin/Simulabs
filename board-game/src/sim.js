@@ -109,7 +109,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     const g = canvas.getContext('2d');
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+    const sprite = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.14), new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthTest: false }));
     sprite.scale.set(0.9, 0.14, 1);
     sprite.renderOrder = 20;
     sprite.visible = false;
