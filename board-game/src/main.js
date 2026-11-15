@@ -500,6 +500,11 @@ for (let i = 0; i < 2; i++) {
       try { localStorage.setItem('crownfall.clickHand', hand); } catch { /* not stored */ }
     }
     if (game.phase !== 'combat') onXRSelect(controller);
+    else if (exitPlaque.visible) {
+      // In a duel the trigger belongs to the weapon, except on the Exit plaque.
+      setRayFromController(controller);
+      if (raycaster.intersectObject(exitPlaque, false).length) exitXR();
+    }
   });
   scene.add(controller);
   controllers.push(controller);
@@ -1023,6 +1028,47 @@ function exitXR() {
   if (session) session.end().catch(() => {});
 }
 
+// In a duel the board (and its Exit plaque) is out of sight, so the plaque
+// is set down at the player's lower left when the fight starts, larger, and
+// facing them: point at it and pull the trigger (or pinch) to leave.
+const _exitHome = { position: exitPlaque.position.clone(), rotation: exitPlaque.rotation.clone() };
+const _exitFwd = new THREE.Vector3();
+function placeExitPlaque() {
+  const fighting = renderer.xr.isPresenting && combatView;
+  if (fighting && exitPlaque.parent === board) {
+    const cam = renderer.xr.getCamera();
+    cam.getWorldPosition(_cam);
+    cam.getWorldDirection(_exitFwd);
+    _exitFwd.y = 0;
+    if (_exitFwd.lengthSq() < 1e-4) _exitFwd.set(0, 0, -1);
+    _exitFwd.normalize();
+    const left = new THREE.Vector3(_exitFwd.z, 0, -_exitFwd.x);
+    scene.add(exitPlaque);
+    exitPlaque.position.copy(_cam).addScaledVector(_exitFwd, 0.6).addScaledVector(left, 0.45);
+    exitPlaque.position.y -= 0.42;
+    exitPlaque.scale.setScalar(2);
+    exitPlaque.lookAt(_cam);
+  } else if (!fighting && exitPlaque.parent !== board) {
+    board.add(exitPlaque);
+    exitPlaque.position.copy(_exitHome.position);
+    exitPlaque.rotation.copy(_exitHome.rotation);
+    exitPlaque.scale.setScalar(1);
+  }
+}
+
+// The on-screen Exit: leaves AR/VR, or (on a screen) gives up any duel in
+// progress, leaves an online room and goes back to the start menu.
+$('btn-exit').addEventListener('click', () => {
+  if (renderer.xr.isPresenting) {
+    exitXR();
+    return;
+  }
+  if (game.phase === 'combat') btnYield.click();
+  if (online) leaveOnline(true);
+  menu = true;
+  updateHUD();
+});
+
 function pickWithRay() {
   if (exitPlaque.visible && raycaster.intersectObject(exitPlaque, false).length) return { action: 'exit' };
   if (game.phase === 'over') {
@@ -1499,7 +1545,8 @@ function frame(t, xrFrame) {
     if (line) line.scale.z = hit ? Math.max(0.05, _aimOrigin.distanceTo(hit.point)) : 1.5;
   }
   tabletop.turnSprite.visible = renderer.xr.isPresenting && !combatView;
-  exitPlaque.visible = renderer.xr.isPresenting && !combatView && !placing;
+  placeExitPlaque();
+  exitPlaque.visible = renderer.xr.isPresenting && !placing;
 
   updateHitTest(xrFrame);
   if (renderer.xr.isPresenting && xrKind === 'vr') seatInFront(xrFrame);
