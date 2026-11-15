@@ -1189,13 +1189,13 @@ export function createCombat({ scene, camera, renderer, hooks }) {
 
     const melee = mode === 'sword-melee' || mode === 'bow-melee';
     if (melee) {
-      // The first swordsman charges; the second appears 0.3 s behind him so
+      // The first swordsman charges; the second appears 0.2 s behind him so
       // they come at the player together, and the rest keep coming
       // (1.8 s shrinking to 1.2 s), at most three on the field, and straight
       // away whenever the field is empty.
       spawnT += dt;
       const alive = enemies.filter((e) => e.alive && e.kind === 'sword').length;
-      const gap = spawned <= 1 ? 0.3 : Math.max(1.2, 1.8 - (spawned - 2) * 0.15);
+      const gap = spawned <= 1 ? 0.2 : Math.max(1.2, 1.8 - (spawned - 2) * 0.15);
       if (spawned < quota && alive < 3 && (spawnT > gap || (alive === 0 && spawnT > 0.5))) {
         spawnSwordsman();
         spawnT = 0;
