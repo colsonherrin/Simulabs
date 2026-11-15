@@ -308,10 +308,26 @@ function simGreet() {
   sim.gameStarted();
 }
 const boardCopy = () => game.board.map((row) => row.slice());
+// A hint by herself when you have been looking at the board for a while on your turn.
+let thinkingSince = 0;
+let hintedFor = -1;
+setInterval(() => {
+  const yours = simPlays() && !menu && !placing && game.phase === 'play' && game.turn !== COMPUTER_SIDE && !combatView;
+  const stamp = `${epoch}:${game.moveNo || 1}`;
+  if (!yours) {
+    thinkingSince = 0;
+    return;
+  }
+  if (!thinkingSince || hintedFor !== stamp && thinkingSince.stamp !== stamp) thinkingSince = { at: performance.now(), stamp };
+  if (hintedFor !== stamp && performance.now() - thinkingSince.at > 22000) {
+    hintedFor = stamp;
+    sim.offerHint(game);
+  }
+}, 1000);
 async function talkToSim() {
   const status = $('sim-status');
   if (!sim.hasKey()) {
-    status.textContent = "Paste an OpenAI key above to give Sim her voice. Without one she plays and coaches in text.";
+    status.textContent = sim.canSpeak() ? 'No key: Sim will talk with the browser’s built-in voice and coach you as you play. She cannot hear you without a key.' : 'No key, and this browser has no built-in voice: Sim will coach in text.';
     return;
   }
   status.textContent = 'Connecting Sim’s voice…';
@@ -1449,7 +1465,7 @@ $('btn-sim').addEventListener('click', () => {
   unlockAudio();
   talkToSim();
 });
-$('sim-status').textContent = sim.hasKey() ? 'A key is saved: her voice starts when you start a game.' : 'Optional: paste an OpenAI key so Sim can talk with you in real time.';
+$('sim-status').textContent = sim.hasKey() ? 'A key is saved: her voice starts when you start a game.' : 'No key needed to play: Sim talks with the browser’s built-in voice and coaches you. Add an OpenAI key if you want to talk back to her.';
 btnAr.addEventListener('click', () => voiceThenStart(() => enterXR('ar')));
 btnVr.addEventListener('click', () => voiceThenStart(() => enterXR('vr')));
 btnArMini.addEventListener('click', () => enterXR('ar'));

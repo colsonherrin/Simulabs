@@ -110,7 +110,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     attendBoardFor = Math.max(0, attendBoardFor - dt);
     getCamera().getWorldPosition(eyes);
     lookAt.copy(attendBoardFor > 0 ? pointAt : eyes);
-    voiceLevel = Math.max(voice.level(), fallback.level());
+    voiceLevel = Math.max(voice.level(), fallback.level(), builtIn.level());
     avatar.animate(dt, pose, voiceLevel, lookAt, pointAt);
   }
 
@@ -363,6 +363,43 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     };
   })();
 
+  // ---------------------------------------------------------------- the browser's own voice (no key)
+
+  // With no key at all she still talks, using the speech built into the browser. It is a plainer
+  // voice and she cannot hear you, but she explains, coaches and offers hints by herself.
+  const builtIn = (() => {
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+    let speakingUntil = 0;
+    let voice = null;
+    const pick = () => {
+      const all = synth ? synth.getVoices() : [];
+      voice = all.find((v) => /en[-_]US/i.test(v.lang) && /female|samantha|zira|aria|jenny|google us/i.test(v.name)) || all.find((v) => /^en/i.test(v.lang)) || all[0] || null;
+    };
+    if (synth) {
+      pick();
+      if (synth.addEventListener) synth.addEventListener('voiceschanged', pick);
+    }
+    return {
+      available: () => !!synth,
+      speak(text) {
+        if (!synth) return false;
+        try {
+          const u = new SpeechSynthesisUtterance(text.replace(/^Sim:\s*/, ''));
+          if (voice) u.voice = voice;
+          u.rate = 1.05;
+          u.onstart = () => { speakingUntil = performance.now() + 60000; };
+          u.onend = u.onerror = () => { speakingUntil = 0; };
+          synth.speak(u);
+          return true;
+        } catch (e) {
+          return false;
+        }
+      },
+      /** No real loudness is available for this voice: move the mouth in a talking rhythm while it speaks. */
+      level: () => (performance.now() < speakingUntil ? 0.35 + 0.3 * Math.abs(Math.sin(performance.now() / 70)) * Math.abs(Math.sin(performance.now() / 310)) : 0),
+    };
+  })();
+
   // ---------------------------------------------------------------- the game, as she hears it
 
   /** Tell her (by voice if live, otherwise as text on screen). `spoken` is what to show without a voice. */
@@ -370,7 +407,10 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     const heard = voice.tell(`[game] ${text}`, speak);
     if (!heard && speak && spoken && voice.state() !== 'connecting') {
       say(spoken);
-      fallback.speak(spoken);
+      let key = '';
+      try { key = storage.getItem(KEY_NAME) || ''; } catch (e) { /* none */ }
+      if (key) fallback.speak(spoken);
+      else builtIn.speak(spoken);
     }
   }
   const boardNow = () => `\nBoard now:\n${boardText(getGame().board)}`;
@@ -411,8 +451,19 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
       return m;
     },
 
+    /** The user has been thinking a while: point at a good move and say why. */
+    offerHint(game) {
+      if (game.phase !== 'play' || game.turn !== human) return;
+      const m = bestMove(game.board, human, record, () => 0);
+      if (!m) return;
+      reachFor(m.from.r, m.from.c);
+      report(`The user has been thinking for a while. Offer this as a friendly hint, in one or two sentences: ${m.text}, because ${m.reason}.`, true, `Sim: Here's an idea: ${m.text}, because ${m.reason}.`);
+    },
+    /** True if she can talk in any way at all in this browser. */
+    canSpeak: () => voice.state() === 'live' || builtIn.available(),
+
     gameStarted() {
-      report(`A new game has started. You are Violet, the user is Gold and moves first. Their record in duels so far: ${record.summary()}. Greet them in one sentence and, if they have fought no duels yet, offer to teach them as you play.${boardNow()}`, true, 'Sim: Your move first. Ask me for a hint any time.');
+      report(`A new game has started. You are Violet, the user is Gold and moves first. Their record in duels so far: ${record.summary()}. Greet them in one sentence and, if they have fought no duels yet, offer to teach them as you play.${boardNow()}`, true, "Sim: I'm Sim, and I play Violet. Every piece steps one square in any direction. Archers and swordsmen can attack a piece next to them, and that starts a duel you fight yourself. Strike my monarch to win, and keep yours away from my pieces. You move first.");
     },
 
     /** The user is about to play `action` on `boardBefore`. */
@@ -430,16 +481,16 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
 
     sheMoved(boardBefore, action) {
       const threat = /threatens/.test(action.reason);
-      report(`You played: ${describeAction(boardBefore, action)}. Your reason: ${action.reason}.${boardNow()}`, threat || Math.random() < 0.3, threat ? 'Sim: Watch your monarch.' : '');
+      report(`You played: ${describeAction(boardBefore, action)}. Your reason: ${action.reason}.${boardNow()}`, threat || Math.random() < (voice.state() === 'live' ? 0.3 : 0.25), threat ? 'Sim: Watch your monarch.' : voice.state() === 'live' ? '' : `Sim: I'll play my ${describeAction(boardBefore, action)}.`);
     },
 
     duelStarting(humanType, foeType, sheAttacks) {
-      report(sheAttacks ? `You attacked the user's ${humanType === 'A' ? 'archer' : 'swordsman'} with your ${foeType === 'A' ? 'archer' : 'swordsman'}. They are now fighting the duel to defend it. Say one short line.` : `The user attacked your ${foeType === 'A' ? 'archer' : 'swordsman'} with their ${humanType === 'A' ? 'archer' : 'swordsman'} and is now fighting the duel.`, sheAttacks, '');
+      report(sheAttacks ? `You attacked the user's ${humanType === 'A' ? 'archer' : 'swordsman'} with your ${foeType === 'A' ? 'archer' : 'swordsman'}. They are now fighting the duel to defend it. Say one short line.` : `The user attacked your ${foeType === 'A' ? 'archer' : 'swordsman'} with their ${humanType === 'A' ? 'archer' : 'swordsman'} and is now fighting the duel.`, sheAttacks, sheAttacks ? `Sim: I'm attacking your ${humanType === 'A' ? 'archer' : 'swordsman'}. Defend it!` : '');
     },
 
     duelEnded(humanType, foeType, humanWon) {
       record.record(humanType, foeType, humanWon);
-      report(`The duel is over: the user ${humanWon ? 'won' : 'lost'} it. Their record: ${record.summary()}. React in one sentence${humanWon ? '' : ', and if they have lost this kind of duel more than once give one practical tip for it'}.${boardNow()}`, true, humanWon ? '' : 'Sim: That one is mine.');
+      report(`The duel is over: the user ${humanWon ? 'won' : 'lost'} it. Their record: ${record.summary()}. React in one sentence${humanWon ? '' : ', and if they have lost this kind of duel more than once give one practical tip for it'}.${boardNow()}`, true, humanWon ? 'Sim: Nicely fought.' : 'Sim: That one is mine.');
     },
 
     gameOver(winner) {
