@@ -2,6 +2,7 @@
 // The game exposes its three.js constructors on window.__cf3 and calls window.__cfTick each frame.
 
 import { SimulacraCore, xrToProtocol, protocolToXr } from '../spectacles/Assets/Scripts/SimulacraCore.ts';
+import { startLocal } from './local-backend.ts';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 
@@ -30,6 +31,39 @@ let parkedAt = null;
 let commanded = false;
 let lastStatus = '';
 const halfDuplex = params.has('halfduplex') ? params.get('halfduplex') !== '0' : isQuest;
+const voiceDbg = { sent: 0, sentAt: 0, rxAudio: 0, micError: '' };
+let micLevel = 0;
+let micStream = null;
+const micWaiters = new Set();
+let voiceAnalyser = null;
+let voiceSource = null;
+const voiceElement = new Audio();
+voiceElement.autoplay = true;
+const media = {
+  onMic(cb) {
+    if (micStream) cb(micStream);
+    micWaiters.add(cb);
+    return () => micWaiters.delete(cb);
+  },
+  onVoice(stream) {
+    voiceElement.srcObject = stream;
+    if (voiceSource) voiceSource.disconnect();
+    voiceSource = null;
+    voiceAnalyser = null;
+    if (!stream) return;
+    voiceDbg.rxAudio++;
+    voiceElement.play().catch(() => {});
+    const ctx = audioContext();
+    voiceSource = ctx.createMediaStreamSource(stream);
+    voiceAnalyser = ctx.createAnalyser();
+    voiceAnalyser.fftSize = 512;
+    voiceSource.connect(voiceAnalyser);
+  },
+};
+
+function savedKey() {
+  try { return localStorage.getItem('simulacra.openaiKey') || ''; } catch (e) { return ''; }
+}
 
 function audioContext() {
   if (!audio) {
@@ -57,6 +91,7 @@ function playAudio(samples) {
   nextPlay += buffer.duration;
   playing.add(src);
   src.onended = () => playing.delete(src);
+  voiceDbg.rxAudio++;
 }
 
 function stopAudio() {
@@ -68,8 +103,9 @@ function stopAudio() {
 }
 
 function speechLevel() {
-  if (!analyser || playing.size === 0) return 0;
-  analyser.getByteTimeDomainData(levelBuf);
+  const source = voiceAnalyser || (playing.size > 0 ? analyser : null);
+  if (!source) return 0;
+  source.getByteTimeDomainData(levelBuf);
   let sum = 0;
   for (let i = 0; i < levelBuf.length; i++) {
     const v = (levelBuf[i] - 128) / 128;
@@ -83,6 +119,8 @@ function viewCamera(ctx) {
 }
 
 let socket = null;
+let local = null;
+let generation = 0;
 const host = {
   send: (text) => {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(text);
@@ -126,11 +164,39 @@ function defaultBackend() {
   return '';
 }
 
+function connectLocal(key) {
+  const mine = ++generation;
+  if (local) {
+    try { local.close(); } catch (e) { /* replacing it */ }
+    local = null;
+  }
+  if (socket && socket.close) {
+    socket.onclose = null;
+    try { socket.close(); } catch (e) { /* replacing it */ }
+  }
+  setStatus('Starting her voice in this game…');
+  try {
+    local = startLocal(key, (text) => { if (mine === generation) core.onMessage(text); }, media, params.get('mind') === 'audio' ? 'audio' : 'realtime');
+  } catch (e) {
+    setStatus('Her voice could not start. ' + (e && e.message ? e.message : e));
+    return;
+  }
+  socket = { readyState: WebSocket.OPEN, send: (text) => local && local.send(text), close: () => {} };
+  core.onOpen();
+  const link = $('companion-link');
+  if (link) link.hidden = true;
+}
+
 function connect(base) {
   const url = deviceUrl(base);
   if (!url) {
-    setStatus('The companion is beside the board. Add the laptop address to connect the AI.');
+    setStatus('She is beside the board. Paste an OpenAI key, or a laptop address.');
     return;
+  }
+  const mine = ++generation;
+  if (local) {
+    try { local.close(); } catch (e) { /* using the laptop instead */ }
+    local = null;
   }
   if (socket) {
     socket.onclose = null;
@@ -139,16 +205,18 @@ function connect(base) {
   setStatus('Connecting the companion…');
   socket = new WebSocket(url);
   socket.onopen = () => {
+    if (mine !== generation) return;
     core.onOpen();
     setStatus('Companion connected.');
     const link = $('companion-link');
     if (link) link.hidden = true;
   };
-  socket.onmessage = (e) => { if (typeof e.data === 'string') core.onMessage(e.data); };
+  socket.onmessage = (e) => { if (typeof e.data === 'string' && mine === generation) core.onMessage(e.data); };
   socket.onclose = () => {
+    if (mine !== generation) return;
     core.onClose();
     setStatus('Companion disconnected. Retrying…');
-    setTimeout(() => connect(base), 2000);
+    setTimeout(() => { if (mine === generation) connect(base); }, 2000);
   };
   socket.onerror = () => { /* onclose follows */ };
 }
@@ -163,6 +231,11 @@ function setStatus(text) {
   if (el) el.textContent = line;
 }
 
+function applyMute() {
+  if (!micStream) return;
+  for (const track of micStream.getAudioTracks()) track.enabled = !userMuted;
+}
+
 async function startMic() {
   if (micOn || micOpening) return micOn;
   micOpening = true;
@@ -174,13 +247,22 @@ async function startMic() {
     const node = new AudioWorkletNode(ctx, 'crownfall-mic');
     node.port.onmessage = (e) => {
       const samples = e.data;
+      let sum = 0;
+      for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+      micLevel = Math.max(Math.sqrt(sum / samples.length), micLevel * 0.9);
+      voiceDbg.sent++;
+      voiceDbg.sentAt = performance.now();
       core.pushMic(samples, samples.length, ctx.sampleRate);
     };
     ctx.createMediaStreamSource(stream).connect(node);
+    micStream = stream;
+    applyMute();
+    for (const cb of micWaiters) cb(stream);
     micOn = true;
     return true;
   } catch (e) {
-    setStatus('Microphone unavailable. You can still type to the companion.');
+    voiceDbg.micError = e && e.message ? e.message : String(e);
+    setStatus('Microphone unavailable. You can still type to her.');
     return false;
   } finally {
     micOpening = false;
@@ -199,6 +281,7 @@ function pollA(renderer) {
   }
   if (down && !aWasDown) {
     userMuted = !userMuted;
+    applyMute();
     if (!userMuted) startMic();
     setStatus(userMuted ? 'Companion muted.' : 'Companion listening.');
   }
@@ -462,11 +545,90 @@ function placeBeside(board) {
   core.upsert('crownfall', 'board game', xrToProtocol(boardPos.x, boardPos.y, boardPos.z), { x: 0.5, y: 0.08, z: 0.5 }, 'manual');
 }
 
+let voiceMesh = null;
+let voiceCanvasCtx = null;
+let voiceTex = null;
+let voiceShown = '';
+const voiceCamP = new THREE.Vector3();
+const voiceCamD = new THREE.Vector3();
+const voiceRight = new THREE.Vector3();
+const voiceWant = new THREE.Vector3();
+
+function voiceDebugText() {
+  const sentAge = voiceDbg.sentAt ? (performance.now() - voiceDbg.sentAt) / 1000 : null;
+  const loud = Math.max(0, Math.min(10, Math.round(micLevel * 18)));
+  const meter = '█'.repeat(loud) + '·'.repeat(10 - loud);
+  const mic = !micOn ? 'OFF — press A or Talk' : userMuted ? 'muted  ' + meter : core.micMuted ? 'quiet while she talks  ' + meter : 'LIVE  ' + meter;
+  const hearing = voiceDbg.sent === 0 ? 'nothing sent yet' : voiceDbg.sent + ' frames' + (sentAge === null ? '' : ', last ' + sentAge.toFixed(1) + 's ago');
+  return [
+    'VOICE',
+    'link ' + (core.connected ? 'connected' : 'down') + '   brain ' + core.brain + '   sound ' + (audio ? audio.state : 'off'),
+    'mic  ' + mic,
+    'out  ' + hearing + '   voice back ' + (voiceAnalyser ? 'live call' : voiceDbg.rxAudio + ' packets'),
+    core.lastTranscript || 'you  (nothing heard yet)',
+    core.lastAction ? 'do   ' + core.lastAction : 'do   (no action yet)',
+    voiceDbg.micError ? 'err  ' + voiceDbg.micError : core.lastError ? 'err  ' + core.lastError : '',
+  ].filter(Boolean).join('\n');
+}
+
+function ensureVoicePanel(scene) {
+  if (!voiceMesh) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 768;
+    voiceCanvasCtx = canvas.getContext('2d');
+    voiceTex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) voiceTex.colorSpace = THREE.SRGBColorSpace;
+    voiceMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.7, 0.525),
+      new THREE.MeshBasicMaterial({ map: voiceTex, transparent: true, depthTest: false }),
+    );
+    voiceMesh.name = 'voice-debug';
+    voiceMesh.renderOrder = 11;
+    voiceMesh.frustumCulled = false;
+  }
+  if (voiceMesh.parent !== scene) scene.add(voiceMesh);
+}
+
+function updateVoicePanel(ctx, dt, text) {
+  const show = ctx.renderer.xr.isPresenting && params.get('log') !== '0';
+  if (!show) {
+    if (voiceMesh) voiceMesh.visible = false;
+    return;
+  }
+  ensureVoicePanel(ctx.scene);
+  voiceMesh.visible = true;
+  if (text !== voiceShown) {
+    voiceShown = text;
+    voiceCanvasCtx.clearRect(0, 0, 1024, 768);
+    voiceCanvasCtx.fillStyle = 'rgba(10, 14, 18, 0.86)';
+    voiceCanvasCtx.beginPath();
+    voiceCanvasCtx.roundRect(0, 0, 1024, 768, 28);
+    voiceCanvasCtx.fill();
+    voiceCanvasCtx.font = '30px ui-monospace, monospace';
+    text.split('\n').slice(0, 16).forEach((line, i) => {
+      voiceCanvasCtx.fillStyle = i === 0 ? '#f4c06a' : line.startsWith('err') || line.includes('failed') ? '#ff8d7a' : '#e7f0df';
+      voiceCanvasCtx.fillText(line.length > 48 ? line.slice(0, 47) + '…' : line, 36, 58 + i * 44);
+    });
+    voiceTex.needsUpdate = true;
+  }
+  const cam = viewCamera(ctx);
+  cam.getWorldPosition(voiceCamP);
+  cam.getWorldDirection(voiceCamD);
+  voiceCamD.y = 0;
+  if (voiceCamD.lengthSq() < 1e-6) voiceCamD.set(0, 0, -1);
+  voiceCamD.normalize();
+  voiceRight.crossVectors(voiceCamD, UP).normalize();
+  voiceWant.copy(voiceCamP).addScaledVector(voiceCamD, 0.9).addScaledVector(voiceRight, 0.42).add(new THREE.Vector3(0, -0.08, 0));
+  voiceMesh.position.lerp(voiceWant, Math.min(1, dt * 6));
+  voiceMesh.lookAt(voiceCamP);
+}
+
 function tick(ctx) {
   latest = ctx;
   const dt = Math.min(0.1, ctx.dt || 0.016);
   if (ctx.renderer.xr.isPresenting) pollA(ctx.renderer);
-  core.micMuted = userMuted || (halfDuplex && core.speakingFor > 0);
+  core.micMuted = userMuted || (halfDuplex && core.speakingFor > 0 && !voiceAnalyser);
   if (core.lastAction && /walk|follow|approach|stop/.test(core.lastAction)) commanded = true;
 
   const board = ctx.board;
@@ -491,8 +653,13 @@ function tick(ctx) {
   poseAvatar(dt, metres, ctx);
   const say = $('companion-say');
   if (say) say.hidden = ctx.renderer.xr.isPresenting;
+  const voiceLog = voiceDebugText();
+  updateVoicePanel(ctx, dt, voiceLog);
+  const voicePre = $('companion-voice');
+  if (voicePre && !ctx.renderer.xr.isPresenting) voicePre.textContent = voiceLog;
   if (modelNote) setStatus(modelNote);
-  else if (core.connected) setStatus(core.brain && core.brain !== '-' ? 'Companion here · ' + core.brain + '.' : 'Companion connected.');
+  else if (core.connected) setStatus(core.brain && core.brain !== '-' ? 'She is here · ' + core.brain + '.' : 'She is connected.');
+  else if (!socket && !local) setStatus('She is beside the board. Paste an OpenAI key to talk.');
 }
 
 function boot() {
@@ -534,15 +701,36 @@ function boot() {
   if (talk) {
     talk.addEventListener('click', () => {
       userMuted = false;
+      applyMute();
       startMic();
       setStatus('Companion listening.');
+    });
+  }
+  const keyForm = $('companion-key');
+  const keyInput = $('companion-key-input');
+  if (keyForm) {
+    keyForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const k = (keyInput && keyInput.value || '').trim().replace(/^["']|["']$/g, '');
+      if (!k) return;
+      try { localStorage.setItem('simulacra.openaiKey', k); } catch (err) { /* private mode */ }
+      if (keyInput) keyInput.value = '';
+      audioContext();
+      connectLocal(k);
+      userMuted = false;
+      startMic();
     });
   }
   for (const id of ['btn-ar', 'btn-vr', 'btn-play', 'btn-ar-mini', 'btn-vr-mini']) {
     const button = $(id);
     if (button) button.addEventListener('click', () => { audioContext(); startMic(); });
   }
-  connect(backend);
+  const explicit = params.get('backend');
+  const key = savedKey();
+  if (explicit) connect(explicit);
+  else if (key) connectLocal(key);
+  else if (backend) connect(backend);
+  else setStatus(savedKey() ? 'A key is saved.' : 'Paste an OpenAI key and she will talk to you in this game. A laptop address works too.');
 }
 
 boot();
