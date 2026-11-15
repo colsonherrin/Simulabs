@@ -289,7 +289,8 @@ export function dressMedieval(avatar) {
     bone.attach(obj);
   };
   const c = circlet();
-  place(c, headP.clone().add(new THREE.Vector3(0, 0.15, 0.0)), head);
+  // One inch forward of the head bone so the band clears her forehead.
+  place(c, headP.clone().add(new THREE.Vector3(0, 0.15, 0.025)), head);
 
   const b = avatar.body.bones;
   const metal = steel();
