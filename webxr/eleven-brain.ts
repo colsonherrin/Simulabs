@@ -12,6 +12,7 @@ export class ElevenBrain implements Brain {
   private closed = false;
   private lastContext = '';
   private contextTimer: any = null;
+  private reconnects = 0;
 
   constructor(
     private ctx: BrainContext,
@@ -37,9 +38,12 @@ export class ElevenBrain implements Brain {
       onConnect: () => ctx.log('info', `voice agent connected (${connectionType})`),
       onDisconnect: (d: any) => {
         if (this.closed) return;
-        ctx.log('error', `The voice connection ended${d?.reason ? ` (${d.reason}${d.message ? ': ' + d.message : ''})` : ''}. Reload the page to reconnect.`);
         this.onVoiceLevel(null);
         this.conv = null;
+        // Sessions have a maximum length and networks drop: pick the conversation back up by itself.
+        ctx.log('warn', `voice connection ended${d?.reason ? ` (${d.reason}${d.message ? ': ' + d.message : ''})` : ''}; reconnecting`);
+        const wait = Math.min(15000, 1500 * 2 ** this.reconnects++);
+        setTimeout(() => !this.closed && this.start().then(() => (this.reconnects = 0), (e) => ctx.log('error', `Could not reconnect her voice: ${e?.message ?? e}. Reload the page.`)), wait);
       },
       onError: (message: string) => ctx.log('error', `voice agent: ${message}`),
       onMessage: (m: any) => ctx.send({ type: 'transcript', role: m.source === 'user' ? 'user' : 'assistant', text: String(m.message) }),
@@ -58,6 +62,7 @@ export class ElevenBrain implements Brain {
         return 0;
       }
     });
+    this.lastContext = '';
     this.refreshContext();
   }
 

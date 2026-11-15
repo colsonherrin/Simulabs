@@ -72,7 +72,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
   // ---------------------------------------------------------------- body
 
   const assetBase = new URL('avatar/', document.baseURI).href;
-  const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase });
+  const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase, lite: /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent) });
   let loaded = false;
   avatar.load().then(() => { loaded = true; });
   const pose = { x: 0, y: 0, z: 0, yaw: 0, speed01: 0, gesture: '', metres: 0 };

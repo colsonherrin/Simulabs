@@ -33,6 +33,8 @@ export const TOOLS: ToolDef[] = [
   { type: 'function', name: 'remember_object', description: 'Save a short note about an object to long-term memory (kept across sessions).', parameters: obj({ id: { type: 'string' }, note: { type: 'string', description: 'One short factual sentence.' } }, ['id', 'note']) },
   { type: 'function', name: 'scan_surroundings', description: "Look through the headset camera (the user's current view) and detect real objects. New objects appear in the world state. Outcome arrives later as an [action_result].", parameters: obj() },
   { type: 'function', name: 'register_marker', description: 'Register the spot the user is pointing or looking at as a named object, when the user tells you what something is ("this is my desk"). It is stored as registered-by-user, never as camera-detected.', parameters: obj({ label: { type: 'string', description: 'Lowercase singular noun, e.g. "chair".' } }, ['label']) },
+  { type: 'function', name: 'stand_by_user', description: 'Take a place beside the user, relative to the way they are facing: on their left, on their right, in front of them, or behind them. Use for "stand to my left", "come stand next to me", "get behind me". Outcome arrives later as an [action_result].', parameters: obj({ side: { type: 'string', enum: ['left', 'right', 'front', 'behind'], description: "Which side of the user, from the user's point of view." } }, ['side']) },
+  { type: 'function', name: 'step', description: 'Take a short walk in a direction without a target: forward, back, left or right from your own point of view, or closer to / away from the user. Use for "take a step forward", "back up a bit", "move over to the right", "come a little closer". Outcome arrives later as an [action_result].', parameters: obj({ direction: { type: 'string', enum: ['forward', 'back', 'left', 'right', 'closer', 'away'], description: 'forward/back/left/right are from your own point of view; closer/away are relative to the user.' }, metres: { type: 'number', description: 'How far, 0.3 to 2. One step is about 0.6.' } }, ['direction']) },
   { type: 'function', name: 'follow_user', description: 'Keep following the user around at a comfortable distance until told to stop or given another movement. The body handles the walking by itself.', parameters: obj() },
   { type: 'function', name: 'gesture', description: 'Make a body gesture.', parameters: obj({ type: { type: 'string', enum: ['wave', 'nod', 'shake_head', 'shrug'] } }, ['type']) },
   { type: 'function', name: 'stop_moving', description: 'Stop walking or following immediately.', parameters: obj() },
@@ -120,6 +122,19 @@ export class SkillExecutor {
         }
         case 'gesture':
           return await this.runPrimitive('gesture', String(args.type ?? ''));
+        case 'stand_by_user':
+        case 'step': {
+          const params = name === 'step' ? { direction: String(args.direction ?? ''), metres: Math.max(0.3, Math.min(2, Number(args.metres) || 0.6)) } : { side: String(args.side ?? '') };
+          const allowed = name === 'step' ? ['forward', 'back', 'left', 'right', 'closer', 'away'] : ['left', 'right', 'front', 'behind'];
+          const chosen = name === 'step' ? params.direction : params.side;
+          if (!allowed.includes(chosen as string)) return this.fail(name, undefined, `${name === 'step' ? 'direction' : 'side'} must be one of ${allowed.join(', ')}`);
+          this.background(name, chosen, async () => {
+            const r = await this.device.request(name as ActionName, undefined, params, MOVE_TIMEOUT);
+            this.record(name, chosen, r.status, r.reason);
+            return { status: r.status, skill: name, [name === 'step' ? 'direction' : 'side']: chosen, reason: r.reason, ...r.data };
+          });
+          return { status: 'started', note: 'In progress. Say a brief acknowledgement now; the outcome will arrive as an [action_result].' };
+        }
         case 'run_sequence':
           return this.runSequence(args);
         case 'stop_moving': {

@@ -445,7 +445,7 @@ function connect() {
 
 // ---------------------------------------------------------------- avatar
 
-const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase: './avatar/', height: Number(params.get('height')) || 1.7, placeholder: params.get('avatar') === 'placeholder' });
+const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase: './avatar/', height: Number(params.get('height')) || 1.7, placeholder: params.get('avatar') === 'placeholder', lite: params.has('lite') ? params.get('lite') !== '0' : /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent) });
 const avatarRoot = avatar.root;
 const body = avatar.body;
 const loadAvatar = avatar.load;
@@ -627,7 +627,10 @@ async function enterAR() {
   const hadMic = micOn;
   await startMic();
   await startCamera(); // same reason; and without it she knows only the room scan and what you name
-  const wantDepth = params.get('depth') !== '0';
+  // Hiding her behind real objects needs the headset's depth sensing. It is off unless asked for
+  // (?depth=1): when she is placed somewhere the room scan does not cover, it hides her completely,
+  // and it costs frame rate.
+  const wantDepth = params.get('depth') === '1';
   const init = {
     requiredFeatures: ['local-floor'],
     optionalFeatures: ['plane-detection', 'mesh-detection', 'hand-tracking'],
@@ -660,6 +663,7 @@ async function enterAR() {
   sessionAge = 0;
   sawRoomData = false;
   renderer.xr.setReferenceSpaceType('local-floor');
+  renderer.xr.setFoveation(1); // sharp where you look, cheaper at the edges
   await renderer.xr.setSession(session);
 
   for (let i = 0; i < 2; i++) {
@@ -762,6 +766,7 @@ let movePreview = null;
 let lastTime = 0;
 let lastAvatar = null;
 let placeTry = 0;
+let placeFailedSince = 0;
 const halfDuplex = params.has('halfduplex') ? params.get('halfduplex') !== '0' : isQuest; // headset speakers sit next to the microphones
 
 function frame(timeMs, xrFrame) {
@@ -786,7 +791,13 @@ function frame(timeMs, xrFrame) {
   // Stand the avatar on the floor in front of the user once there is a floor. In AR, wait a moment for the room scan.
   if (!core.placed && room.floorY !== null && now >= placeTry && (previewMode || sessionAge > 1.2)) {
     placeTry = now + 0.5;
-    if (core.placeInFrontOfUser(previewMode ? 2.2 : 1.8)) lastAvatar = null;
+    // If no confirmed floor turns up in front of the user within a few seconds, stand her there anyway.
+    if (!placeFailedSince) placeFailedSince = now;
+    if (core.placeInFrontOfUser(previewMode ? 2.2 : 1.8, now - placeFailedSince > 3)) {
+      lastAvatar = null;
+      placeFailedSince = 0;
+      debugLog('placed in front of the user');
+    }
   }
 
   core.micMuted = halfDuplex && core.speakingFor > 0 && !voiceAnalyser; // a live call cancels its own echo
