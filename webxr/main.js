@@ -224,6 +224,7 @@ const host = {
 
 let previewMode = true;
 const core = new SimulacraCore(host, 'webxr');
+core.wander = params.get('wander') !== '0'; // strolls between requests; ?wander=0 keeps it still
 let socket = null;
 
 /**

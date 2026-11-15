@@ -12,10 +12,18 @@ export interface OpenAIBrainOptions {
   ears: Ears | null;
   mouth: Mouth | null;
   worldEventMinGapMs: number;
+  /**
+   * Set to use a model that listens to the user's audio and answers in audio within one request
+   * (e.g. gpt-audio-mini): no separate transcription before it and no speech synthesis after it.
+   * `ears` must then be in HTTP mode; it only cuts the microphone stream into utterances.
+   */
+  audioModel?: string;
+  voice?: string;
 }
 
 type ChatMessage =
-  | { role: 'system' | 'user'; content: string }
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string | any[] }
   | { role: 'assistant'; content: string | null; tool_calls?: { id: string; type: 'function'; function: { name: string; arguments: string } }[] }
   | { role: 'tool'; tool_call_id: string; content: string };
 
@@ -28,9 +36,33 @@ const GPT_TOOLS = TOOLS.filter((t) => t.name !== 'get_world_state').map((t) => {
   return { type: 'function' as const, function: { name: t.name, description: t.description, parameters: schema } };
 });
 
+/** For the listening model: the same skills without the "say" field, because it speaks for itself. */
+const AUDIO_TOOLS = TOOLS.filter((t) => t.name !== 'get_world_state').map((t) => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: t.parameters } }));
+const AUDIO_RULES = `
+
+# Voice
+You hear the user's own voice and you answer out loud in yours; there is no "say" field. Speak the way people talk: one short sentence, a few words when that is enough. When the user asks you to move or look, call the skill AND say a few words ("On my way.") in the same reply. If you cannot make out what was said, ask them to say it again.
+When an [action_result] arrives, say a few words at most, once, and do not call another skill unless the user's request is still unfinished. Never walk somewhere you were not asked to go.`;
+
+/** Short commands the body obeys the instant they are transcribed, without waiting for the model. */
+const REFLEXES: { re: RegExp; skill: string }[] = [
+  { re: /^(come( on)?( over| back)?( here| to me)|get over here|over here|come here( now)?)$/, skill: 'approach_user' },
+  { re: /^(follow me|come with me|come along|walk with me)$/, skill: 'follow_user' },
+  { re: /^(stop|wait|hold on|freeze|halt|stop moving|stay there|stay)$/, skill: 'stop_moving' },
+];
+const MOVES = new Set(['walk_to', 'approach_user', 'follow_user', 'inspect_object', 'run_sequence', 'run_skill']);
+export function reflexFor(text: string): string | null {
+  const t = text.toLowerCase().replace(/[^a-z' ]+/g, ' ').replace(/\b(hey|hi|ok|okay|sim|please|now|can you|could you|just)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const r of REFLEXES) if (r.re.test(t)) return r.skill;
+  return null;
+}
+
 interface Input {
   kind: 'user' | 'event' | 'note';
   text: string;
+  /** A spoken utterance as a base64 WAV, for the listening model. */
+  audio?: string;
+  utterance?: number;
 }
 
 /**
@@ -40,7 +72,15 @@ interface Input {
  * sentence, and the user speaking again aborts the reply in flight.
  */
 export class OpenAIBrain implements Brain {
-  readonly name = 'gpt';
+  readonly name: string;
+  private utterances = 0;
+  private heardAs = new Map<number, { message?: { role: 'user'; content: string | any[] }; context?: string; text?: string }>();
+  private reflex = { skill: '', at: -1e9 };
+  /**
+   * An answer begun before the end of the user's turn was certain. Nothing of it reaches the
+   * headset until `release` is called; if the user keeps talking it is thrown away unheard.
+   */
+  private early: { release: () => void; gate: Promise<void>; cancelled: boolean; id: number; begin: () => void } | null = null;
   private history: ChatMessage[] = [];
   private inbox: Input[] = [];
   private running = false;
@@ -58,10 +98,17 @@ export class OpenAIBrain implements Brain {
       opts.mouth.onAudio = (pcm16) => this.ctx.send({ type: 'audio', pcm16 });
       opts.mouth.onFirstAudio = () => this.ctx.timer.mark('first_audio');
     }
+    this.name = opts.audioModel ? 'audio' : 'gpt';
     if (opts.ears) {
       opts.ears.onSpeechStart = () => this.ctx.send({ type: 'state', status: 'listening' });
       opts.ears.onSpeechEnd = () => (this.speechEndAt = performance.now());
       opts.ears.onTranscript = (text) => this.heard(text, 'voice');
+      if (opts.audioModel) {
+        opts.ears.onSpeechConfirmed = () => this.cutOff(); // barge-in: a person is talking, stop and listen
+        opts.ears.onEarly = (pcm) => this.heardAudio(pcm, true);
+        opts.ears.onResumed = () => this.discardEarly();
+        opts.ears.onUtterance = (pcm) => (this.early ? this.confirmEarly() : this.heardAudio(pcm, false));
+      }
     }
   }
 
@@ -137,6 +184,64 @@ export class OpenAIBrain implements Brain {
     void this.pump();
   }
 
+  /** An utterance for the listening model: send the sound itself, and transcribe on the side. */
+  private heardAudio(pcm: Buffer, early: boolean) {
+    const { ctx, opts } = this;
+    if (early && (this.running || this.early)) return; // only speculate from rest
+    if (!early) this.cutOff();
+    const id = ++this.utterances;
+    const record: { message?: { role: 'user'; content: string | any[] }; context?: string; text?: string } = {};
+    this.heardAs.set(id, record);
+    if (this.heardAs.size > 8) this.heardAs.delete(this.heardAs.keys().next().value!);
+    const begin = () => ctx.timer.begin('voice', '(speech)', performance.now());
+    if (early) {
+      let release = () => {};
+      const gate = new Promise<void>((r) => (release = r));
+      this.early = { release, gate, cancelled: false, id, begin };
+    } else begin();
+    this.inbox.push({ kind: 'user', text: '[the user said the attached audio]', audio: Ears.wav(pcm).toString('base64'), utterance: id });
+    void this.pump();
+
+    // The words, for the display, for the record, and for reflexes. The model does not wait for them.
+    void opts.ears!.transcribe(pcm).then(async (text) => {
+      if (this.closed || !text || !this.heardAs.has(id)) return; // thrown away: the user kept talking
+      if (this.early?.id === id) await this.early.gate;
+      if (!this.heardAs.has(id)) return;
+      record.text = text;
+      ctx.timer.note({ input: text.slice(0, 80) });
+      ctx.send({ type: 'transcript', role: 'user', text });
+      if (record.message) record.message.content = `${record.context}\n[user said] ${text}`; // the sound is no longer needed
+      const skill = reflexFor(text);
+      if (skill && !(this.reflex.skill === skill && performance.now() - this.reflex.at < 4000)) {
+        this.reflex = { skill, at: performance.now() };
+        ctx.log('info', `reflex ${skill} ("${text}")`);
+        void ctx.skills.execute(skill, {});
+      }
+    });
+  }
+
+  /** The pause held: let the early answer through. */
+  private confirmEarly() {
+    const e = this.early!;
+    this.early = null;
+    this.opts.mouth?.cancel();
+    this.ctx.send({ type: 'audio_stop' });
+    e.begin();
+    e.release();
+  }
+
+  /** The user kept talking: drop the early answer; the whole utterance will come again. */
+  private discardEarly() {
+    const e = this.early;
+    if (!e) return;
+    e.cancelled = true;
+    this.early = null;
+    this.heardAs.delete(e.id);
+    this.inbox = this.inbox.filter((i) => i.utterance !== e.id);
+    this.abort?.abort();
+    e.release();
+  }
+
   private cutOff() {
     this.opts.mouth?.cancel();
     this.ctx.send({ type: 'audio_stop' });
@@ -151,9 +256,31 @@ export class OpenAIBrain implements Brain {
       while (!this.closed && this.inbox.some((i) => i.kind !== 'note')) {
         const inputs = this.inbox.splice(0);
         if (!inputs.some((i) => i.kind === 'user') && inputs.some((i) => i.kind === 'event')) this.ctx.timer.begin('event', inputs.find((i) => i.kind === 'event')!.text);
-        this.history.push({ role: 'user', content: `[context]\n${this.ctx.world.contextText()}\nmemory:\n${this.ctx.memory.summary()}\n[/context]\n${inputs.map((i) => i.text).join('\n')}` });
+        const context = `[context]\n${this.ctx.world.contextText()}\nmemory:\n${this.ctx.memory.summary()}\n[/context]`;
+        const spoken = inputs.filter((i) => i.audio);
+        const said = spoken[spoken.length - 1]; // if several utterances queued up, the latest is the one to answer
+        const text = `${context}\n${inputs.filter((i) => !i.audio || i === said).map((i) => i.text).join('\n')}`;
+        // Sound from earlier turns is dropped (their transcripts replaced it, or it is simply gone): only the newest utterance is sent as audio.
+        for (const m of this.history) if (m.role === 'user' && Array.isArray(m.content)) m.content = String(m.content[0]?.text ?? '').replace('[the user said the attached audio]', '[user said something that was not transcribed]');
+        const message: { role: 'user'; content: string | any[] } = { role: 'user', content: said ? [{ type: 'text', text }, { type: 'input_audio', input_audio: { data: said.audio, format: 'wav' } }] : text };
+        if (said) {
+          const record = this.heardAs.get(said.utterance!);
+          if (record) {
+            record.message = message;
+            record.context = context;
+            if (record.text) message.content = `${context}\n[user said] ${record.text}`;
+          }
+        }
+        this.history.push(message);
+        const speculative = said && this.early?.id === said.utterance ? this.early : null;
         this.trimHistory();
-        for (let hop = 0; hop < 4; hop++) if (!(await this.callOnce())) break;
+        for (let hop = 0; hop < 4; hop++) if (!(await this.callOnce(hop === 0 ? speculative : null))) break;
+        if (speculative?.cancelled) {
+          // As if it never happened.
+          const at = this.history.indexOf(message);
+          if (at >= 0) this.history.splice(at);
+          this.inbox = this.inbox.filter((i) => !i.text.startsWith('[note] You were interrupted'));
+        }
       }
     } catch (e) {
       this.ctx.log('error', `OpenAI brain error: ${(e as any)?.message ?? e}`);
@@ -164,7 +291,7 @@ export class OpenAIBrain implements Brain {
   }
 
   /** One streamed request. Returns true if the model must see a failed tool result right away. */
-  private async callOnce(): Promise<boolean> {
+  private async callOnce(early: { gate: Promise<void>; cancelled: boolean } | null = null): Promise<boolean> {
     const { ctx, opts } = this;
     const abort = (this.abort = new AbortController());
     const timeout = setTimeout(() => abort.abort(), 20_000); // a hung request must not freeze the character
@@ -179,6 +306,7 @@ export class OpenAIBrain implements Brain {
     let chain: Promise<unknown> = Promise.resolve();
     let spoken = '';
     let first = true;
+    let voiced = false;
     const chunker = new SentenceChunker((sentence) => this.speak(sentence));
     // A tool call is complete when the next one begins or the stream ends: act on it then, not at the end of the reply.
     const dispatch = (index: number) => {
@@ -192,7 +320,11 @@ export class OpenAIBrain implements Brain {
       const res = await fetch(`${opts.baseUrl ?? 'https://api.openai.com/v1'}/chat/completions`, {
         method: 'POST',
         headers: { authorization: `Bearer ${opts.apiKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: opts.model, stream: true, messages: [{ role: 'system', content: SYSTEM }, ...this.history], tools: GPT_TOOLS, ...(opts.effort ? { reasoning_effort: opts.effort } : {}) }),
+        body: JSON.stringify(
+          opts.audioModel
+            ? { model: opts.audioModel, stream: true, modalities: ['text', 'audio'], audio: { voice: opts.voice ?? 'alloy', format: 'pcm16' }, messages: [{ role: 'system', content: SYSTEM + AUDIO_RULES }, ...this.history], tools: AUDIO_TOOLS }
+            : { model: opts.model, stream: true, messages: [{ role: 'system', content: SYSTEM }, ...this.history], tools: GPT_TOOLS, ...(opts.effort ? { reasoning_effort: opts.effort } : {}) },
+        ),
         signal: abort.signal,
       });
       if (!res.ok || !res.body) {
@@ -216,10 +348,25 @@ export class OpenAIBrain implements Brain {
             continue;
           }
           if (!delta) continue;
+          if (early) {
+            await early.gate; // hold everything until the user's turn is known to be over
+            if (early.cancelled) throw new Error('discarded');
+          }
           if (first) {
             first = false;
             ctx.timer.mark('llm_first_token');
           }
+          if (delta.audio?.data) {
+            // The model's own voice, passed straight through to the headset.
+            if (!voiced) {
+              voiced = true;
+              ctx.timer.mark('speech_text');
+              ctx.timer.mark('first_audio');
+              ctx.send({ type: 'state', status: 'speaking' });
+            }
+            ctx.send({ type: 'audio', pcm16: delta.audio.data });
+          }
+          if (delta.audio?.transcript) spoken += delta.audio.transcript;
           if (typeof delta.content === 'string' && delta.content) {
             spoken += delta.content;
             chunker.push(delta.content);
@@ -238,6 +385,10 @@ export class OpenAIBrain implements Brain {
       }
       clearTimeout(timeout);
       this.abort = null;
+      if (early) {
+        await early.gate;
+        if (early.cancelled) return false;
+      }
       chunker.flush();
       for (let i = 0; i < calls.length; i++) dispatch(i);
 
@@ -254,6 +405,7 @@ export class OpenAIBrain implements Brain {
     } catch (e) {
       clearTimeout(timeout);
       this.abort = null;
+      if (early?.cancelled) return false;
       if (abort.signal.aborted) {
         // The partial reply is not kept. Tell the model what did happen before it was cut off.
         await chain;
@@ -279,6 +431,11 @@ export class OpenAIBrain implements Brain {
     if (invalid) return fail(`Invalid input: ${invalid}`);
 
     const { say, ...args } = input;
+    // The body already obeyed this as a reflex: do not restart the walk.
+    if (performance.now() - this.reflex.at < 4000 && (t.name === this.reflex.skill || (this.reflex.skill !== 'stop_moving' && MOVES.has(t.name)))) {
+      started.push(`${t.name}()`);
+      return { failed: false, content: JSON.stringify({ status: 'started', note: `The body had already obeyed the user by reflex (${this.reflex.skill}); this call was not needed and was not run.` }) };
+    }
     this.ctx.log('info', `skill ${t.name}(${JSON.stringify(args)})`);
     const result = await this.ctx.skills.execute(t.name, args);
     this.ctx.log('info', `  -> ${JSON.stringify(result).slice(0, 300)}`);

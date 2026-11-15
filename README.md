@@ -83,12 +83,22 @@ log, and `http://localhost:8787/metrics` has the running medians.
 
 Which mind runs is set by `BRAIN` in `.env`:
 
-| `BRAIN` | What it is | Speed | Run against the real service? |
-|---|---|---|---|
-| `realtime` (default with an OpenAI key) | OpenAI's live speech-to-speech model hears, thinks and speaks over one connection | the fastest: built for conversation | **no**: checked against OpenAI's published API types and a stand-in only |
-| `gpt` (automatic fallback if the live connection cannot open) | an OpenAI chat model plans; separate speech-to-text and text-to-speech | about 1.5 to 2.5 s from end of speech to voice | **yes** |
-| `claude` | Claude plans; OpenAI hears and speaks | similar to `gpt` or slower | no (no Anthropic key was available) |
-| `mock` | keyword rules, typed text, not AI | instant | n/a |
+| `BRAIN` | What it is | Measured against the real service |
+|---|---|---|
+| `audio` (default with an OpenAI key) | one OpenAI model (`gpt-audio-mini`) hears your voice and answers in its own, in a single request | reply starts 0.8 to 1.2 s after you stop talking; body starts moving at about 0.8 s |
+| `realtime` | OpenAI's live speech-to-speech connection; falls back to `audio` if it cannot start | **never run for real** (needs WebSockets, which the test machine lacks); expected to be the fastest |
+| `gpt` | an OpenAI chat model plans; separate speech-to-text and text-to-speech | about 1.7 s to movement, 2.2 s to speech |
+| `claude` | Claude plans; OpenAI hears and speaks | not run (no Anthropic key) |
+| `mock` | keyword rules, typed text, not AI | n/a |
+
+How `audio` gets its speed: it starts answering after a 120 ms pause and throws that answer away
+unheard if you keep talking; short commands ("come here", "follow me", "stop") move the body by
+reflex as soon as they are transcribed, without waiting for the model; and nothing is transcribed
+before, or synthesised after, the model. `STT_SILENCE_MS` (default 350) is the pause that ends
+your turn.
+
+Between requests the WebXR character strolls around near you and turns to you when you start
+speaking (`?wander=0` turns that off).
 
 In every mind the body starts moving the moment the model's skill call is complete, without
 waiting for the rest of its reply. `REALTIME_SILENCE_MS` (default 350) is the pause that ends your

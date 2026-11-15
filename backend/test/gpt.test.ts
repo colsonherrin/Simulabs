@@ -94,15 +94,59 @@ test('hearing over plain HTTPS: silence is ignored, an utterance is uploaded onc
   cloud.close();
 });
 
-test('with the live speech-to-speech service unreachable, the session falls back to the gpt mind', async () => {
+test('with the live speech-to-speech service unreachable, the session falls back to the audio mind', async () => {
   const cloud = await standIn();
   const { port, close } = await startServer(opts({ url: cloud.url }, { brain: 'realtime', apiKey: 'k', gptBaseUrl: cloud.url, realtimeUrl: 'ws://127.0.0.1:9' }));
   const dev = fakeDevice(port, () => ({ status: 'succeeded' }));
   try {
     await dev.ready;
-    assert.equal(dev.got.find((m) => m.type === 'ready').brain, 'gpt');
+    assert.equal(dev.got.find((m) => m.type === 'ready').brain, 'audio');
     dev.send({ type: 'text', text: 'Hey, come over here.' });
     assert.equal((await dev.waitFor((m) => m.type === 'action')).action, 'approach_user');
+    assert.equal(cloud.requests[0].model, 'gpt-audio-mini');
+    assert.deepEqual(cloud.requests[0].modalities, ['text', 'audio']);
+  } finally {
+    dev.ws.close();
+    await close();
+    cloud.close();
+  }
+});
+
+test('audio mind: answers early, throws the early answer away if the user keeps talking, and obeys short commands by reflex', async () => {
+  const cloud = await standIn();
+  const { port, close } = await startServer(opts({ url: cloud.url }, { brain: 'audio', apiKey: 'k', gptBaseUrl: cloud.url }));
+  const dev = fakeDevice(port, () => ({ status: 'succeeded' }), 400);
+  const frame = (amplitude: number) => {
+    const b = Buffer.alloc(2880); // 60 ms
+    for (let i = 0; i < 1440; i++) b.writeInt16LE(Math.round(Math.sin(i * 0.2) * amplitude * 32767), i * 2);
+    return { type: 'audio', pcm16: b.toString('base64') };
+  };
+  const play = async (amplitude: number, frames: number) => {
+    for (let i = 0; i < frames; i++) {
+      dev.send(frame(amplitude));
+      await sleep(15);
+    }
+  };
+  try {
+    await dev.ready;
+    assert.equal(dev.got.find((m) => m.type === 'ready').brain, 'audio');
+    await play(0.002, 10);
+    await play(0.3, 10); // speech
+    await play(0.002, 3); // a short pause: the answer is begun early ...
+    await sleep(150);
+    assert.equal(cloud.requests.length, 1, 'a request went out before the pause was long enough to be sure');
+    assert.equal(cloud.requests[0].messages.at(-1).content[1].type, 'input_audio');
+    assert.ok(!dev.got.some((m) => m.type === 'action' || m.type === 'audio'), '... but nothing of it reaches the headset yet');
+    await play(0.3, 10); // ... and the user keeps talking: it is thrown away
+    await play(0.002, 8); // now the turn really ends
+    const action = await dev.waitFor((m) => m.type === 'action');
+    // The stand-in transcribes everything as "come over here": the reflex obeys, and the model's own call is not run twice.
+    assert.equal(action.action, 'approach_user');
+    await sleep(300);
+    assert.equal(dev.got.filter((m) => m.type === 'action').length, 1);
+    const last = cloud.requests.at(-1).messages.filter((m: any) => m.role === 'user');
+    assert.equal(last.length, 1, 'the discarded early turn left no trace in the conversation');
+    assert.ok(cloud.uploads.length >= 1);
   } finally {
     dev.ws.close();
     await close();

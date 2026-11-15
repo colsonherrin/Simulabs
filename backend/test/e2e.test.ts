@@ -137,6 +137,7 @@ test('realtime brain: tool call round trip against a fake Realtime upstream', as
     ws.on('message', (raw) => {
       const ev = JSON.parse(raw.toString());
       upstreamGot.push(ev);
+      if (ev.type === 'session.update') ws.send(JSON.stringify({ type: 'session.updated' }));
       if (ev.type !== 'response.create') return;
       turn++;
       ws.send(JSON.stringify({ type: 'response.created' }));

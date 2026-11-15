@@ -146,6 +146,15 @@ export class SimulacraCore {
   userDistance = 1.2;
   /** While true the microphone stream carries silence (echo guard while the avatar speaks). */
   micMuted = false;
+  /**
+   * Life between requests: while nothing is asked of it, the character strolls to something
+   * nearby or a little way off, then drifts back toward the user, instead of standing frozen.
+   * Entirely local (no model call). Any request, and the user starting to speak, takes over at once.
+   */
+  wander = false;
+  private idleFor = 0;
+  private wanderAfter = 6;
+  private wanderOut = true;
 
   readonly objects: WorldObject[] = [];
   readonly avatar: AvatarPose = { pos: { x: 0, y: 0, z: 0 }, yaw: 0, state: 'idle', speed01: 0, gesture: '' };
@@ -220,6 +229,11 @@ export class SimulacraCore {
         break;
       case 'action':
         this.handleAction(m);
+        break;
+      case 'state':
+        // The user started talking: stop strolling and turn to them, like a person would.
+        if (m.status === 'listening') this.attend();
+        if (m.status !== 'idle') this.idleFor = 0;
         break;
       case 'transcript':
         this.lastTranscript = (m.role === 'user' ? 'You: ' : 'Sim: ') + String(m.text);
@@ -473,6 +487,60 @@ export class SimulacraCore {
     return { pos: o.pos, standOff: Math.min(2, Math.max(0.6, foot)) };
   }
 
+  // ---- life between requests
+
+  /** Drop a stroll in progress (never a requested action) and face the user. */
+  private attend(): void {
+    if (this.done || this.following || !this.placed) return;
+    this.goal = this.avatar.pos;
+    this.route = [];
+    this.face = this.userFloor();
+    this.goalTarget = '';
+    this.idleFor = 0;
+  }
+
+  private startStroll(): void {
+    this.idleFor = 0;
+    this.wanderAfter = 6 + Math.random() * 8;
+    const user = this.userFloor();
+    const from = this.avatar.pos;
+    let stand: Vec | null = null;
+    let face: Vec = user;
+    if (this.wanderOut) {
+      // Go and look at something near the user, or failing that a spot a little way off.
+      const near: WorldObject[] = [];
+      for (let i = 0; i < this.objects.length; i++) if (flat(this.objects[i].pos, user) < 3.5 && flat(this.objects[i].pos, from) > 1.2) near.push(this.objects[i]);
+      if (near.length > 0 && Math.random() < 0.7) {
+        const o = near[Math.floor(Math.random() * near.length)];
+        const t = this.resolve(o.id);
+        if (t) stand = this.standPoint(t.pos, t.standOff);
+        if (stand) face = o.pos;
+      }
+      for (let tries = 0; !stand && tries < 6; tries++) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 1.5 + Math.random() * 1.3;
+        const p = { x: user.x + Math.sin(a) * r, y: from.y, z: user.z + Math.cos(a) * r };
+        if (flat(p, from) < 0.8 || !this.host.isFloor(p)) continue;
+        const path = this.planPath(from, p);
+        if (path) {
+          this.planned = path;
+          stand = p;
+        }
+      }
+    } else if (flat(from, user) > this.userDistance + 0.8) {
+      stand = this.standPoint(user, this.userDistance + 0.3); // drift back to the user
+    }
+    this.wanderOut = !this.wanderOut;
+    if (!stand) return;
+    this.goal = this.planned[0];
+    this.route = this.planned.slice(1);
+    this.face = face;
+    this.goalTarget = '';
+    this.stuckFor = 0;
+    this.bestDistance = flat(from, this.goal);
+    this.sideBias = 0;
+  }
+
   // ---- actions
 
   private finish(ok: boolean, reason: string): void {
@@ -676,6 +744,11 @@ export class SimulacraCore {
       this.avatar.state = 'following';
     }
     this.avatar.speed01 = dt > 0 ? Math.min(1, moved / dt / this.walkSpeed) : 0;
+
+    if (this.wander && this.placed && !this.goal && !this.following && this.speakingFor <= 0) {
+      this.idleFor += dt;
+      if (this.idleFor > this.wanderAfter) this.startStroll();
+    } else if (this.done || this.following || this.speakingFor > 0) this.idleFor = 0;
 
     if (this.connected && this.clock >= this.nextWorld) {
       this.nextWorld = this.clock + 0.4;

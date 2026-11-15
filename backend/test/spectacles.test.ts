@@ -219,3 +219,47 @@ test('spectacles core: blocked and unknown targets fail with a reason; microphon
   dev.ws.close();
   await srv.close();
 });
+
+test('life between requests: strolls on the floor when idle, turns to the user when they speak, and yields to a request', async () => {
+  const srv = await startServer({ port: 0, brain: 'mock', realtimeModel: 'x', realtimeVoice: 'v', visionModel: 'x', memoryPath: null, quiet: true });
+  const dev = virtualRoom(srv.port);
+  try {
+    await dev.run(0.5, () => dev.core.brain === 'mock');
+    assert.ok(dev.core.placeInFrontOfUser(1.5));
+    const a = dev.core.avatar;
+    const start = { ...a.pos };
+
+    // Off by default: a character that was not asked to move stays put.
+    await dev.run(20);
+    assert.ok(dev.flat(a.pos, start) < 0.01);
+
+    dev.core.wander = true;
+    dev.core.register('lamp', { x: 1.5, y: -1.0, z: 2.0 }, 'manual');
+    let far = 0, off = 0, maxFromUser = 0;
+    for (let i = 0; i < 90; i++) {
+      await dev.run(1);
+      far = Math.max(far, dev.flat(a.pos, start));
+      maxFromUser = Math.max(maxFromUser, dev.flat(a.pos, dev.room.head));
+      if (!(Math.abs(a.pos.x) < 3 && Math.abs(a.pos.z) < 3) || (Math.abs(a.pos.x - dev.table.x) < dev.table.hx && Math.abs(a.pos.z - dev.table.z) < dev.table.hz)) off++;
+    }
+    assert.ok(far > 0.8, `it moved around (${far.toFixed(2)} m)`);
+    assert.equal(off, 0, 'never off the floor or through the table');
+    assert.ok(maxFromUser < 5, `stays in the user's part of the room (${maxFromUser.toFixed(1)} m)`);
+
+    // The user starts speaking mid-stroll: it stops and turns to face them.
+    await dev.run(30, () => a.state === 'walking');
+    dev.core.onMessage(JSON.stringify({ type: 'state', status: 'listening' }));
+    await dev.run(2.5);
+    const toUser = Math.atan2(dev.room.head.x - a.pos.x, dev.room.head.z - a.pos.z);
+    assert.ok(Math.abs(Math.atan2(Math.sin(toUser - a.yaw), Math.cos(toUser - a.yaw))) < 0.15, 'facing the user');
+    assert.equal(a.state, 'idle');
+
+    // A request always wins, and reports its result as usual.
+    await dev.run(30, () => a.state === 'walking');
+    dev.core.onMessage(JSON.stringify({ type: 'action', id: 'r1', action: 'approach_user' }));
+    assert.ok(await dev.run(12, () => /approach_user user ok/.test(dev.core.lastAction)), dev.core.lastAction);
+  } finally {
+    dev.ws.close();
+    await srv.close();
+  }
+});

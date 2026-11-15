@@ -23,7 +23,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 export interface ServerOptions {
   port: number;
-  brain: 'claude' | 'gpt' | 'realtime' | 'mock';
+  brain: 'claude' | 'gpt' | 'audio' | 'realtime' | 'mock';
+  /** The 'audio' mind: one OpenAI model that listens and answers in audio per request. */
+  audioModel?: string;
+  audioVoice?: string;
+  /** Pause that ends the user's turn for the 'audio' mind and for HTTPS hearing. */
+  sttSilenceMs?: number;
   /** The 'gpt' mind: an OpenAI chat model plans; OpenAI speech models hear and speak. */
   gptModel?: string;
   gptEffort?: string;
@@ -61,12 +66,12 @@ export interface ServerOptions {
 }
 
 /**
- * Which mind runs with the keys at hand. With an OpenAI key: its live speech-to-speech model, the
- * only one fast enough to feel like a conversation. Claude alone has no voice, so it is the
- * default only without an OpenAI key (BRAIN=claude selects it explicitly).
+ * Which mind runs with the keys at hand. With an OpenAI key: the listening 'audio' mind, the fastest
+ * one that has been measured against the real service. Claude alone has no voice, so it is the
+ * default only without an OpenAI key (BRAIN=claude or BRAIN=realtime select the others).
  */
 export function pickBrain(anthropicKey?: string, openaiKey?: string): ServerOptions['brain'] {
-  return openaiKey ? 'realtime' : anthropicKey ? 'claude' : 'mock';
+  return openaiKey ? 'audio' : anthropicKey ? 'claude' : 'mock';
 }
 
 /** Ask the provider whether a key is accepted. 'unknown' means the provider could not be reached. */
@@ -126,15 +131,21 @@ class Session implements DeviceLink {
       this.send({ type: 'metrics', turn: r as unknown as Record<string, unknown> });
     };
     const log = (level: 'info' | 'warn' | 'error', m: string) => this.log(level, m);
-    const gpt = () =>
+    const speech = () => (opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null);
+    const gpt = (listening: boolean) =>
       new OpenAIBrain(ctx, {
         apiKey: opts.apiKey ?? '',
         baseUrl: opts.gptBaseUrl,
         model: opts.gptModel ?? 'gpt-5.4-mini',
         effort: opts.gptEffort ?? 'none',
-        ears: opts.apiKey && !opts.gptBaseUrl ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl, mode: opts.sttMode }, log) : null,
-        mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
+        ears: listening
+          ? new Ears({ apiKey: opts.apiKey ?? '', model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', mode: 'http', httpBaseUrl: opts.gptBaseUrl, silenceMs: opts.sttSilenceMs }, log)
+          : opts.apiKey && !opts.gptBaseUrl
+            ? new Ears({ apiKey: opts.apiKey, model: opts.realtimeModel, transcribeModel: opts.sttModel ?? 'gpt-4o-mini-transcribe', url: opts.realtimeUrl, mode: opts.sttMode, silenceMs: opts.sttSilenceMs }, log)
+            : null,
+        mouth: speech(),
         worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
+        ...(listening ? { audioModel: opts.audioModel ?? 'gpt-audio-mini', voice: opts.audioVoice ?? 'alloy' } : {}),
       });
     if (opts.brain === 'mock') this.brain = new MockBrain(ctx);
     else if (opts.brain === 'claude')
@@ -149,7 +160,8 @@ class Session implements DeviceLink {
         mouth: opts.apiKey || opts.ttsBaseUrl ? new Mouth({ apiKey: opts.ttsApiKey ?? opts.apiKey ?? '', model: opts.ttsModel ?? 'gpt-4o-mini-tts', voice: opts.realtimeVoice, baseUrl: opts.ttsBaseUrl }, log) : null,
         worldEventMinGapMs: (opts.worldEventMinGapSec ?? 8) * 1000,
       });
-    else if (opts.brain === 'gpt') this.brain = gpt();
+    else if (opts.brain === 'gpt') this.brain = gpt(false);
+    else if (opts.brain === 'audio') this.brain = gpt(true);
     else this.brain = new RealtimeBrain(ctx, { apiKey: opts.apiKey!, model: opts.realtimeModel, voice: opts.realtimeVoice, url: opts.realtimeUrl, silenceMs: opts.realtimeSilenceMs });
     this.skills.onFeedback = (outcome) => {
       this.log('info', `feedback ${JSON.stringify(outcome).slice(0, 300)}`);
@@ -178,9 +190,9 @@ class Session implements DeviceLink {
         // The live speech-to-speech connection is the fastest mind but needs WebSockets to OpenAI.
         // If it cannot be opened, think, hear and speak through separate requests instead: slower, but it works.
         if (this.brain.name === 'realtime' && !opts.brainFixed && opts.apiKey) {
-          this.log('warn', `live speech-to-speech is unavailable (${e?.message ?? e}); using the slower 'gpt' mind instead.`);
+          this.log('warn', `live speech-to-speech is unavailable (${e?.message ?? e}); using the 'audio' mind instead.`);
           this.brain.close();
-          this.brain = gpt();
+          this.brain = gpt(true);
           return this.brain.start().then(ready);
         }
         this.log('error', `brain failed to start: ${e?.message ?? e}. Check OPENAI_API_KEY / network.`);
@@ -456,7 +468,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const env = process.env;
   // Default: Claude plans if it has credentials; otherwise an OpenAI model plans; otherwise the mock.
   let brain = (env.BRAIN ?? pickBrain(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN, env.OPENAI_API_KEY)) as ServerOptions['brain'];
-  if ((brain === 'realtime' || brain === 'gpt') && !env.OPENAI_API_KEY) {
+  if ((brain === 'realtime' || brain === 'gpt' || brain === 'audio') && !env.OPENAI_API_KEY) {
     console.warn('OPENAI_API_KEY is not set: starting with the MOCK brain (typed text, keyword rules, no AI, no voice).');
     brain = 'mock';
   }
@@ -469,6 +481,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     claudeModel: env.PLANNER_MODEL ?? 'claude-opus-5-5',
     claudeEffort: (env.PLANNER_EFFORT as ServerOptions['claudeEffort']) ?? 'low',
     claudeFast: env.PLANNER_FAST === '1',
+    audioModel: env.AUDIO_MODEL,
+    audioVoice: env.AUDIO_VOICE,
+    sttSilenceMs: env.STT_SILENCE_MS ? Number(env.STT_SILENCE_MS) : undefined,
     gptModel: env.OPENAI_PLANNER_MODEL,
     gptEffort: env.OPENAI_PLANNER_EFFORT,
     sttModel: env.STT_MODEL,

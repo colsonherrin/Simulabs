@@ -17,7 +17,8 @@ interface Opts {
 const REALTIME_TOOLS = TOOLS.filter((t) => t.name !== 'get_world_state');
 const VOICE_RULES = `
 # Voice
-You speak aloud directly; there is no "say" field. When you call a movement skill, call it FIRST, before saying anything, so the body sets off at once; then say a few words at most ("On my way."). Answer in one short sentence unless asked for more. The [context] block is the section "Current situation" below, kept up to date for you.`;
+You speak aloud directly; there is no "say" field. When you call a movement skill, call it FIRST, before saying anything, so the body sets off at once; then say a few words at most ("On my way."). Answer in one short sentence unless asked for more. The [context] block is the section "Current situation" below, kept up to date for you.
+When an [action_result] arrives, say a few words at most, once, and do not call another skill unless the user's request is still unfinished. Never walk somewhere you were not asked to go.`;
 
 /**
  * Speech-to-speech brain on the OpenAI Realtime API. One upstream WebSocket per headset.
@@ -32,6 +33,7 @@ export class RealtimeBrain implements Brain {
   private userSpeaking = false;
   private reconnects = 0;
   private handledCalls = new Set<string>();
+  private accepted: ((problem?: string) => void) | null = null;
   private running: Promise<void> = Promise.resolve();
   private ranCalls = false;
 
@@ -52,7 +54,18 @@ export class RealtimeBrain implements Brain {
         this.responseActive = false;
         this.sendSession();
         this.ctx.log('info', `realtime connected (${this.opts.model})`);
-        resolve();
+        // Connected is not enough: wait until the service has accepted the session settings, so a
+        // rejected configuration is caught here (and the session can use another mind) instead of
+        // leaving a character that never answers.
+        this.accepted = (problem) => {
+          this.accepted = null;
+          clearTimeout(timer);
+          if (!problem) return resolve();
+          this.closed = true;
+          ws.close();
+          reject(new Error(problem));
+        };
+        const timer = setTimeout(() => this.accepted?.('the service did not confirm the session settings'), 4000);
       });
       ws.on('message', (raw) => {
         try {
@@ -71,7 +84,7 @@ export class RealtimeBrain implements Brain {
         if (!opened) return;
         // Sessions are time limited upstream. Reconnect; long-term memory survives, chat history does not.
         const delay = Math.min(8000, 500 * 2 ** this.reconnects++);
-        setTimeout(() => !this.closed && this.start().catch(() => {}), delay);
+        setTimeout(() => !this.closed && this.start().catch((e) => this.ctx.log('error', `realtime reconnect failed: ${e?.message ?? e}`)), delay);
       });
     });
   }
@@ -150,6 +163,10 @@ export class RealtimeBrain implements Brain {
   }
 
   private handle(ev: any) {
+    if (this.accepted) {
+      if (ev.type === 'session.updated') this.accepted();
+      else if (ev.type === 'error') return this.accepted(`settings rejected: ${ev.error?.message ?? JSON.stringify(ev)}`);
+    }
     switch (ev.type) {
       case 'response.created':
         this.responseActive = true;
