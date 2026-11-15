@@ -458,8 +458,9 @@ for (let i = 0; i < 2; i++) {
           new THREE.Vector3(0, 0, 0),
           new THREE.Vector3(0, 0, -1),
         ]),
-        new THREE.LineBasicMaterial({ color: 0xe6c27a }),
+        new THREE.LineBasicMaterial({ color: 0xe6c27a, depthTest: false, depthWrite: false, transparent: true }),
       );
+      line.renderOrder = 20;
       line.scale.z = 0.5;
       mount.add(line);
       controller.add(mount);
@@ -1473,7 +1474,20 @@ function frame(t, xrFrame) {
 
   for (const controller of controllers) {
     const laser = controller.getObjectByName('laser');
-    if (laser) laser.visible = renderer.xr.isPresenting && game.phase !== 'combat';
+    if (!laser) continue;
+    laser.visible = renderer.xr.isPresenting && game.phase !== 'combat';
+    if (!laser.visible) continue;
+    const line = laser.children[0];
+    laser.updateWorldMatrix(true, false);
+    laser.getWorldPosition(_aimOrigin);
+    _aimDir.set(0, 0, -1).applyQuaternion(laser.getWorldQuaternion(_seatQ));
+    board.updateMatrixWorld(true);
+    _pickUp.set(0, 1, 0).transformDirection(board.matrixWorld);
+    board.getWorldPosition(_boardHit);
+    _boardPlane.setFromNormalAndCoplanarPoint(_pickUp, _boardHit);
+    raycaster.set(_aimOrigin, _aimDir);
+    const hit = raycaster.ray.intersectPlane(_boardPlane, _boardHit);
+    if (line) line.scale.z = hit ? Math.max(0.05, _aimOrigin.distanceTo(_boardHit)) : 1.5;
   }
   tabletop.turnSprite.visible = renderer.xr.isPresenting && !combatView;
   exitPlaque.visible = renderer.xr.isPresenting && !combatView && !placing;
