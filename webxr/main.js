@@ -15,7 +15,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { SimulacraCore, xrToProtocol, protocolToXr } from '../spectacles/Assets/Scripts/SimulacraCore.ts';
 import { startLocal } from './local-backend.ts';
 import { createAvatar } from './avatar.js';
-import { relayUrl, voicePass } from './voice-pass.js';
+import { agentId, relayUrl, voicePass } from './voice-pass.js';
 
 const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
@@ -139,6 +139,7 @@ function stopAudio() {
 
 /** 0..1 loudness of the speech being played right now, for the jaw. */
 function speechLevel() {
+  if (voiceLevelReader) return voiceLevelReader(); // the voice service plays her voice itself and reports its loudness
   const source = voiceAnalyser || (playing.size > 0 ? analyser : null);
   if (!source) return 0;
   source.getByteTimeDomainData(levelBuf);
@@ -160,8 +161,10 @@ voiceElement.autoplay = true;
 voiceElement.playsInline = true;
 voiceElement.style.display = 'none';
 document.body.appendChild(voiceElement);
+let voiceLevelReader = null;
 const media = {
   log: (line) => debugLog('voice ' + line),
+  onLevel: (read) => { voiceLevelReader = read; },
   onMic(cb) {
     if (micStream) cb(micStream);
     micWaiters.add(cb);
@@ -202,6 +205,7 @@ async function startMic() {
     ctx.createMediaStreamSource(stream).connect(node);
     micStream = stream;
     for (const cb of micWaiters) cb(stream);
+    if (agent && !core.connected) setTimeout(connect, 0); // the voice agent was waiting for this tap
     micOn = true;
     $('mic').disabled = true;
     $('mic').textContent = 'Microphone on';
@@ -371,7 +375,8 @@ function savedKey() {
 }
 /** Stand-alone: the page is hosted on its own, has a key, and was not pointed at a backend. */
 let relay = ''; // the site's voice relay, if it has one: live voice with no key in the page
-const standalone = () => hostedElsewhere && !params.get('backend') && (!!savedKey() || !!relay);
+let agent = ''; // the site's ElevenLabs voice agent (Claude), if it has one: first choice, nothing to type
+const standalone = () => hostedElsewhere && !params.get('backend') && (!!agent || !!savedKey() || !!relay);
 
 // ---------------------------------------------------------------- debug
 
@@ -414,9 +419,12 @@ function debugSummary() {
 let generation = 0;
 function connect() {
   const mine = ++generation;
+  // The voice agent opens the microphone itself and may only make sound after a tap, so it is
+  // started by the first tap (Use microphone or Enter AR), not when the page loads.
+  if (standalone() && agent && !micOn) return;
   if (standalone()) {
-    // No backend: the same session code runs right here and talks to OpenAI directly.
-    const local = startLocal(savedKey(), (text) => { if (mine === generation) fromBackend(text); }, media, savedKey() && params.get('mind') === 'audio' ? 'audio' : 'realtime', voicePass);
+    // No backend: the same session code runs right here and talks to the voice service directly.
+    const local = startLocal(savedKey(), (text) => { if (mine === generation) fromBackend(text); }, media, savedKey() && params.get('mind') === 'audio' ? 'audio' : 'realtime', voicePass, params.get('mind') ? '' : agent);
     socket = { readyState: WebSocket.OPEN, send: (text) => local.send(text), close: () => { local.close(); core.onClose(); connect(); } };
     core.onOpen();
     return;
@@ -733,7 +741,7 @@ function note(text) {
 
 function statusText() {
   const lines = [];
-  lines.push(core.connected ? (standalone() ? 'Running in this browser' : 'Backend connected') + ' · brain: ' + core.brain : hostedElsewhere ? (renderer.xr.isPresenting ? 'No OpenAI key: leave AR and paste it on the page' : 'Paste your OpenAI key below to start.') : 'Connecting to the backend…');
+  lines.push(core.connected ? (standalone() ? 'Running in this browser' : 'Backend connected') + ' · brain: ' + core.brain : hostedElsewhere ? (agent ? (micOn ? 'Connecting her voice…' : 'Press “Use microphone” or “Enter AR” to start talking with her.') : renderer.xr.isPresenting ? 'No OpenAI key: leave AR and paste it on the page' : 'Paste your OpenAI key below to start.') : 'Connecting to the backend…');
   if (core.connected && core.brain === 'mock') lines.push('No AI keys yet: open /setup on the computer running the backend');
   if (!core.placed) lines.push(room.floorY === null ? 'Looking for the floor…' : 'Finding a clear spot on the floor: look at open floor in front of you');
   // Voice: say plainly whether she can hear, and what she is doing with it.
@@ -851,7 +859,11 @@ async function start() {
     $('text').value = '';
   });
 
-  if (hostedElsewhere) relay = await relayUrl();
+  if (hostedElsewhere) {
+    agent = params.get('agent') === '0' ? '' : await agentId('agentId');
+    relay = await relayUrl();
+    if (agent) $('keyRow').hidden = true; // nothing to type
+  }
   movePreview = buildPreviewRoom();
   await loadAvatar();
   connect();

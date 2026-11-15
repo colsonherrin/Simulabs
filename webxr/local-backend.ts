@@ -10,26 +10,31 @@ import { Ears, Mouth } from '../backend/src/speech.js';
 // @ts-ignore plain JavaScript module
 import { rtcConnector } from './realtime-rtc.js';
 import { RealtimeBrain } from '../backend/src/realtimeBrain.js';
+import { ElevenBrain } from './eleven-brain.js';
 
 export interface Media {
   onMic(cb: (stream: MediaStream) => void): () => void;
   onVoice(stream: MediaStream | null): void;
+  /** A reader for how loud her voice is, from a service that plays it itself; null when it stops. */
+  onLevel?(read: (() => number) | null): void;
 }
 
 /**
  * `mind` 'realtime' opens OpenAI's live voice call and, if that cannot be set up, falls back to
  * 'audio' (one request per utterance) by itself. 'audio' goes straight there.
  */
-export function startLocal(apiKey: string, toDevice: (text: string) => void, media: Media, mind: 'realtime' | 'audio', pass?: () => Promise<string>): { send(text: string): void; close(): void } {
+export function startLocal(apiKey: string, toDevice: (text: string) => void, media: Media, mind: 'realtime' | 'audio', pass?: () => Promise<string>, agent = ''): { send(text: string): void; close(): void } {
   // With only a relay pass there is no key for the per-sentence fallback, so the live call is the only mind.
-  const opts: ServerOptions = { port: 0, brain: mind, apiKey: apiKey || undefined, brainFixed: !apiKey, realtimeModel: 'gpt-realtime', realtimeVoice: 'marin', visionModel: 'gpt-4.1-mini', memoryPath: 'memory.json' };
+  const opts: ServerOptions = { port: 0, brain: mind, apiKey: apiKey || undefined, brainFixed: !apiKey || !!agent, realtimeModel: 'gpt-realtime', realtimeVoice: 'marin', visionModel: 'gpt-4.1-mini', memoryPath: 'memory.json' };
   let open = true;
   const session = new Session(
     { send: (text) => void Promise.resolve().then(() => open && toDevice(text)), open: () => open },
     opts,
     new Memory('memory.json'),
     (o, ctx, log, kind) =>
-      kind === 'realtime'
+      agent
+        ? new ElevenBrain(ctx, agent, (read) => media.onLevel?.(read))
+        : kind === 'realtime'
         ? new RealtimeBrain(ctx, { apiKey, model: o.realtimeModel, voice: o.realtimeVoice, connect: rtcConnector(apiKey || pass, o.realtimeModel, media) })
         : new OpenAIBrain(ctx, {
             apiKey,
