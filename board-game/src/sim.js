@@ -15,7 +15,8 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { createAvatar } from '../../webxr/avatar.js';
 import { rtcConnector } from '../../webxr/realtime-rtc.js';
-import { relayUrl, voicePass } from '../../webxr/voice-pass.js';
+import { agentId, relayUrl, voicePass } from '../../webxr/voice-pass.js';
+import { Conversation } from '@elevenlabs/client';
 import { TOP, squareLocal } from './tabletop.js';
 import { assess, bestMove, boardText, clashRecord, describeAction } from './search.js';
 
@@ -25,7 +26,7 @@ const MODEL = 'gpt-realtime';
 const RULES = `Crownfall rules: a five-by-five board. Each side has, left to right on its back rank: archer, swordsman, monarch, swordsman, archer. A turn is one action with one piece. Every piece may step one square in any direction (straight or diagonal) onto an empty square. Archers and swordsmen may instead attack an enemy piece on an adjacent square (also diagonally); the monarch can never attack. Attacking the enemy monarch wins the game at once. Attacking an archer or swordsman starts a duel that the human fights by hand in first person, with a bow if their piece is an archer and a sword if it is a swordsman, and five hearts: if the attacker wins it takes the square, if it loses the attacking piece is removed. So every piece next to an enemy can be attacked by it, and the monarch must never end a turn next to an enemy archer or swordsman.
 Squares are named like chess: files a to e from the user's left, ranks 1 to 5 from the user's side. The user plays Gold (starts on rank 1) and moves first. You play Violet (rank 5).`;
 
-const INSTRUCTIONS = `You are Sim. You are standing across a small table from the user, playing the board game Crownfall against them and teaching them how to play it well. You have a body: they can see you.
+export const INSTRUCTIONS = `You are Sim. You are standing across a small table from the user, playing the board game Crownfall against them and teaching them how to play it well. You have a body: they can see you.
 
 How to talk: out loud, like a friendly, slightly competitive friend who is good at this game. One or two short sentences at a time. Never read out lists or coordinates unless they help; say "your left archer" as well as the square. Never mention messages, tools or that you are an AI model.
 
@@ -39,7 +40,7 @@ How the game reaches you: messages starting with [game] come from the game itsel
 - If they ask how to play, explain the rules in a few sentences and offer to walk through the first moves.
 If the user just chats, chat. Keep the game moving.`;
 
-const TOOLS = [
+export const TOOLS = [
   { type: 'function', name: 'suggest_move', description: "The strongest move available to the user right now and why. Use when they ask for a hint or what to do.", parameters: { type: 'object', properties: {}, additionalProperties: false } },
   { type: 'function', name: 'get_board', description: 'The current board, whose turn it is, and how the user has been doing in duels.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
 ];
@@ -117,7 +118,117 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
 
   // ---------------------------------------------------------------- voice
 
-  const voice = (() => {
+  /** What a coaching tool answers, whichever voice service asked. */
+  function toolResult(name) {
+    const game = getGame();
+    if (name === 'suggest_move') {
+      if (game.phase !== 'play') return { note: 'No move to suggest right now.' };
+      if (game.turn !== human) return { note: "It is your (Violet) turn, not the user's." };
+      const m = bestMove(game.board, human, record, () => 0);
+      if (m) reachFor(m.from.r, m.from.c); // she indicates the piece she means
+      return m ? { suggestion: m.text, because: m.reason, board: boardText(game.board) } : { note: 'The user has no legal move.' };
+    }
+    if (name === 'get_board') return { board: boardText(game.board), to_move: game.phase !== 'play' ? game.phase : game.turn === human ? 'the user (Gold)' : 'you (Violet)', user_duel_record: record.summary() };
+    return { error: 'unknown tool' };
+  }
+
+  // ---------------------------------------------------------------- voice: ElevenLabs agent (Claude)
+
+  // A public ElevenLabs voice agent whose brain is Claude. The page needs only the agent's id,
+  // which is meant to be embedded, so nothing has to be typed on the device. ElevenLabs' own
+  // library handles the microphone, the live audio both ways and interruptions.
+  const eleven = (() => {
+    let conv = null;
+    let state = 'off';
+    let problem = '';
+    let heard = false;
+    const lines = [];
+    const queued = [];
+    const log = (line) => {
+      lines.push(new Date().toLocaleTimeString() + '  ' + line);
+      if (lines.length > 80) lines.shift();
+    };
+    function tell(text, speak) {
+      if (state !== 'live') {
+        if (state === 'connecting') queued.push([text, speak]);
+        return false;
+      }
+      try {
+        if (speak) conv.sendUserMessage(text);
+        else conv.sendContextualUpdate(text);
+        return true;
+      } catch (e) {
+        log('ERROR sending: ' + e.message);
+        return false;
+      }
+    }
+    async function start(id) {
+      if (state === 'connecting' || state === 'live') return;
+      state = 'connecting';
+      problem = '';
+      log('connecting to the voice agent');
+      const options = (connectionType) => ({
+        agentId: id,
+        connectionType,
+        clientTools: {
+          suggest_move: () => JSON.stringify(toolResult('suggest_move')),
+          get_board: () => JSON.stringify(toolResult('get_board')),
+        },
+        onConnect: () => log('connected (' + connectionType + ')'),
+        onDisconnect: (d) => {
+          log('disconnected' + (d && d.reason ? ': ' + d.reason + (d.message ? ' ' + d.message : '') : ''));
+          if (state === 'live') {
+            state = 'failed';
+            problem = 'the voice connection ended';
+            conv = null;
+            say('Sim lost her voice connection. Tap "Talk to Sim" to reconnect.');
+          }
+        },
+        onError: (message) => {
+          problem = String(message);
+          log('ERROR ' + problem);
+        },
+        onMessage: (m) => log((m.source === 'user' ? 'heard: ' : 'said:  ') + String(m.message).slice(0, 100)),
+        onModeChange: (m) => {
+          if (m.mode === 'speaking') heard = true;
+          else attendBoardFor = 0; // she is listening: look at the user
+        },
+      });
+      try {
+        // The live-audio route first; the plainer socket route if this network will not carry it.
+        try {
+          conv = await Conversation.startSession(options('webrtc'));
+        } catch (e) {
+          log('live-audio route failed (' + (e && e.message ? e.message : e) + '); trying the socket route');
+          conv = await Conversation.startSession(options('websocket'));
+        }
+        state = 'live';
+        for (const [text, speak] of queued.splice(0)) tell(text, speak);
+      } catch (e) {
+        conv = null;
+        state = 'failed';
+        problem = (e && e.message) || String(e);
+        queued.length = 0;
+        log('FAILED to start: ' + problem);
+      }
+    }
+    return {
+      start,
+      tell,
+      state: () => state,
+      problem: () => problem,
+      lines,
+      heardHer: () => heard,
+      level() {
+        if (!conv || state !== 'live') return 0;
+        try { return Math.min(1, conv.getOutputVolume() * 2.2); } catch (e) { return 0; }
+      },
+    };
+  })();
+
+  // ---------------------------------------------------------------- voice: OpenAI live call
+
+  const openai = (() => {
     let call = null;
     let state = 'off'; // off | connecting | live | failed
     let problem = '';
@@ -202,20 +313,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
 
     function runTool(item) {
       handled.add(item.call_id);
-      const game = getGame();
-      let out;
-      if (item.name === 'suggest_move') {
-        if (game.phase !== 'play') out = { note: 'No move to suggest right now.' };
-        else if (game.turn !== human) out = { note: 'It is your (Violet) turn, not the user\'s.' };
-        else {
-          const m = bestMove(game.board, human, record, () => 0);
-          out = m ? { suggestion: m.text, because: m.reason, board: boardText(game.board) } : { note: 'The user has no legal move.' };
-          if (m) reachFor(m.from.r, m.from.c); // she indicates the piece she means
-        }
-      } else if (item.name === 'get_board') {
-        out = { board: boardText(game.board), to_move: game.phase !== 'play' ? game.phase : game.turn === human ? 'the user (Gold)' : 'you (Violet)', user_duel_record: record.summary() };
-      } else out = { error: 'unknown tool' };
-      up({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: item.call_id, output: JSON.stringify(out) } });
+      up({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: item.call_id, output: JSON.stringify(toolResult(item.name)) } });
     }
 
     function handle(text) {
@@ -320,6 +418,17 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     };
   })();
 
+  /** Whichever voice service is in use: the ElevenLabs agent once it has been started, otherwise OpenAI. */
+  const voice = {
+    using: () => (eleven.state() !== 'off' ? eleven : openai),
+    tell: (text, speak) => voice.using().tell(text, speak),
+    state: () => voice.using().state(),
+    problem: () => voice.using().problem(),
+    level: () => Math.max(eleven.level(), openai.level()),
+    get lines() { return voice.using().lines; },
+    heardHer: () => voice.using().heardHer(),
+  };
+
   // ---------------------------------------------------------------- spoken fallback
 
   // If the live call cannot be used but there is a key, her lines are still spoken, one request
@@ -423,6 +532,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     hasKey: () => { try { return !!storage.getItem(KEY_NAME); } catch (e) { return false; } },
     /** True if her live voice can be started here: a key was given, or the site has a voice relay. */
     async canGoLive() {
+      if (await agentId('crownfallAgentId')) return true;
       try { if (storage.getItem(KEY_NAME)) return true; } catch (e) { /* none */ }
       return !!(await relayUrl());
     },
@@ -434,12 +544,18 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     },
     /** Start (or restart) the live voice. Call from a tap. Resolves when it is live or has failed. */
     async startVoice() {
+      // First choice: the site's ElevenLabs agent (Claude). Nothing to type.
+      const agent = await agentId('crownfallAgentId');
+      if (agent) {
+        await eleven.start(agent);
+        return eleven.state() === 'live';
+      }
       let key = '';
       try { key = storage.getItem(KEY_NAME) || ''; } catch (e) { /* none */ }
       // No key typed here: use a short-lived pass from the site's voice relay, if it has one.
       if (!key && !(await relayUrl())) return false;
-      await voice.start(key || voicePass);
-      return voice.state() === 'live';
+      await openai.start(key || voicePass);
+      return openai.state() === 'live';
     },
     voiceState: () => voice.state(),
     voiceLog: () => voice.lines.slice(),
