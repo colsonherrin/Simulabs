@@ -79,19 +79,27 @@ Not checked: anything on a physical headset. In particular tracking, what Quest 
 reports for a given room, depth occlusion (the emulator logs a WebGL warning for the occlusion
 draw; use `?depth=0` if the avatar looks wrong), microphone echo, audio level, frame rate.
 
-## Hosting the page on GitHub Pages
+## Hosted page: no backend needed
 
-The page can be served from `https://<you>.github.io/simulacra/` instead of from the backend.
-Only the page moves: the backend (the mind, the voice and your keys) still runs on your computer.
+`https://<you>.github.io/simulacra/` runs by itself. Paste an OpenAI key into the page and press
+Save; the page then talks to OpenAI directly, using the same session code as the backend (bundled
+into the page). No laptop, no USB. On a Quest: open the address in Meta Quest Browser, paste the
+key, press Enter AR.
+
+- The key is kept in that browser's storage and sent only to OpenAI. Anyone with access to that
+  browser profile could read it, so use a key you can revoke.
+- Learned skills and notes are kept in the same browser.
+- "Use my own backend instead" on the page takes a backend address (`ws://localhost:8787` with the
+  headset on USB, or a `wss://` address).
+
+To rebuild and publish:
 
 ```bash
 cd backend && npm run build:webxr -- ../webxr-site
 ```
 
-Publish that folder as the `gh-pages` branch, then in the repository's Settings → Pages choose
-"Deploy from a branch", `gh-pages`, `/ (root)`.
+then push that folder as the `gh-pages` branch (Settings → Pages → Deploy from a branch → `gh-pages`, `/`).
 
-The hosted page connects to `ws://localhost:8787` by default (the laptop, when the headset is on
-USB) and has a "Backend address" box for anything else. Because the page is HTTPS, any backend
-other than localhost must be `wss://` (for example a tunnel). Not tested on a headset; a browser
-may ask permission before letting a public page reach a local address.
+Checked in a desktop browser with no backend running, against the real OpenAI service: key
+accepted, spoken replies, "come over here" and "go to the table" move the character. Not checked
+on a headset.

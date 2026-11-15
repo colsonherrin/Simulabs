@@ -1,5 +1,5 @@
 import type { Brain, BrainContext } from './brain.js';
-import { SPEAKING_TOOLS, SYSTEM, validateInput } from './claudeBrain.js';
+import { SPEAKING_TOOLS, SYSTEM, validateInput } from './prompt.js';
 import { TOOLS } from './skills.js';
 import { Ears, Mouth, SentenceChunker } from './speech.js';
 
@@ -50,10 +50,32 @@ const REFLEXES: { re: RegExp; skill: string }[] = [
   { re: /^(follow me|come with me|come along|walk with me)$/, skill: 'follow_user' },
   { re: /^(stop|wait|hold on|freeze|halt|stop moving|stay there|stay)$/, skill: 'stop_moving' },
 ];
-const MOVES = new Set(['walk_to', 'approach_user', 'follow_user', 'inspect_object', 'run_sequence', 'run_skill']);
-export function reflexFor(text: string): string | null {
-  const t = text.toLowerCase().replace(/[^a-z' ]+/g, ' ').replace(/\b(hey|hi|ok|okay|sim|please|now|can you|could you|just)\b/g, ' ').replace(/\s+/g, ' ').trim();
-  for (const r of REFLEXES) if (r.re.test(t)) return r.skill;
+const MOVES = new Set(['walk_to', 'approach_user', 'follow_user', 'inspect_object', 'look_at']);
+/**
+ * A plain movement request the body can obey without the model: the fixed commands above, or
+ * "go to / look at / check out <something>" when the something names exactly one known object.
+ */
+export function reflexFor(text: string, lookup: (name: string) => string | undefined = () => undefined): { skill: string; args: Record<string, string> } | null {
+  // Only a short name counts: "the table", not "the table and then tell me a joke" (that is for the model).
+  const resolve = (name: string) => (name.split(' ').length <= 3 ? lookup(name) : undefined);
+  const t = text.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\b(hey|hi|ok|okay|sim|please|now|can you|could you|will you|would you|just|yeah|yes|sure|and)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const r of REFLEXES) if (r.re.test(t)) return { skill: r.skill, args: {} };
+  let m = /^(?:go|walk|head|move|run|come|get)(?: over| back| on over)? (?:to|towards?|next to|up to|by) (.+)$/.exec(t);
+  if (m) {
+    const id = resolve(m[1]);
+    if (id === 'user') return { skill: 'approach_user', args: {} };
+    if (id) return { skill: 'walk_to', args: { target_id: id } };
+  }
+  m = /^(?:go )?(?:check out|inspect|examine|take a look at|have a look at|go look at|go see) (.+)$/.exec(t);
+  if (m) {
+    const id = resolve(m[1]);
+    if (id && id !== 'user') return { skill: 'inspect_object', args: { id } };
+  }
+  m = /^(?:look at|face|turn to|turn towards?) (.+)$/.exec(t);
+  if (m) {
+    const id = resolve(m[1]);
+    if (id) return { skill: 'look_at', args: { target_id: id } };
+  }
   return null;
 }
 
@@ -175,11 +197,8 @@ export class OpenAIBrain implements Brain {
     this.ctx.send({ type: 'transcript', role: 'user', text });
     this.ctx.timer.begin(trigger, text, trigger === 'voice' && this.speechEndAt ? this.speechEndAt : performance.now());
     if (trigger === 'voice') this.ctx.timer.mark('transcript');
-    // Safety reflex: a bare "stop" halts the body locally, before any model call.
-    if (/^\s*(stop|wait|hold on|freeze|halt)\b[\s.!]*$/i.test(text)) {
-      void this.ctx.skills.execute('stop_moving', {});
-      this.inbox.push({ kind: 'note', text: '[note] The body was already stopped by a local reflex when the user said this.' });
-    }
+    // Plain movement requests are obeyed at once, before any model call; the model is told.
+    if (this.obey(text)) this.inbox.push({ kind: 'note', text: `[note] The body already obeyed this by reflex (${this.reflex.skill}); do not call a movement skill for it, just say a few words.` });
     this.inbox.push({ kind: 'user', text: `[user said] ${text}` });
     void this.pump();
   }
@@ -211,13 +230,18 @@ export class OpenAIBrain implements Brain {
       ctx.timer.note({ input: text.slice(0, 80) });
       ctx.send({ type: 'transcript', role: 'user', text });
       if (record.message) record.message.content = `${record.context}\n[user said] ${text}`; // the sound is no longer needed
-      const skill = reflexFor(text);
-      if (skill && !(this.reflex.skill === skill && performance.now() - this.reflex.at < 4000)) {
-        this.reflex = { skill, at: performance.now() };
-        ctx.log('info', `reflex ${skill} ("${text}")`);
-        void ctx.skills.execute(skill, {});
-      }
+      this.obey(text);
     });
+  }
+
+  /** Move by reflex if the words are a plain movement request. True if the body was set going. */
+  private obey(text: string): boolean {
+    const r = reflexFor(text, (name) => this.ctx.world.resolveId(name));
+    if (!r || (this.reflex.skill === r.skill && performance.now() - this.reflex.at < 4000)) return false;
+    this.reflex = { skill: r.skill, at: performance.now() };
+    this.ctx.log('info', `reflex ${r.skill}(${JSON.stringify(r.args)}) for "${text}"`);
+    void this.ctx.skills.execute(r.skill, r.args);
+    return true;
   }
 
   /** The pause held: let the early answer through. */
@@ -433,6 +457,10 @@ export class OpenAIBrain implements Brain {
     const { say, ...args } = input;
     // The body already obeyed this as a reflex: do not restart the walk.
     if (performance.now() - this.reflex.at < 4000 && (t.name === this.reflex.skill || (this.reflex.skill !== 'stop_moving' && MOVES.has(t.name)))) {
+      if (typeof say === 'string' && say.trim()) {
+        this.speak(say);
+        this.ctx.send({ type: 'transcript', role: 'assistant', text: say.trim() });
+      }
       started.push(`${t.name}()`);
       return { failed: false, content: JSON.stringify({ status: 'started', note: `The body had already obeyed the user by reflex (${this.reflex.skill}); this call was not needed and was not run.` }) };
     }

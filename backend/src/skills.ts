@@ -77,6 +77,11 @@ export class SkillExecutor {
   ) {}
 
   async execute(name: string, args: Record<string, any>): Promise<Outcome> {
+    // Models and people say "table" for table_1: accept a name when exactly one thing fits it.
+    if (args) {
+      args = { ...args };
+      for (const key of ['target_id', 'id']) if (typeof args[key] === 'string') args[key] = this.world.resolveId(args[key]) ?? args[key];
+    }
     try {
       switch (name) {
         case 'get_world_state':

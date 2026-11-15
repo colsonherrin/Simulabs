@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { type Brain, type BrainContext } from './brain.js';
-import { SYSTEM } from './claudeBrain.js';
+import { SYSTEM } from './prompt.js';
 import { AUDIO_RATE } from './protocol.js';
 import { TOOLS } from './skills.js';
 

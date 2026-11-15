@@ -153,3 +153,28 @@ test('audio mind: answers early, throws the early answer away if the user keeps 
     cloud.close();
   }
 });
+
+test('plain movement requests are understood without a model, and names stand in for ids', async () => {
+  const { reflexFor } = await import('../src/openaiBrain.js');
+  const { WorldModel } = await import('../src/world.js');
+  const { WORLD } = await import('./helpers.js');
+  const world = new WorldModel();
+  world.update(WORLD);
+  const r = (text: string) => reflexFor(text, (n) => world.resolveId(n));
+  assert.deepEqual(r('Hey, come over here.'), { skill: 'approach_user', args: {} });
+  assert.deepEqual(r('Come to me'), { skill: 'approach_user', args: {} });
+  assert.deepEqual(r('Go to the table.'), { skill: 'walk_to', args: { target_id: 'table_1' } });
+  assert.deepEqual(r('Can you walk over to that chair please?'), { skill: 'walk_to', args: { target_id: 'chair_1' } });
+  assert.deepEqual(r('Go check out the chair'), { skill: 'inspect_object', args: { id: 'chair_1' } });
+  assert.deepEqual(r('Look at me'), { skill: 'look_at', args: { target_id: 'user' } });
+  assert.deepEqual(r('Stop!'), { skill: 'stop_moving', args: {} });
+  assert.deepEqual(r('Follow me'), { skill: 'follow_user', args: {} });
+  // Not plain requests: left to the model.
+  assert.equal(r("Don't come over here"), null);
+  assert.equal(r('Go to the fridge'), null, 'nothing by that name is known');
+  assert.equal(r('What do you think about going to the table later?'), null);
+  assert.equal(r('Go to the table and then tell me a joke'), null);
+  assert.equal(world.resolveId('the table'), 'table_1');
+  assert.equal(world.resolveId('TABLE_1'), 'table_1');
+  assert.equal(world.resolveId('sofa'), undefined);
+});

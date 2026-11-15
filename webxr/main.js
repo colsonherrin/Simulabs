@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { SimulacraCore, xrToProtocol, protocolToXr } from '../spectacles/Assets/Scripts/SimulacraCore.ts';
+import { startLocal } from './local-backend.ts';
 
 const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
@@ -237,20 +238,38 @@ const hostedElsewhere = !/^\/xr\//.test(location.pathname);
 function backendAddress() {
   let saved = '';
   try { saved = localStorage.getItem('simulacra.backend') || ''; } catch (e) { /* storage unavailable */ }
-  return params.get('backend') || (hostedElsewhere ? saved || 'ws://localhost:8787' : (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  return params.get('backend') || (hostedElsewhere ? saved : (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
 }
 
+/** The user's OpenAI key for stand-alone use. It lives in this browser only and is sent only to OpenAI. */
+function savedKey() {
+  try { return localStorage.getItem('simulacra.openaiKey') || ''; } catch (e) { return ''; }
+}
+/** Stand-alone: the page is hosted on its own, has a key, and was not pointed at a backend. */
+const standalone = () => hostedElsewhere && !params.get('backend') && !!savedKey();
+
+let generation = 0;
 function connect() {
+  const mine = ++generation;
+  if (standalone()) {
+    // No backend: the same session code runs right here and talks to OpenAI directly.
+    const local = startLocal(savedKey(), (text) => { if (mine === generation) core.onMessage(text); });
+    socket = { readyState: WebSocket.OPEN, send: (text) => local.send(text), close: () => { local.close(); core.onClose(); connect(); } };
+    core.onOpen();
+    return;
+  }
   const base = backendAddress();
   if (document.activeElement !== $('backend')) $('backend').value = base;
-  socket = new WebSocket(base.replace(/\/$/, '') + '/device');
-  socket.onopen = () => core.onOpen();
-  socket.onmessage = (e) => { if (typeof e.data === 'string') core.onMessage(e.data); };
-  socket.onclose = () => {
+  if (!base) return; // hosted on its own with no key and no backend chosen yet: wait for one
+  const ws = (socket = new WebSocket(base.replace(/\/$/, '') + '/device'));
+  ws.onopen = () => core.onOpen();
+  ws.onmessage = (e) => { if (typeof e.data === 'string' && mine === generation) core.onMessage(e.data); };
+  ws.onclose = () => {
+    if (mine !== generation) return;
     core.onClose();
-    setTimeout(connect, 2000);
+    setTimeout(() => { if (mine === generation) connect(); }, 2000);
   };
-  socket.onerror = () => { /* onclose follows */ };
+  ws.onerror = () => { /* onclose follows */ };
 }
 
 // ---------------------------------------------------------------- avatar
@@ -815,7 +834,7 @@ function note(text) {
 
 function statusText() {
   const lines = [];
-  lines.push(core.connected ? 'Backend connected · brain: ' + core.brain : hostedElsewhere ? 'No backend at ' + backendAddress() + ' yet: start it on your computer (npm start)' : 'Connecting to the backend…');
+  lines.push(core.connected ? (standalone() ? 'Running in this browser' : 'Backend connected') + ' · brain: ' + core.brain : hostedElsewhere ? 'Paste your OpenAI key below to start.' : 'Connecting to the backend…');
   if (core.connected && core.brain === 'mock') lines.push('No AI keys yet: open /setup on the computer running the backend');
   if (!core.placed) lines.push(room.floorY === null ? 'Looking for the floor…' : 'Finding a clear spot on the floor: look at open floor in front of you');
   if (core.lastTranscript) lines.push(core.lastTranscript);
@@ -875,9 +894,22 @@ async function start() {
   $('mic').onclick = startMic;
   $('enter').onclick = enterAR;
   $('backendRow').hidden = !hostedElsewhere;
+  $('keyRow').hidden = !hostedElsewhere;
+  const showKey = () => { $('keyState').textContent = savedKey() ? 'A key is saved in this browser. Paste another to replace it.' : 'Stays in this browser; sent only to OpenAI.'; };
+  showKey();
+  $('keySave').onclick = () => {
+    const k = $('key').value.trim().replace(/^["']|["']$/g, '');
+    try { if (k) localStorage.setItem('simulacra.openaiKey', k); else localStorage.removeItem('simulacra.openaiKey'); } catch (e) { note('This browser will not store the key (private mode?).'); }
+    $('key').value = '';
+    showKey();
+    audioContext();
+    if (socket && socket.readyState <= 1) socket.close();
+    else connect();
+  };
   $('backend').addEventListener('change', () => {
     try { localStorage.setItem('simulacra.backend', $('backend').value.trim()); } catch (e) { /* storage unavailable */ }
-    if (socket) socket.close(); // reconnects to the new address
+    if (socket && socket.readyState <= 1) socket.close(); // reconnects to the new address
+    else connect();
   });
   $('text').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;

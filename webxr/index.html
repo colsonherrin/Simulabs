@@ -27,7 +27,13 @@
   <button id="enter" disabled>Enter AR</button>
   <button id="mic" class="secondary">Use microphone</button>
   <div id="say"><input id="text" placeholder="Type instead of talking, then Enter" autocomplete="off"></div>
-  <div id="backendRow" hidden style="margin-top:10px;font-size:13px;color:#8996a3">Backend address<br><input id="backend" style="width:100%;box-sizing:border-box;font:13px ui-monospace,monospace;padding:7px 9px;border-radius:8px;border:1px solid #46525e;background:#171d23;color:inherit" spellcheck="false"></div>
+  <div id="keyRow" hidden style="margin-top:12px;font-size:13px;color:#8996a3">OpenAI key
+    <div style="display:flex;gap:8px;margin-top:4px"><input id="key" type="password" placeholder="sk-…" autocomplete="off" style="flex:1;min-width:0;font:13px ui-monospace,monospace;padding:9px;border-radius:8px;border:1px solid #46525e;background:#171d23;color:inherit"><button id="keySave" style="margin:0;padding:8px 14px">Save</button></div>
+    <div id="keyState" style="margin-top:4px"></div>
+  </div>
+  <details style="margin-top:8px;font-size:13px;color:#8996a3"><summary>Use my own backend instead</summary>
+  <div id="backendRow" hidden style="margin-top:10px;font-size:13px;color:#8996a3">Backend address<br><input id="backend" style="width:100%;box-sizing:border-box;font:13px ui-monospace,monospace;padding:7px 9px;border-radius:8px;border:1px solid #46525e;background:#171d23;color:inherit" spellcheck="false" placeholder="ws://localhost:8787 (headset on USB) or wss://…"></div>
+  </details>
   <div id="note"></div>
 </div>
 <script type="module">
