@@ -123,9 +123,9 @@ export class Session implements DeviceLink {
           this.brain = makeBrain(opts, ctx, log, 'audio');
           return this.brain.start().then(ready);
         }
-        this.log('error', `brain failed to start: ${e?.message ?? e}. Check OPENAI_API_KEY / network.`);
+        this.log('error', `her mind could not start: ${e?.message ?? e}. Check the network (and the key, if one is used).`);
       })
-      .catch((e) => this.log('error', `brain failed to start: ${e?.message ?? e}. Check OPENAI_API_KEY / network.`));
+      .catch((e) => this.log('error', `her mind could not start: ${e?.message ?? e}. Check the network (and the key, if one is used).`));
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string) {

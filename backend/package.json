@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
+    "@elevenlabs/client": "^1.36.1",
     "buffer": "^6.0.3",
     "esbuild": "^0.28.2",
     "three": "^0.187.0",

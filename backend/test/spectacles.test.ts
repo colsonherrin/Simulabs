@@ -298,3 +298,70 @@ test('personal space: never walks through the user, and steps back if the user w
     await srv.close();
   }
 });
+
+test('relative movement: stand beside the user, take a step, and come back into view', async () => {
+  const srv = await startServer({ port: 0, brain: 'mock', realtimeModel: 'x', realtimeVoice: 'v', visionModel: 'x', memoryPath: null, quiet: true });
+  const dev = virtualRoom(srv.port);
+  const act = (msg: object) => dev.core.onMessage(JSON.stringify({ type: 'action', ...msg }));
+  const done = async (id: string) => {
+    await dev.run(12, () => dev.sent.some((m: any) => m.type === 'action_result' && m.id === id));
+    return dev.sent.find((m: any) => m.type === 'action_result' && m.id === id);
+  };
+  try {
+    await dev.run(0.5, () => dev.core.brain === 'mock');
+    const a = dev.core.avatar;
+    dev.core.keepInView = false;
+    // The user stands at x=1.5, z=-2 looking along +z; the character starts in front of them.
+    dev.room.head = { x: 1.5, y: 0.2, z: -2 };
+    dev.room.fwd = { x: 0, y: 0, z: 1 };
+    dev.core.placed = true;
+    a.pos = { x: 1.5, y: -1.4, z: -0.3 };
+
+    act({ id: 's1', action: 'stand_by_user', params: { side: 'left' } });
+    assert.equal((await done('s1')).status, 'succeeded');
+    assert.ok(a.pos.x < 1.5 - 0.6 && Math.abs(a.pos.z + 2) < 0.3, `on the user's left: ${a.pos.x.toFixed(2)}, ${a.pos.z.toFixed(2)}`);
+    assert.ok(Math.abs(Math.atan2(Math.sin(a.yaw), Math.cos(a.yaw))) < 0.2, 'facing the way the user faces');
+
+    act({ id: 's2', action: 'stand_by_user', params: { side: 'right' } });
+    assert.equal((await done('s2')).status, 'succeeded');
+    assert.ok(a.pos.x > 1.5 + 0.6, `on the user's right: ${a.pos.x.toFixed(2)}`);
+    assert.ok(dev.flat(a.pos, dev.room.head) >= dev.core.personalSpace);
+
+    const before = { ...a.pos };
+    const fx = Math.sin(a.yaw), fz = Math.cos(a.yaw);
+    act({ id: 's3', action: 'step', params: { direction: 'forward', metres: 0.6 } });
+    assert.equal((await done('s3')).status, 'succeeded');
+    const along = (a.pos.x - before.x) * fx + (a.pos.z - before.z) * fz;
+    assert.ok(Math.abs(along - 0.6) < 0.12, `one step forward (${along.toFixed(2)} m)`);
+
+    // "Closer" never ends up inside the user.
+    let refused = false;
+    for (let i = 0; i < 8 && !refused; i++) {
+      act({ id: 'c' + i, action: 'step', params: { direction: 'closer', metres: 1 } });
+      const r = await done('c' + i);
+      refused = r.status === 'failed';
+      if (process.env.DEBUG_STEP) console.log('closer', i, r.status, r.reason ?? '', dev.flat(a.pos, dev.room.head).toFixed(3), a.state);
+      assert.ok(dev.flat(a.pos, dev.room.head) >= dev.core.personalSpace - 0.02, `never inside the user's space (${dev.flat(a.pos, dev.room.head).toFixed(2)} m)`);
+    }
+    assert.ok(refused, 'once at the edge of the user\'s space, coming closer is refused');
+
+    act({ id: 's4', action: 'step', params: { direction: 'sideways' } });
+    assert.match((await done('s4')).reason, /direction must be/);
+
+    // The user turns their back on her: within a few seconds she walks round to where they can see her.
+    dev.core.keepInView = true;
+    const away = dev.flat(a.pos, dev.room.head);
+    dev.room.fwd = { x: (dev.room.head.x - a.pos.x) / away, y: 0, z: (dev.room.head.z - a.pos.z) / away };
+    const inView = () => {
+      const d = dev.flat(a.pos, dev.room.head);
+      return ((a.pos.x - dev.room.head.x) * dev.room.fwd.x + (a.pos.z - dev.room.head.z) * dev.room.fwd.z) / d > 0.5;
+    };
+    assert.ok(!inView());
+    await dev.run(14, () => inView() && a.state === 'idle');
+    assert.ok(inView(), `back in view at ${a.pos.x.toFixed(2)}, ${a.pos.z.toFixed(2)}`);
+    assert.ok(dev.flat(a.pos, dev.room.head) >= dev.core.personalSpace, 'and she went around the user, not through them');
+  } finally {
+    dev.ws.close();
+    await srv.close();
+  }
+});

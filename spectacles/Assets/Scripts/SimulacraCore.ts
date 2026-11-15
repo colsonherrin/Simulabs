@@ -158,6 +158,9 @@ export class SimulacraCore {
    * Entirely local (no model call). Any request, and the user starting to speak, takes over at once.
    */
   wander = false;
+  /** Walk back into the user's view when left out of it (see update). */
+  keepInView = true;
+  private outOfView = 0;
   private idleFor = 0;
   private wanderAfter = 6;
   private wanderOut = true;
@@ -186,6 +189,7 @@ export class SimulacraCore {
   private following = false;
   private done: ((ok: boolean, reason: string) => void) | null = null;
   private stuckFor = 0;
+  private replans = 0;
   private bestDistance = 0;
   private sideBias = 0;
   private sideBiasFor = 0;
@@ -413,7 +417,8 @@ export class SimulacraCore {
   }
 
   /** Put the avatar in front of the user, facing them, on real floor. Call once the floor is known. */
-  placeInFrontOfUser(distance: number): boolean {
+  /** With `force`, a spot straight ahead is used even if no confirmed floor is found: better visible on unknown floor than not there at all. */
+  placeInFrontOfUser(distance: number, force?: boolean): boolean {
     const floorY = this.host.floorY();
     if (floorY === null) return false;
     const head = this.host.headPosition();
@@ -432,6 +437,13 @@ export class SimulacraCore {
         this.placed = true;
         return true;
       }
+    }
+    if (force) {
+      const p = { x: user.x + Math.sin(base) * Math.min(distance, 1.5), y: floorY, z: user.z + Math.cos(base) * Math.min(distance, 1.5) };
+      this.avatar.pos = p;
+      this.avatar.yaw = Math.atan2(user.x - p.x, user.z - p.z);
+      this.placed = true;
+      return true;
     }
     return false;
   }
@@ -593,6 +605,16 @@ export class SimulacraCore {
     this.idleFor = 0;
   }
 
+  /** Roughly in front of the user (within about 60 degrees of where they are looking)? */
+  private inUserView(p: Vec): boolean {
+    const u = this.userFloor();
+    const f = this.host.headForward();
+    const fl = Math.sqrt(f.x * f.x + f.z * f.z);
+    const d = flat(p, u);
+    if (fl < 0.2 || d < 0.01) return true;
+    return ((p.x - u.x) * f.x + (p.z - u.z) * f.z) / (d * fl) > 0.5;
+  }
+
   private startStroll(): void {
     this.idleFor = 0;
     this.wanderAfter = 6 + Math.random() * 8;
@@ -603,7 +625,7 @@ export class SimulacraCore {
     if (this.wanderOut) {
       // Go and look at something near the user, or failing that a spot a little way off.
       const near: WorldObject[] = [];
-      for (let i = 0; i < this.objects.length; i++) if (flat(this.objects[i].pos, user) < 3.5 && flat(this.objects[i].pos, from) > 1.2) near.push(this.objects[i]);
+      for (let i = 0; i < this.objects.length; i++) if (flat(this.objects[i].pos, user) < 3.5 && flat(this.objects[i].pos, from) > 1.2 && this.inUserView(this.objects[i].pos)) near.push(this.objects[i]);
       if (near.length > 0 && Math.random() < 0.7) {
         const o = near[Math.floor(Math.random() * near.length)];
         const t = this.resolve(o.id);
@@ -614,7 +636,7 @@ export class SimulacraCore {
         const a = Math.random() * Math.PI * 2;
         const r = 1.5 + Math.random() * 1.3;
         const p = { x: user.x + Math.sin(a) * r, y: from.y, z: user.z + Math.cos(a) * r };
-        if (flat(p, from) < 0.8 || !this.walkable(p)) continue;
+        if (flat(p, from) < 0.8 || !this.walkable(p) || !this.inUserView(p)) continue;
         const path = this.planPath(from, p);
         if (path) {
           this.planned = path;
@@ -639,6 +661,7 @@ export class SimulacraCore {
 
   private finish(ok: boolean, reason: string): void {
     const cb = this.done;
+    this.replans = 0;
     this.goal = null;
     this.route = [];
     this.face = null;
@@ -692,6 +715,63 @@ export class SimulacraCore {
       this.face = t.pos;
       this.avatar.state = 'turning';
       this.done = (ok, reason) => reply(ok, reason);
+      return;
+    }
+    if (action === 'step' || action === 'stand_by_user') {
+      if (!this.placed) return reply(false, 'the floor has not been found yet');
+      const from = this.avatar.pos;
+      const user = this.userFloor();
+      let want: Vec;
+      let face: Vec = user;
+      if (action === 'stand_by_user') {
+        // Beside the user, from the user's own point of view (their forward is where they are looking).
+        const f = this.host.headForward();
+        const len = Math.sqrt(f.x * f.x + f.z * f.z) || 1;
+        const fx = f.x / len;
+        const fz = f.z / len;
+        const side = String((m.params && m.params.side) || '');
+        // In this space (z forward, x to the right when facing +z) the user's right is (fz, -fx).
+        const dir = side === 'left' ? { x: -fz, z: fx } : side === 'right' ? { x: fz, z: -fx } : side === 'behind' ? { x: -fx, z: -fz } : side === 'front' ? { x: fx, z: fz } : null;
+        if (!dir) return reply(false, "side must be left, right, front or behind");
+        const d = side === 'front' ? this.userDistance : Math.max(this.personalSpace + 0.2, 0.9);
+        want = { x: user.x + dir.x * d, y: from.y, z: user.z + dir.z * d };
+        // Next to someone you look the way they look; in front of or behind them you face them.
+        if (side === 'left' || side === 'right') face = { x: want.x + fx * 3, y: from.y, z: want.z + fz * 3 };
+      } else {
+        const direction = String((m.params && m.params.direction) || '');
+        const metres = Math.max(0.3, Math.min(2, Number(m.params && m.params.metres) || 0.6));
+        const fx = Math.sin(this.avatar.yaw);
+        const fz = Math.cos(this.avatar.yaw);
+        const toUser = flat(from, user) || 1;
+        const ux = (user.x - from.x) / toUser;
+        const uz = (user.z - from.z) / toUser;
+        const dir = direction === 'forward' ? { x: fx, z: fz } : direction === 'back' ? { x: -fx, z: -fz } : direction === 'right' ? { x: fz, z: -fx } : direction === 'left' ? { x: -fz, z: fx } : direction === 'closer' ? { x: ux, z: uz } : direction === 'away' ? { x: -ux, z: -uz } : null;
+        if (!dir) return reply(false, 'direction must be forward, back, left, right, closer or away');
+        want = { x: from.x + dir.x * metres, y: from.y, z: from.z + dir.z * metres };
+        // Never into the user, or through them to the other side: the step is shortened until it
+        // ends outside their personal space.
+        let reach = 1;
+        while (reach > 0 && flat({ x: from.x + dir.x * metres * reach, y: from.y, z: from.z + dir.z * metres * reach }, user) < this.personalSpace + 0.05) reach -= 0.05;
+        if (metres * reach < 0.1) return reply(false, 'already as close to the user as is comfortable');
+        want = { x: from.x + dir.x * metres * reach, y: from.y, z: from.z + dir.z * metres * reach };
+        face = { x: want.x + (direction === 'back' || direction === 'away' ? -dir.x : dir.x) * 3, y: from.y, z: want.z + (direction === 'back' || direction === 'away' ? -dir.z : dir.z) * 3 };
+        if (direction === 'closer' || direction === 'away' || direction === 'back') face = user;
+      }
+      if (!this.host.isFloor(want)) return reply(false, 'there is no clear floor there');
+      const path = this.planPath(from, want);
+      if (!path) return reply(false, 'that spot cannot be reached');
+      if (this.done) this.finish(false, 'superseded by a newer action');
+      this.following = false;
+      this.goal = path[0];
+      this.route = path.slice(1);
+      this.face = face;
+      this.goalTarget = '';
+      this.stuckFor = 0;
+      this.bestDistance = flat(from, this.goal);
+      this.sideBias = 0;
+      this.avatar.state = 'turning';
+      started(flat(from, want));
+      this.done = (ok, reason) => reply(ok, reason, { metres_from_user: Math.round(flat(this.avatar.pos, this.userFloor()) * 10) / 10 });
       return;
     }
     if (action === 'follow_user') {
@@ -761,7 +841,9 @@ export class SimulacraCore {
       // Look a body-width ahead as well as at the next step, so the avatar does not graze corners.
       const probe = { x: this.avatar.pos.x + Math.sin(heading) * 0.3, y: this.avatar.pos.y, z: this.avatar.pos.z + Math.cos(heading) * 0.3 };
       const next = { x: this.avatar.pos.x + Math.sin(heading) * maxStep, y: this.avatar.pos.y, z: this.avatar.pos.z + Math.cos(heading) * maxStep };
-      if (!this.walkable(next) || !this.walkable(probe)) continue;
+      // The step itself must keep out of the user's space; the look-ahead is only about solid things,
+      // otherwise she could never walk straight up to the edge of that space.
+      if (!this.walkable(next) || !this.host.isFloor(probe)) continue;
       if (offsets[i] !== 0) {
         this.sideBias = offsets[i] > 0 ? 1 : -1;
         this.sideBiasFor = 1.5;
@@ -821,7 +903,19 @@ export class SimulacraCore {
             this.stuckFor = 0;
           } else {
             this.stuckFor += dt;
-            if (this.stuckFor > (moved > 0 ? 4.0 : 1.0)) this.finish(false, 'the way became blocked');
+            if (this.stuckFor > (moved > 0 ? 2.5 : 1.0)) {
+              // Not getting anywhere: plan again from where she actually is before giving up.
+              const end = this.route.length > 0 ? this.route[this.route.length - 1] : this.goal;
+              const again = this.replans < 3 ? this.planPath(this.avatar.pos, end) : null;
+              if (again) {
+                this.replans += 1;
+                this.goal = again[0];
+                this.route = again.slice(1);
+                this.stuckFor = 0;
+                this.bestDistance = flat(this.avatar.pos, this.goal);
+                this.sideBias = 0;
+              } else this.finish(false, 'the way became blocked');
+            }
           }
         }
       } else if (this.route.length > 0) {
@@ -854,6 +948,36 @@ export class SimulacraCore {
         this.look(null);
       }
     }
+
+    // Stay where the user can see her. If nothing was asked of her and she has been out of the
+    // user's view (well off to the side, behind them, or far away) for a few seconds, she walks
+    // back to a spot in front of them. A character you cannot find is a character that vanished.
+    if (this.placed && !this.goal && !this.following && !this.done) {
+      const u = this.userFloor();
+      const f = this.host.headForward();
+      const fl = Math.sqrt(f.x * f.x + f.z * f.z);
+      const d = flat(this.avatar.pos, u);
+      const cos = fl > 0.2 && d > 0.01 ? ((this.avatar.pos.x - u.x) * f.x + (this.avatar.pos.z - u.z) * f.z) / (d * fl) : 1;
+      this.outOfView = cos < 0.35 || d > 4.5 ? this.outOfView + dt : 0;
+      if (this.outOfView > 3.5 && this.keepInView) {
+        this.outOfView = 0;
+        const base = Math.atan2(f.x, f.z);
+        for (let i = 0; i < 7 && !this.goal; i++) {
+          const a = base + Math.ceil(i / 2) * 0.3 * (i % 2 === 0 ? -1 : 1);
+          const p = { x: u.x + Math.sin(a) * 1.7, y: this.avatar.pos.y, z: u.z + Math.cos(a) * 1.7 };
+          if (!this.walkable(p)) continue;
+          const path = this.planPath(this.avatar.pos, p);
+          if (!path) continue;
+          this.goal = path[0];
+          this.route = path.slice(1);
+          this.face = u;
+          this.goalTarget = '';
+          this.stuckFor = 0;
+          this.bestDistance = flat(this.avatar.pos, this.goal);
+          this.sideBias = 0;
+        }
+      }
+    } else this.outOfView = 0;
 
     // The user stepped into the character: it takes a step back rather than stand inside them.
     if (this.placed && !this.goal && !this.following) {

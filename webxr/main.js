@@ -15,6 +15,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { SimulacraCore, xrToProtocol, protocolToXr } from '../spectacles/Assets/Scripts/SimulacraCore.ts';
 import { startLocal } from './local-backend.ts';
 import { createAvatar } from './avatar.js';
+import { agentId, relayUrl, voicePass } from './voice-pass.js';
 
 const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
@@ -139,6 +140,7 @@ function stopAudio() {
 
 /** 0..1 loudness of the speech being played right now, for the jaw. */
 function speechLevel() {
+  if (voiceLevelReader) return voiceLevelReader(); // the voice service plays her voice itself and reports its loudness
   const source = voiceAnalyser || (playing.size > 0 ? analyser : null);
   if (!source) return 0;
   source.getByteTimeDomainData(levelBuf);
@@ -155,9 +157,15 @@ let micStream = null;
 const micWaiters = new Set();
 let voiceAnalyser = null;
 let voiceSource = null;
-const voiceElement = new Audio();
+const voiceElement = document.createElement('audio');
 voiceElement.autoplay = true;
+voiceElement.playsInline = true;
+voiceElement.style.display = 'none';
+document.body.appendChild(voiceElement);
+let voiceLevelReader = null;
 const media = {
+  log: (line) => debugLog('voice ' + line),
+  onLevel: (read) => { voiceLevelReader = read; },
   onMic(cb) {
     if (micStream) cb(micStream);
     micWaiters.add(cb);
@@ -170,7 +178,7 @@ const media = {
     voiceAnalyser = null;
     if (!stream) return;
     voiceDbg.rxAudio++;
-    voiceElement.play().catch(() => {});
+    voiceElement.play().then(() => debugLog('voice playing'), (e) => debugLog('VOICE REFUSED by the browser: ' + e.message));
     // A second tap on the same stream, only to read loudness for the mouth.
     const ctx = audioContext();
     voiceSource = ctx.createMediaStreamSource(stream);
@@ -202,6 +210,7 @@ async function startMic() {
     ctx.createMediaStreamSource(stream).connect(node);
     micStream = stream;
     for (const cb of micWaiters) cb(stream);
+    if (agent && !core.connected) setTimeout(connect, 0); // the voice agent was waiting for this tap
     micOn = true;
     $('mic').disabled = true;
     $('mic').textContent = 'Microphone on';
@@ -359,11 +368,21 @@ function backendAddress() {
 }
 
 /** The user's OpenAI key for stand-alone use. It lives in this browser only and is sent only to OpenAI. */
+// A link can carry the key (…/#key=sk-…): it is saved and removed from the address at once.
+{
+  const m = /[#&]key=(sk-[\w-]{20,})/.exec(location.hash);
+  if (m) {
+    try { localStorage.setItem('simulacra.openaiKey', m[1]); } catch (e) { /* storage unavailable */ }
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+}
 function savedKey() {
   try { return localStorage.getItem('simulacra.openaiKey') || ''; } catch (e) { return ''; }
 }
 /** Stand-alone: the page is hosted on its own, has a key, and was not pointed at a backend. */
-const standalone = () => hostedElsewhere && !params.get('backend') && !!savedKey();
+let relay = ''; // the site's voice relay, if it has one: live voice with no key in the page
+let agent = ''; // the site's ElevenLabs voice agent (Claude), if it has one: first choice, nothing to type
+const standalone = () => hostedElsewhere && !params.get('backend') && (!!agent || !!savedKey() || !!relay);
 
 // ---------------------------------------------------------------- debug
 
@@ -406,9 +425,12 @@ function debugSummary() {
 let generation = 0;
 function connect() {
   const mine = ++generation;
+  // The voice agent opens the microphone itself and may only make sound after a tap, so it is
+  // started by the first tap (Use microphone or Enter AR), not when the page loads.
+  if (standalone() && agent && !micOn) return;
   if (standalone()) {
-    // No backend: the same session code runs right here and talks to OpenAI directly.
-    const local = startLocal(savedKey(), (text) => { if (mine === generation) fromBackend(text); }, media, params.get('mind') === 'audio' ? 'audio' : 'realtime');
+    // No backend: the same session code runs right here and talks to the voice service directly.
+    const local = startLocal(savedKey(), (text) => { if (mine === generation) fromBackend(text); }, media, savedKey() && params.get('mind') === 'audio' ? 'audio' : 'realtime', voicePass, params.get('mind') ? '' : agent);
     socket = { readyState: WebSocket.OPEN, send: (text) => local.send(text), close: () => { local.close(); core.onClose(); connect(); } };
     core.onOpen();
     return;
@@ -429,7 +451,7 @@ function connect() {
 
 // ---------------------------------------------------------------- avatar
 
-const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase: './avatar/', height: Number(params.get('height')) || 1.7, placeholder: params.get('avatar') === 'placeholder' });
+const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase: './avatar/', height: Number(params.get('height')) || 1.7, placeholder: params.get('avatar') === 'placeholder', lite: params.has('lite') ? params.get('lite') !== '0' : /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent) });
 const avatarRoot = avatar.root;
 const body = avatar.body;
 const loadAvatar = avatar.load;
@@ -611,7 +633,10 @@ async function enterAR() {
   const hadMic = micOn;
   await startMic();
   await startCamera(); // same reason; and without it she knows only the room scan and what you name
-  const wantDepth = params.get('depth') !== '0';
+  // Hiding her behind real objects needs the headset's depth sensing. It is off unless asked for
+  // (?depth=1): when she is placed somewhere the room scan does not cover, it hides her completely,
+  // and it costs frame rate.
+  const wantDepth = params.get('depth') === '1';
   const init = {
     requiredFeatures: ['local-floor'],
     optionalFeatures: ['plane-detection', 'mesh-detection', 'hand-tracking'],
@@ -644,6 +669,7 @@ async function enterAR() {
   sessionAge = 0;
   sawRoomData = false;
   renderer.xr.setReferenceSpaceType('local-floor');
+  renderer.xr.setFoveation(1); // sharp where you look, cheaper at the edges
   await renderer.xr.setSession(session);
 
   for (let i = 0; i < 2; i++) {
@@ -796,7 +822,7 @@ function note(text) {
 
 function statusText() {
   const lines = [];
-  lines.push(core.connected ? (standalone() ? 'Running in this browser' : 'Backend connected') + ' · brain: ' + core.brain : hostedElsewhere ? (renderer.xr.isPresenting ? 'No OpenAI key: leave AR and paste it on the page' : 'Paste your OpenAI key below to start.') : 'Connecting to the backend…');
+  lines.push(core.connected ? (standalone() ? 'Running in this browser' : 'Backend connected') + ' · brain: ' + core.brain : hostedElsewhere ? (agent ? (micOn ? 'Connecting her voice…' : 'Press “Use microphone” or “Enter AR” to start talking with her.') : renderer.xr.isPresenting ? 'No OpenAI key: leave AR and paste it on the page' : 'Paste your OpenAI key below to start.') : 'Connecting to the backend…');
   if (core.connected && core.brain === 'mock') lines.push('No AI keys yet: open /setup on the computer running the backend');
   if (!core.placed) lines.push(room.floorY === null ? 'Looking for the floor…' : 'Finding a clear spot on the floor: look at open floor in front of you');
   // Voice: say plainly whether she can hear, and what she is doing with it.
@@ -817,6 +843,7 @@ let movePreview = null;
 let lastTime = 0;
 let lastAvatar = null;
 let placeTry = 0;
+let placeFailedSince = 0;
 const halfDuplex = params.has('halfduplex') ? params.get('halfduplex') !== '0' : isQuest; // headset speakers sit next to the microphones
 
 function frame(timeMs, xrFrame) {
@@ -841,7 +868,13 @@ function frame(timeMs, xrFrame) {
   // Stand the avatar on the floor in front of the user once there is a floor. In AR, wait a moment for the room scan.
   if (!core.placed && room.floorY !== null && now >= placeTry && (previewMode || sessionAge > 1.2)) {
     placeTry = now + 0.5;
-    if (core.placeInFrontOfUser(previewMode ? 2.2 : 1.8)) lastAvatar = null;
+    // If no confirmed floor turns up in front of the user within a few seconds, stand her there anyway.
+    if (!placeFailedSince) placeFailedSince = now;
+    if (core.placeInFrontOfUser(previewMode ? 2.2 : 1.8, now - placeFailedSince > 3)) {
+      lastAvatar = null;
+      placeFailedSince = 0;
+      debugLog('placed in front of the user');
+    }
   }
 
   core.micMuted = halfDuplex && core.speakingFor > 0 && !voiceAnalyser; // a live call cancels its own echo
@@ -917,6 +950,11 @@ async function start() {
     $('text').value = '';
   });
 
+  if (hostedElsewhere) {
+    agent = params.get('agent') === '0' ? '' : await agentId('agentId');
+    relay = await relayUrl();
+    if (agent) $('keyRow').hidden = true; // nothing to type
+  }
   movePreview = buildPreviewRoom();
   await loadAvatar();
   connect();
