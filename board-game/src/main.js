@@ -395,6 +395,12 @@ for (let i = 0; i < 2; i++) {
     input.primaryDown = true;
     input.primaryPressed = true;
   });
+  controller.addEventListener('squeezestart', () => {
+    controller.userData.squeezing = true;
+  });
+  controller.addEventListener('squeezeend', () => {
+    controller.userData.squeezing = false;
+  });
   controller.addEventListener('selectend', () => {
     controller.userData.selecting = false;
     input.primaryDown = false;
@@ -458,7 +464,8 @@ const combat = createCombat({
       const left = controllers.find((c) => c.userData.connected && c.userData.handedness === 'left' && !c.userData.inputSource?.hand);
       return left ? grips[controllers.indexOf(left)] : null;
     },
-    rightSelecting: () => !!findHand('right')?.userData.selecting,
+    // Trigger or grip button: either one holds the bow string.
+    rightSelecting: () => !!(findHand('right')?.userData.selecting || findHand('right')?.userData.squeezing),
     lock: (on) => crosshair.classList.toggle('locked', on),
     floorBased: () => floorBased && renderer.xr.isPresenting,
     isAR: () => xrKind === 'ar' && renderer.xr.isPresenting,
