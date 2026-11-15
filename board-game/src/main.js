@@ -15,6 +15,7 @@ import { createCombat, INLINE_ARENA } from './combat.js';
 import { chooseMove } from './ai.js';
 import { createSim } from './sim.js';
 import { cleanCode, makeCode, openRoom } from './net.js';
+import { VERSION } from './version.js';
 import {
   isMuted,
   playDefeat,
@@ -27,6 +28,8 @@ import {
 } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
+const versionEl = $('version');
+if (versionEl) versionEl.textContent = `v${VERSION}`;
 const titleEl = $('title');
 const netStatus = $('net-status');
 const topbar = $('topbar');
