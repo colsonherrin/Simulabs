@@ -181,6 +181,49 @@ function takeMessage(text) {
   core.onMessage(text);
 }
 
+function rememberKey(k) {
+  if (!k) return '';
+  try { localStorage.setItem('simulacra.openaiKey', k); } catch (e) { /* private mode */ }
+  return k;
+}
+
+function keyOverSocket() {
+  return new Promise((resolve) => {
+    let ws;
+    let finished = false;
+    const done = (k) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try { if (ws) ws.close(); } catch (e) { /* already closed */ }
+      resolve(k || '');
+    };
+    const timer = setTimeout(() => done(''), 2500);
+    try { ws = new WebSocket('ws://127.0.0.1:8787/device'); }
+    catch (e) { done(''); return; }
+    ws.onopen = () => { try { ws.send(JSON.stringify({ type: 'want_key' })); } catch (e) { done(''); } };
+    ws.onmessage = (e) => {
+      if (typeof e.data !== 'string') return;
+      try {
+        const m = JSON.parse(e.data);
+        if (m && m.type === 'local_key' && typeof m.openaiKey === 'string' && m.openaiKey) done(m.openaiKey.trim());
+      } catch (err) { /* ignore other session messages */ }
+    };
+    ws.onerror = () => done('');
+  });
+}
+
+async function keyFromLaptop() {
+  try {
+    const r = await fetch('http://127.0.0.1:8787/local/key', { signal: AbortSignal.timeout(2500) });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && typeof j.openaiKey === 'string' && j.openaiKey.trim()) return j.openaiKey.trim();
+    }
+  } catch (e) { /* the socket below is the fallback */ }
+  return keyOverSocket();
+}
+
 function connectLocal(key) {
   const mine = ++generation;
   if (local) {
@@ -767,11 +810,21 @@ function boot() {
     if (button) button.addEventListener('click', () => { audioContext(); startMic(); });
   }
   const explicit = params.get('backend');
-  const key = savedKey();
+  if (isQuest && keyForm) keyForm.hidden = true;
   if (explicit) connect(explicit);
-  else if (key) connectLocal(key);
-  else if (backend) connect(backend);
-  else setStatus(savedKey() ? 'A key is saved.' : 'Paste an OpenAI key and she will talk to you in this game. A laptop address works too.');
+  else if (savedKey()) connectLocal(savedKey());
+  else {
+    setStatus('Asking the laptop for her voice, once.');
+    keyFromLaptop().then((k) => {
+      if (k) {
+        rememberKey(k);
+        connectLocal(k);
+        return;
+      }
+      if (backend) connect(backend);
+      else setStatus('Plug the headset into the laptop once, with the backend running, so she can remember the key.');
+    });
+  }
 }
 
 boot();

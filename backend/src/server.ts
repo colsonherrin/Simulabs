@@ -15,6 +15,10 @@ export type { ServerOptions } from './session.js';
 import { PROTOCOL_VERSION } from './protocol.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+function isLoopback(addr?: string): boolean {
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
 const GAME_DIR = join(HERE, '..', '..', 'board-game', 'site');
 
 /**
@@ -135,6 +139,25 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
       });
       return;
     }
+    if (url.pathname === '/local/key') {
+      const headers = {
+        'access-control-allow-origin': '*',
+        'access-control-allow-methods': 'GET, OPTIONS',
+        'access-control-allow-private-network': 'true',
+        'cache-control': 'no-store',
+      };
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, headers).end();
+        return;
+      }
+      if (!isLoopback(req.socket.remoteAddress)) {
+        res.writeHead(403, { 'content-type': 'text/plain' }).end('localhost only');
+        return;
+      }
+      res.writeHead(200, { ...headers, 'content-type': 'application/json' });
+      res.end(JSON.stringify({ openaiKey: opts.apiKey || '' }));
+      return;
+    }
     if (url.pathname === '/xr' || url.pathname === '/crownfall') {
       res.writeHead(302, { location: url.pathname + '/' }).end();
       return;
@@ -169,10 +192,21 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
   });
 
   const wss = new WebSocketServer({ server, path: '/device', maxPayload: 8 * 1024 * 1024 });
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    const local = isLoopback(req.socket.remoteAddress);
     const session = new Session({ send: (text) => ws.send(text), open: () => ws.readyState === ws.OPEN }, opts, memory, makeBrain);
     ws.on('message', (raw, isBinary) => {
-      if (!isBinary) session.receive(raw.toString());
+      if (isBinary) return;
+      const text = raw.toString();
+      if (local) {
+        let ask = false;
+        try { ask = JSON.parse(text).type === 'want_key'; } catch { /* a normal session message */ }
+        if (ask) {
+          if (opts.apiKey) ws.send(JSON.stringify({ type: 'local_key', openaiKey: opts.apiKey }));
+          return;
+        }
+      }
+      session.receive(text);
     });
     ws.on('close', () => session.dispose());
     ws.on('error', () => session.dispose());
