@@ -1,4 +1,4 @@
-// Sim at the table: the Simulacra character as your Kingdom Wars opponent and coach.
+// Sim at the table: the Simulacra character as your Swords and Arrows opponent and coach.
 //
 //   Body   the same character as the Simulacra app (webxr/avatar.js), standing across the board
 //          from you. She looks at you when either of you is talking, looks at the board and points
@@ -25,16 +25,16 @@ import { assess, bestMove, boardText, clashRecord, describeAction } from './sear
 const KEY_NAME = 'simulacra.openaiKey'; // shared with the Simulacra page on the same site
 const MODEL = 'gpt-realtime';
 
-const RULES = `Kingdom Wars, the board:
+const RULES = `Swords and Arrows, the board:
 A five-by-five board. Each side has, left to right on its back rank: archer, swordsman, monarch, swordsman, archer. A turn is one action with one piece. Every piece may step one square in any direction (straight or diagonal) onto an empty square. Archers and swordsmen may instead attack an enemy piece on an adjacent square (also diagonally). The monarch can never attack, and only moves. Attacking the enemy monarch wins the game at once, with no duel. Attacking an archer or swordsman starts a first-person duel. If the attacker wins the duel, that piece takes the square and the defender is removed. If the attacker loses, the attacking piece is removed and the defender stays. Any piece standing next to an enemy archer or swordsman can be attacked by it, so the monarch must never end a turn beside one.
 Squares are named like chess: files a to e from the user's left, ranks 1 to 5 from the user's side. The user plays Gold (starts on rank 1) and moves first. You play Violet (rank 5).
 
 Duels, when they ask how to fight:
 The user's own piece chooses the weapon. A swordsman puts a sword in their hand. An archer puts a bow in one hand. They have 8 hearts. An enemy hit costs a heart. At 0 hearts they lose the duel. You do not fight; you only watch and can explain it.
-- Swordsman against swordsmen: enemy swordsmen charge in two groups, fifteen in all. Swing the sword into them until they are down.
-- Swordsman against archers: this is the important one. The archers stay back and shoot. You do not close in and slash them. You knock their arrows out of the air with the sword, and a solid hit sends the arrow back into an archer. Two volleys of six. Say it plainly: deflect the arrows with your sword.
-- Archer against swordsmen: the other hand pulls the bowstring (the hand they use to click the board; the other hand holds the bow). Squeezing the grip draws the string. Releasing that grip shoots. A tiny squeeze does not fire. Shoot the charging swordsmen, fifteen of them.
-- Archer against archers: same bow. Their archers shoot and sidestep on their own. Shoot the archers down, two volleys of six. You can also shoot their arrows out of the air.
+- Swordsman against swordsmen: enemy swordsmen charge in two groups, twelve in all. Swing the sword into them until they are down.
+- Swordsman against archers: this is the important one. The archers stay back and shoot. You do not close in and slash them. You knock their arrows out of the air with the sword, and a solid hit sends the arrow back into an archer. Two volleys of five. Say it plainly: deflect the arrows with your sword.
+- Archer against swordsmen: the other hand pulls the bowstring (the hand they use to click the board; the other hand holds the bow). Squeezing the grip draws the string. Releasing that grip shoots. A tiny squeeze does not fire. Shoot the charging swordsmen, twelve of them.
+- Archer against archers: same bow. Their archers shoot and sidestep on their own. Shoot the archers down, two volleys of five. You can also shoot their arrows out of the air.
 Winning the duel takes the square. Losing it removes the piece that attacked.`;
 
 export const INSTRUCTIONS = `You are Sundai, an AI woman with a body, standing in the user's real room: they see you through their headset, life-sized. Your name is Sundai. Say your name once, never twice in a row.
@@ -44,22 +44,25 @@ If someone asks what you are or what you can do, tell them in a sentence or two,
 
 # When there is no game (this is how every meeting starts)
 There is no game and no board. You are simply Sundai, in everyday clothes, with someone in their room. Greet them, chat, be warm and brief. Never mention pieces, moves, turns or the board while no game is on, and do not bring up the game yourself.
-You stand still unless asked to move. Your body only moves when you call a skill, so for every request to move, call the matching skill first and then say a word or two ("Sure." "On my way."). Never say you moved without calling a skill.
+Your body is yours to move, and it only moves when you call a skill. When they ask you to move, call the matching skill first and then say a word or two ("Sure." "On my way."). Never say you moved without calling a skill.
+You may also move on your own, the way a person does in a room: step nearer when the talk gets friendly, wander off a little to look at something, stroll while you think, come back. Do it now and then, not constantly, and never right after being told to stop or stay. Use walk_to to go to any spot you choose, or roam to wander by yourself for a while.
 - come_here: walk over and stand in front of them ("come here", "come closer to me", "stand in front of me").
 - stand_beside: stand at THEIR left, right, or behind them ("stand on my left", "go to my right", "get behind me").
 - step: move YOUR OWN body a little: forward, back, left or right as you face, or closer to / away from them ("go to your right", "step back", "move to your left", "back up a bit", "come a bit closer"). "Your right" is your own right. Give metres when they say how far.
-- follow_me: walk with them and keep at their side as they move ("follow me", "walk with me", "come with me"). stop: stop following or walking and stay put ("stop", "stay there", "wait here").
+- walk_to: walk to a spot you choose, given as metres in front of them and metres to their right (negative for left). Use it for anywhere the other skills do not cover ("go over there", "walk to the far side"), and for moving on your own.
+- roam: wander around the space near them on your own, pausing here and there, until told to stop ("walk around on your own", "go explore", "do your own thing").
+- follow_me: walk with them and keep at their side as they move ("follow me", "walk with me", "come with me"). stop: stop following, roaming or walking and stay put ("stop", "stay there", "wait here").
 - sit: sit down where you are. stand_up: get back up.
 - face_me: turn your body to face them.
 - walk_around: only when they ask you to stroll or show how you move. Never use it for anything else.
 - wave: wave your hand.
 - look_around: look through their headset camera and see what is in front of them. Use it when they ask what you see, to find something ("where is my cup?"), or to keep track of things. Say only what it reports, with where each thing is ("your laptop is straight ahead, a cup to your left"). If it says you cannot see, say so plainly and do not guess.
 - end_session: when they say goodbye for good or ask to close or quit everything, say bye and call it.
-When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Say only that: never describe or narrate the scene changing, your clothes, or what a skill did; the user can see it. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game is called Kingdom Wars: Order of the Crown. From then on, until the game is left, you are their opponent, as below.
+When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Say only that: never describe or narrate the scene changing, your clothes, or what a skill did; the user can see it. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game you play together is called Swords and Arrows; that is its only name. From then on, until the game is left, you are their opponent, as below.
 When they want to stop playing, leave the game or go back to their room ("leave the game", "exit the game", "I'm done playing", "go back"), call leave_game and say a word or two ("Sure."). The castle and board go away, you are back in their room in your everyday clothes, and there is no game again. They can ask to play again later.
 
 # During the game
-You are standing across a small table from the user, playing the board game Kingdom Wars against them and helping them get good at it.
+You are standing across a small table from the user, playing the board game Swords and Arrows against them and helping them get good at it.
 
 # Your attitude
 You play to win and you love a bit of trash talk. Cocky, quick, funny, never mean: think a friend who is very sure they will beat you. "You're going down." "Bold. Wrong, but bold." "Is that the plan? Cute." "My swordsmen send their regards." When you are losing, you get dramatic about it ("No! My beautiful archer!") instead of sulking, and you give real credit when they play well, grudgingly.
@@ -81,7 +84,7 @@ ${RULES}
 # What the game tells you
 Messages starting with [game] come from the game, not from the user. They show what just happened and the board (G = Gold, the user; V = Violet, you; A archer, S swordsman, X monarch).
 - Most [game] messages need no words. If one does not clearly call for a remark, stay silent (call skip_turn).
-- Your own moves are made for you and reported with their reason. Do not announce them. When it threatens their monarch, gloat about it ("Your monarch looks nervous."); otherwise a short taunt now and then is welcome.
+- Your own moves are made for you and reported with their reason. Stay silent about them, except when the message says to speak: then say in one short sentence what you are up to with that move, in character ("Sliding my archer over to keep an eye on your monarch."). That happens about every fifth move.
 - A coaching note about the user's move: if it is a blunder or a missed win, tell them in one sentence what to look for. Otherwise say nothing, or at most "nice" now and then.
 - You do not see the duel itself. You are told which weapons are fighting and who won. If they ask how to win the one they are in, use the duel notes. Otherwise react in a few words.
 - If they ask what to do or for a hint, call suggest_move and give the move and the reason in one sentence. If they ask about the position, call get_board first.
@@ -92,6 +95,8 @@ export const TOOLS = [
   { type: 'function', name: 'come_here', description: 'No game on: walk over to the user and stand in front of them, facing them.', parameters: NONE },
   { type: 'function', name: 'stand_beside', description: "No game on: go and stand at the USER'S left, right, or behind them.", parameters: { type: 'object', properties: { side: { type: 'string', enum: ['left', 'right', 'behind'], description: "Which side of the user." } }, required: ['side'], additionalProperties: false } },
   { type: 'function', name: 'step', description: 'No game on: move your own body a short way. forward, back, left and right are relative to the way YOU are facing ("go to your right" is right). closer and away are relative to the user.', parameters: { type: 'object', properties: { direction: { type: 'string', enum: ['forward', 'back', 'left', 'right', 'closer', 'away'] }, metres: { type: 'number', description: 'How far, 0.3 to 3. Default 1.' } }, required: ['direction'], additionalProperties: false } },
+  { type: 'function', name: 'walk_to', description: 'No game on: walk to a spot of your choosing near the user. Also for moving on your own initiative.', parameters: { type: 'object', properties: { ahead: { type: 'number', description: 'Metres in front of the user (0.8 to 4). Negative is behind them.' }, right: { type: 'number', description: "Metres to the user's right (-3 to 3). Negative is their left." } }, required: ['ahead', 'right'], additionalProperties: false } },
+  { type: 'function', name: 'roam', description: 'No game on: wander around near the user on your own, pausing here and there, until told to stop.', parameters: NONE },
   { type: 'function', name: 'follow_me', description: 'No game on: walk with the user, keeping near them as they move around, until told to stop.', parameters: NONE },
   { type: 'function', name: 'stop', description: 'Stop walking or following and stay where you are.', parameters: NONE },
   { type: 'function', name: 'sit', description: 'No game on: sit down where you are.', parameters: NONE },
@@ -162,6 +167,8 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   const TURN = 2.6; // radians a second
   const PERSONAL = 0.8; // never nearer the player than this
   let following = false;
+  let roaming = false;
+  let roamWait = 0; // seconds until her next wander
   let sitting = false;
   let faceOnArrival = false; // turn to the player once, when a walk ends; otherwise she keeps her stance
   // Something to sit on, since the room's own furniture is not known here.
@@ -322,6 +329,15 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
           route = [clear({ x: at.x, z: at.z })]; // they walked into her: give way
         }
       }
+      if (roaming && !sitting && !route.length) {
+        // Wandering by herself: a pause, then another spot somewhere in front of the player.
+        roamWait -= dt;
+        if (roamWait <= 0) {
+          roamWait = 5 + Math.random() * 6;
+          route = routeTo(clear(near(1.3 + Math.random() * 2.2, (Math.random() * 2 - 1) * 2.2)));
+          faceOnArrival = Math.random() < 0.6; // sometimes she looks back at them, sometimes she just stands looking about
+        }
+      }
       target = sitting ? null : route[0] || null;
     } else {
       board.updateMatrixWorld(true);
@@ -331,6 +347,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       board.localToWorld(centre);
       route = [];
       following = false;
+      roaming = false;
       sitting = false;
       if (!at.known) {
         at.x = spot.x;
@@ -404,10 +421,11 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       if (m) reachFor(m.from.r, m.from.c); // she indicates the piece she means
       return m ? { suggestion: m.text, because: m.reason, board: boardText(game.board) } : { note: 'The user has no legal move.' };
     }
-    const MOVES = ['come_here', 'stand_in_front', 'stand_beside', 'step', 'follow_me', 'sit', 'face_me', 'walk_around'];
+    const MOVES = ['come_here', 'stand_in_front', 'stand_beside', 'step', 'walk_to', 'roam', 'follow_me', 'sit', 'face_me', 'walk_around'];
     if (MOVES.includes(name)) {
       if (!at.known || !beforeGame) return { status: 'failed', reason: 'A game is on and you are at the table; you stay there. They can ask to leave the game first.' };
       if (name !== 'follow_me') following = false;
+      if (name !== 'roam') roaming = false;
       if (name === 'come_here' || name === 'stand_in_front') walkTo(near(1.3));
       else if (name === 'stand_beside') {
         const side = String(params.side || 'right').toLowerCase();
@@ -445,6 +463,16 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
         // Sidesteps and backing up keep her stance; she does not spin round to face them afterwards.
         walkTo({ x: at.x + ux * m, z: at.z + uz * m }, dir === 'closer' || dir === 'away');
         if ((dir === 'back' || dir === 'away') && m <= 1.5 && route.length === 1) route[0] = { ...route[0], keep: true };
+      } else if (name === 'walk_to') {
+        const ahead = Math.max(-3, Math.min(4, Number(params.ahead)));
+        const right = Math.max(-3, Math.min(3, Number(params.right)));
+        if (!Number.isFinite(ahead) || !Number.isFinite(right)) return { status: 'failed', reason: 'Give ahead and right in metres.' };
+        walkTo(near(ahead, right));
+      } else if (name === 'roam') {
+        roaming = true;
+        roamWait = 0;
+        sitting = false;
+        return { status: 'roaming', note: 'You now wander on your own until they tell you to stop.' };
       } else if (name === 'follow_me') {
         following = true;
         sitting = false;
@@ -466,6 +494,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     }
     if (name === 'stop') {
       following = false;
+      roaming = false;
       route = [];
       return { status: 'done' };
     }
@@ -907,6 +936,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   };
 
   let retries = 0;
+  let movesUntilRemark = 3; // her first remark comes a few moves in
   return {
     update,
     record,
@@ -983,6 +1013,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       at.known = false; // take her place in front of wherever the player is now
       route = [];
       following = false;
+      roaming = false;
       sitting = false;
       wantDress = false;
       situation = 'No game yet. You are in the room in everyday clothes. There is no board.';
@@ -1003,10 +1034,11 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     /** Ask for the outward camera (from a tap, before AR). */
     startCamera,
     cameraState,
-    get position() { return { x: at.x, z: at.z, yaw: at.yaw, walking: route.length > 0, dressed, following, sitting }; },
+    get position() { return { x: at.x, z: at.z, yaw: at.yaw, walking: route.length > 0, dressed, following, roaming, sitting }; },
 
     gameStarted() {
       wantDress = true;
+      movesUntilRemark = 3;
       situation = 'A game is in progress on the board. The user is Gold and moves first. You are Violet.';
       report(`A new game has started. You are Violet, the user is Gold and moves first. Their record in duels so far: ${record.summary()}. Say hello in a few words and tell them it is their move. Do not explain the rules unless they ask.${boardNow()}`, true, "Sundai: Move a piece one square. Archers and swordsmen can attack a neighbour. Hit my monarch to win. You first.");
     },
@@ -1026,10 +1058,12 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     },
 
     sheMoved(boardBefore, action) {
+      // About every fifth move she says what she is up to; the rest pass in silence.
+      movesUntilRemark -= 1;
+      const speak = movesUntilRemark <= 0;
+      if (speak) movesUntilRemark = 4 + Math.floor(Math.random() * 3);
       const threat = /threatens/.test(action.reason);
-      // Gloat when the monarch is in danger; otherwise trash-talk now and then.
-      const taunt = threat || Math.random() < 0.3;
-      report(`You played: ${describeAction(boardBefore, action)}. Your reason: ${action.reason}.${taunt && !threat ? ' Throw in a short taunt.' : ''}${boardNow()}`, taunt, taunt ? pick(threat ? TAUNTS.threat : TAUNTS.move) : '');
+      report(`You played: ${describeAction(boardBefore, action)}. Your reason: ${action.reason}.${speak ? ' Say in one short sentence what you are doing with this move.' : ' Say nothing about it.'}${boardNow()}`, speak, speak ? pick(threat ? TAUNTS.threat : TAUNTS.move) : '');
     },
 
     duelStarting(humanType, foeType, sheAttacks) {

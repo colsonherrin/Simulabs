@@ -205,8 +205,10 @@ function fitCrown(model, crown) {
   }
   if (!xMax) return;
   const cz = (zMin + zMax) / 2;
-  const rx = xMax * 1.05 + 0.6; // room for the hair over the scalp
-  const rz = ((zMax - zMin) / 2) * 1.05 + 0.6;
+  // 70% of the head's own oval: a small crown that sits on top of her head, not a band round it.
+  const CROWN = 0.7;
+  const rx = (xMax * 1.05 + 0.6) * CROWN; // room for the hair over the scalp
+  const rz = (((zMax - zMin) / 2) * 1.05 + 0.6) * CROWN;
   // The crown model: band inner radius ~0.094 and height ~0.04 with rims
   // (metres), round +Y. Scaled to the oval in centimetres.
   const inner = 0.094;

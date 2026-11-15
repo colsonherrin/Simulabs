@@ -832,10 +832,15 @@ function settle(info) {
 // The computer's turn, played straight after yours: as soon as your piece
 // has landed it flashes the move it picked (its piece selected with the
 // green and red squares) and plays it.
+let afterBattle = false;
 function scheduleComputer() {
   clearTimeout(aiTimer);
   if (!computersTurn()) return;
   const token = epoch;
+  // Straight after a battle the player is still finding the board again: she waits, then shows her
+  // move for a good moment, and only then plays it (which may open the next battle).
+  const settleIn = afterBattle;
+  afterBattle = false;
   aiTimer = setTimeout(() => {
     if (token !== epoch || !computersTurn()) return;
     const action = sim.chooseMove(game) || chooseMove(game);
@@ -852,8 +857,8 @@ function scheduleComputer() {
       else doMove(action.to.r, action.to.c);
       // A duel is announced by doAttack and a win by the game-over report; a plain move or strike here.
       if (action.reason && !action.attack && !strike) sim.sheMoved(before, action);
-    }, 220);
-  }, 380);
+    }, settleIn ? (action.attack ? 2600 : 900) : 220);
+  }, settleIn ? 1800 : 380);
 }
 
 // Squares are named like chess: files a–e from Gold's left, ranks 1–5 from
@@ -904,6 +909,7 @@ function finishCombat(result) {
   }
   game.phase = 'play';
   pending = null;
+  afterBattle = true;
   settle(advanceTurn(game));
   game.takeover = null;
   if (from && to) sendAction('clash', { from, to, win });

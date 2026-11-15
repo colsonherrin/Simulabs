@@ -16,8 +16,12 @@ let model = null;
 let loading = null;
 const seen = new Map(); // thing -> { where, at }
 
+// On a headset the passthrough camera is at the front of the headset and its label can say "facing
+// front", which on a phone would mean a selfie camera. So a camera is refused only when its label
+// says it shows the wearer (an avatar, selfie or virtual camera); what it actually shows is then
+// checked from the picture itself (see blank()).
 const OUTWARD = /passthrough|back|environment|world|rear/i;
-const INWARD = /avatar|selfie|virtual|front|user/i;
+const INWARD = /avatar|selfie|virtual|user/i;
 const open = (constraints) => navigator.mediaDevices.getUserMedia({ video: constraints });
 const labelOf = (stream) => (stream.getVideoTracks()[0] && stream.getVideoTracks()[0].label) || 'camera';
 const close = (stream) => stream.getTracks().forEach((t) => t.stop());
@@ -70,6 +74,29 @@ export async function startCamera() {
 
 export const cameraState = () => (video ? 'on: ' + label : problem || 'not started');
 
+const probe = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+/** True if the camera picture is empty (all one flat colour, as when a headset withholds its camera). */
+function blank() {
+  try {
+    probe.width = 32;
+    probe.height = 24;
+    const g = probe.getContext('2d', { willReadFrequently: true });
+    g.drawImage(video, 0, 0, 32, 24);
+    const d = g.getImageData(0, 0, 32, 24).data;
+    let sum = 0;
+    let sq = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const y = 0.3 * d[i] + 0.6 * d[i + 1] + 0.1 * d[i + 2];
+      sum += y;
+      sq += y * y;
+    }
+    const n = d.length / 4;
+    return sq / n - (sum / n) ** 2 < 4; // next to no variation at all
+  } catch (e) {
+    return false;
+  }
+}
+
 const side = (x) => (x < 0.36 ? 'to their left' : x > 0.64 ? 'to their right' : 'straight ahead of them');
 const ago = (ms) => (ms < 8000 ? 'just now' : ms < 90000 ? Math.round(ms / 1000) + ' seconds ago' : Math.round(ms / 60000) + ' minutes ago');
 
@@ -84,13 +111,14 @@ export async function look(find = '') {
       loading = loading || Promise.all([import('@tensorflow/tfjs'), import('@tensorflow-models/coco-ssd')]).then(([, coco]) => coco.load({ base: 'lite_mobilenet_v2' }));
       model = await loading;
     }
+    if (blank()) return { can_see: false, reason: `the camera ("${label}") is giving an empty picture`, say: 'Tell the user honestly that the headset camera is not giving you a picture right now.' };
     const found = await model.detect(video, 12, 0.58); // only what it is fairly sure of: better to say less than to invent things
     const now = Date.now();
     const w = video.videoWidth || 640;
     const things = found.map((p) => ({ thing: p.class, where: side((p.bbox[0] + p.bbox[2] / 2) / w), sure: Math.round(p.score * 100) + '%' }));
     for (const t of things) seen.set(t.thing, { where: t.where, at: now });
     const earlier = [...seen.entries()].filter(([thing]) => !things.some((t) => t.thing === thing)).map(([thing, s]) => ({ thing, last_seen: s.where + ', ' + ago(now - s.at) }));
-    const out = { can_see: true, in_view_now: things, seen_earlier: earlier, note: 'Directions are from the user\'s point of view when you looked. Only mention what is listed.' };
+    const out = { can_see: true, camera: label, in_view_now: things, seen_earlier: earlier, note: 'Directions are from the user\'s point of view when you looked. Only mention what is listed.' };
     if (find) {
       const key = find.toLowerCase().replace(/^(the|my|a|an) /, '').trim();
       const hit = [...seen.entries()].find(([thing]) => thing.includes(key) || key.includes(thing));
