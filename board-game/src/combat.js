@@ -171,6 +171,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   // (weapons posed from tracked hand joints every frame).
   let gripMode = 'screen';
   let stringHeld = false;
+  let drawPeak = 0;
+  const _peakNock = new THREE.Vector3();
   let pinching = false;
   let haveTipPrev = false;
 
@@ -232,6 +234,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     weapon.scale.setScalar(1);
     gripMode = wantedGripMode();
     stringHeld = false;
+    drawPeak = 0;
     pinching = false;
     haveTipPrev = false;
     if (gripMode === 'controller2') {
@@ -260,7 +263,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         const grip = hooks.rightGrip?.() || hand;
         grip.add(weapon);
         weapon.position.set(0, 0, 0.03);
-        weapon.quaternion.setFromAxisAngle(_Z, Math.PI / 2);
+        weapon.quaternion.setFromAxisAngle(_Z, Math.PI / 2).multiply(_q1.setFromAxisAngle(_X, Math.PI / 6));
         if (left && left !== hand) {
           shield.visible = true;
           left.add(shield);
@@ -695,6 +698,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     if (locked?.alive) arrow.target = locked;
     playArrow();
     draw = 0;
+    drawPeak = 0;
     reload = 0.32;
   }
 
@@ -703,8 +707,9 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   // bow, and letting go to shoot along the arrow, onto the lock if any.
   function pullString(point, pulling, justStarted, radius, dt) {
     bow.localToWorld(_nockW.set(0, 0, bow.userData.restZ));
-    if (justStarted && reload <= 0 && point.distanceTo(_nockW) < radius) {
+    if (justStarted && point.distanceTo(_nockW) < radius) {
       stringHeld = true;
+      drawPeak = 0;
       hooks.haptic?.(0.25);
     }
     if (stringHeld && pulling) {
@@ -715,11 +720,19 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       _nockL.z = Math.max(bow.userData.restZ, _nockL.z);
       const was = draw;
       draw = THREE.MathUtils.clamp((_nockL.z - bow.userData.restZ) / 0.55, 0, 1);
+      if (draw >= drawPeak) {
+        drawPeak = draw;
+        _peakNock.copy(_nockL);
+      }
       if (draw >= 1 && was < 1) hooks.haptic?.(0.35);
     }
     if (stringHeld && !pulling) {
       stringHeld = false;
-      if (draw > 0.2 && reload <= 0) {
+      const power = Math.max(draw, drawPeak);
+      if (drawPeak > draw) _nockL.copy(_peakNock);
+      drawPeak = 0;
+      if (power > 0.2) {
+        draw = power;
         // Fly along the drawn arrow: from the nock through the grip.
         bow.localToWorld(_nockW.copy(_nockL));
         bow.localToWorld(_gripW.copy(bow.userData.grip));
@@ -735,7 +748,10 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       draw = 0;
       _nockL.set(0, 0, bow.userData.restZ);
     }
-    if (!stringHeld) draw = Math.max(0, draw - dt * 3);
+    if (!stringHeld) {
+      draw = Math.max(0, draw - dt * 3);
+      if (draw <= 0) drawPeak = 0;
+    }
   }
 
   // Two controllers: the bow is held in the left one (limbs along its
@@ -762,6 +778,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     if (rightGrip) {
       rightGrip.getWorldPosition(_pullW);
       pullString(_pullW, selecting, selecting && !rightWasSelecting, 0.22, dt);
+    } else if (stringHeld) {
+      pullString(_pullW, false, false, 0.22, dt);
     }
     rightWasSelecting = selecting;
   }
@@ -795,6 +813,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
 
     const left = trackedHand('left');
     if (!left || !bowGrip(left, _gripPos, _gripQuat)) {
+      if (stringHeld) pullString(_pinchPt, false, false, 0.1, dt);
       bow.visible = false;
       stringHeld = false;
       return;
@@ -923,9 +942,21 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         }
         if (!mousePull && !autoDraw) draw = Math.max(0, draw - dt * 3);
       } else if (gripMode === 'controller') {
-        if (input.primaryDown) draw = Math.min(1, draw + dt / 0.5);
-        if (input.primaryReleased && draw > 0.32 && reload <= 0) loose();
-        else if (!input.primaryDown) draw = Math.max(0, draw - dt * 3);
+        if (input.primaryDown) {
+          draw = Math.min(1, draw + dt / 0.5);
+          drawPeak = Math.max(drawPeak, draw);
+        }
+        if (input.primaryReleased) {
+          const power = Math.max(draw, drawPeak);
+          drawPeak = 0;
+          if (power > 0.2) {
+            draw = power;
+            loose();
+          } else draw = 0;
+        } else if (!input.primaryDown) {
+          draw = Math.max(0, draw - dt * 3);
+          if (draw <= 0) drawPeak = 0;
+        }
       }
     }
     if (!usesSword()) reload = Math.max(0, reload - dt);
