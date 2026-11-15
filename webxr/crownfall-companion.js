@@ -551,7 +551,6 @@ let voiceTex = null;
 let voiceShown = '';
 const voiceCamP = new THREE.Vector3();
 const voiceCamD = new THREE.Vector3();
-const voiceRight = new THREE.Vector3();
 const voiceWant = new THREE.Vector3();
 
 function voiceDebugText() {
@@ -581,7 +580,7 @@ function ensureVoicePanel(scene) {
     if (THREE.SRGBColorSpace) voiceTex.colorSpace = THREE.SRGBColorSpace;
     voiceMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(0.7, 0.525),
-      new THREE.MeshBasicMaterial({ map: voiceTex, transparent: true, depthTest: false }),
+      new THREE.MeshBasicMaterial({ map: voiceTex, transparent: true, depthTest: true }),
     );
     voiceMesh.name = 'voice-debug';
     voiceMesh.renderOrder = 11;
@@ -612,15 +611,22 @@ function updateVoicePanel(ctx, dt, text) {
     });
     voiceTex.needsUpdate = true;
   }
+  if (!body.root.visible) {
+    voiceMesh.visible = false;
+    return;
+  }
   const cam = viewCamera(ctx);
   cam.getWorldPosition(voiceCamP);
-  cam.getWorldDirection(voiceCamD);
-  voiceCamD.y = 0;
-  if (voiceCamD.lengthSq() < 1e-6) voiceCamD.set(0, 0, -1);
-  voiceCamD.normalize();
-  voiceRight.crossVectors(voiceCamD, UP).normalize();
-  voiceWant.copy(voiceCamP).addScaledVector(voiceCamD, 0.9).addScaledVector(voiceRight, 0.42).add(new THREE.Vector3(0, -0.08, 0));
-  voiceMesh.position.lerp(voiceWant, Math.min(1, dt * 6));
+  const feet = body.root.position;
+  voiceCamD.set(voiceCamP.x - feet.x, 0, voiceCamP.z - feet.z);
+  const dist = voiceCamD.length();
+  if (dist < 1e-3) voiceCamD.set(0, 0, 1);
+  else voiceCamD.multiplyScalar(1 / dist);
+  const gap = Math.min(0.5, Math.max(0.28, dist - 0.55));
+  voiceWant.set(feet.x, feet.y + 1.2, feet.z).addScaledVector(voiceCamD, gap);
+  if (voiceMesh.position.distanceTo(voiceWant) > 2) voiceMesh.position.copy(voiceWant);
+  else voiceMesh.position.lerp(voiceWant, Math.min(1, dt * 6));
+  voiceCamP.y = voiceMesh.position.y;
   voiceMesh.lookAt(voiceCamP);
 }
 
