@@ -549,6 +549,8 @@ let voiceMesh = null;
 let voiceCanvasCtx = null;
 let voiceTex = null;
 let voiceShown = '';
+let voiceHold = false;
+let voiceWait = 0;
 const voiceCamP = new THREE.Vector3();
 const voiceCamD = new THREE.Vector3();
 const voiceWant = new THREE.Vector3();
@@ -592,11 +594,12 @@ function ensureVoicePanel(scene) {
 function updateVoicePanel(ctx, dt, text) {
   const show = ctx.renderer.xr.isPresenting && params.get('log') !== '0';
   if (!show) {
+    voiceHold = false;
+    voiceWait = 0;
     if (voiceMesh) voiceMesh.visible = false;
     return;
   }
   ensureVoicePanel(ctx.scene);
-  voiceMesh.visible = true;
   if (text !== voiceShown) {
     voiceShown = text;
     voiceCanvasCtx.clearRect(0, 0, 1024, 768);
@@ -611,23 +614,24 @@ function updateVoicePanel(ctx, dt, text) {
     });
     voiceTex.needsUpdate = true;
   }
-  if (!body.root.visible) {
+  if (!voiceHold) {
+    voiceWait += dt;
     voiceMesh.visible = false;
-    return;
+    if (voiceWait < 0.4) return;
+    const cam = viewCamera(ctx);
+    cam.getWorldPosition(voiceCamP);
+    cam.getWorldDirection(voiceCamD);
+    voiceCamD.y = 0;
+    if (voiceCamD.lengthSq() < 1e-6) return;
+    voiceCamD.normalize();
+    voiceMesh.position.copy(voiceCamP).addScaledVector(voiceCamD, 0.9);
+    voiceMesh.position.y -= 0.15;
+    voiceWant.copy(voiceCamP);
+    voiceWant.y = voiceMesh.position.y;
+    voiceMesh.lookAt(voiceWant);
+    voiceHold = true;
   }
-  const cam = viewCamera(ctx);
-  cam.getWorldPosition(voiceCamP);
-  const feet = body.root.position;
-  voiceCamD.set(voiceCamP.x - feet.x, 0, voiceCamP.z - feet.z);
-  const dist = voiceCamD.length();
-  if (dist < 1e-3) voiceCamD.set(0, 0, 1);
-  else voiceCamD.multiplyScalar(1 / dist);
-  const gap = Math.min(0.5, Math.max(0.28, dist - 0.55));
-  voiceWant.set(feet.x, feet.y + 1.2, feet.z).addScaledVector(voiceCamD, gap);
-  if (voiceMesh.position.distanceTo(voiceWant) > 2) voiceMesh.position.copy(voiceWant);
-  else voiceMesh.position.lerp(voiceWant, Math.min(1, dt * 6));
-  voiceCamP.y = voiceMesh.position.y;
-  voiceMesh.lookAt(voiceCamP);
+  voiceMesh.visible = true;
 }
 
 function tick(ctx) {
