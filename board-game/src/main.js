@@ -1019,13 +1019,11 @@ function pickWithRay() {
     }
     return null;
   }
-  // The square under the ray, not the piece standing on it. A unit in front
-  // no longer hides the tile behind it.
-  board.updateMatrixWorld(true);
-  _pickUp.set(0, 1, 0).transformDirection(board.matrixWorld);
-  board.getWorldPosition(_boardHit);
-  _boardPlane.setFromNormalAndCoplanarPoint(_pickUp, _boardHit);
-  if (!raycaster.ray.intersectPlane(_boardPlane, _boardHit)) return null;
+  // Only the board surface. Piece models are not tested, so one standing
+  // in the ray cannot change which tile is chosen.
+  const hit = raycaster.intersectObject(tabletop.boardTop, false)[0];
+  if (!hit) return null;
+  _boardHit.copy(hit.point);
   board.worldToLocal(_boardHit);
   const square = squareUnder(_boardHit.x, _boardHit.z);
   if (!square) return null;
@@ -1481,13 +1479,9 @@ function frame(t, xrFrame) {
     laser.updateWorldMatrix(true, false);
     laser.getWorldPosition(_aimOrigin);
     _aimDir.set(0, 0, -1).applyQuaternion(laser.getWorldQuaternion(_seatQ));
-    board.updateMatrixWorld(true);
-    _pickUp.set(0, 1, 0).transformDirection(board.matrixWorld);
-    board.getWorldPosition(_boardHit);
-    _boardPlane.setFromNormalAndCoplanarPoint(_pickUp, _boardHit);
     raycaster.set(_aimOrigin, _aimDir);
-    const hit = raycaster.ray.intersectPlane(_boardPlane, _boardHit);
-    if (line) line.scale.z = hit ? Math.max(0.05, _aimOrigin.distanceTo(_boardHit)) : 1.5;
+    const hit = raycaster.intersectObject(tabletop.boardTop, false)[0];
+    if (line) line.scale.z = hit ? Math.max(0.05, _aimOrigin.distanceTo(hit.point)) : 1.5;
   }
   tabletop.turnSprite.visible = renderer.xr.isPresenting && !combatView;
   exitPlaque.visible = renderer.xr.isPresenting && !combatView && !placing;
