@@ -916,11 +916,11 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     stringMat.emissiveIntensity = stringHeld ? 1.6 : nearString ? 0.9 : 0;
   }
 
-  // Two controllers: the bow is held in the left one (limbs along its
-  // handle, facing where it points) and the right one pulls the string.
+  // Two controllers: the bow is held in the right one and the left one
+  // pulls the string. Releasing the left grip is what looses the arrow.
   function poseFromControllers(dt) {
-    const leftGrip = hooks.leftGrip?.();
-    const leftRay = hooks.leftHand?.();
+    const leftGrip = hooks.rightGrip?.();
+    const leftRay = hooks.rightHand?.();
     if (!leftGrip || !leftRay) return;
     leftGrip.getWorldPosition(_gripPos);
     // The bow faces where the left controller points and stands upright,
@@ -940,8 +940,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     bow.visible = true;
     bow.updateMatrixWorld(true);
 
-    const rightGrip = hooks.rightGrip?.();
-    const selecting = !!hooks.rightSelecting?.();
+    const rightGrip = hooks.leftGrip?.();
+    const selecting = !!hooks.leftSelecting?.();
     if (rightGrip) {
       rightGrip.getWorldPosition(_pullW);
       pullString(_pullW, selecting, 0.3, dt);

@@ -507,6 +507,7 @@ const combat = createCombat({
     },
     // Trigger or grip button: either one holds the bow string.
     rightSelecting: () => !!(findHand('right')?.userData.selecting || findHand('right')?.userData.squeezing),
+    leftSelecting: () => !!(findHand('left')?.userData.selecting || findHand('left')?.userData.squeezing),
     lock: (on) => crosshair.classList.toggle('locked', on),
     floorBased: () => floorBased && renderer.xr.isPresenting,
     isAR: () => xrKind === 'ar' && renderer.xr.isPresenting,
