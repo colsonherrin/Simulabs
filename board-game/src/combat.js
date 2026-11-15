@@ -172,6 +172,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   let gripMode = 'screen';
   let stringHeld = false;
   let drawPeak = 0;
+  let releaseWait = 0;
   const _peakNock = new THREE.Vector3();
   let pinching = false;
   let haveTipPrev = false;
@@ -710,9 +711,11 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     if (justStarted && point.distanceTo(_nockW) < radius) {
       stringHeld = true;
       drawPeak = 0;
+      releaseWait = 0;
       hooks.haptic?.(0.25);
     }
     if (stringHeld && pulling) {
+      releaseWait = 0;
       bow.worldToLocal(_nockL.copy(point));
       // The string only travels backward; keep it near the bow's centre line.
       _nockL.x = THREE.MathUtils.clamp(_nockL.x, -0.06, 0.06);
@@ -727,6 +730,9 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       if (draw >= 1 && was < 1) hooks.haptic?.(0.35);
     }
     if (stringHeld && !pulling) {
+      releaseWait += dt || 0.016;
+      if (releaseWait < 0.06) return;
+      releaseWait = 0;
       stringHeld = false;
       const power = Math.max(draw, drawPeak);
       if (drawPeak > draw) _nockL.copy(_peakNock);
