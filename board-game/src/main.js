@@ -910,6 +910,10 @@ function onMonarchFallen() {
 }
 
 function handlePick(data) {
+  if (data?.action === 'exit') {
+    exitXR();
+    return;
+  }
   if (menu || placing) return;
   if (game.phase === 'over') {
     if (data?.action === 'again') pressAgain();
@@ -970,7 +974,42 @@ function findData(object) {
   return null;
 }
 
+// An Exit button beside the board in AR and VR: point at it and pull the trigger, or pinch.
+const exitPlaque = (() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 192;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#8f1f1f';
+  g.beginPath();
+  g.roundRect(4, 4, 504, 184, 40);
+  g.fill();
+  g.lineWidth = 8;
+  g.strokeStyle = '#f0d48a';
+  g.stroke();
+  g.fillStyle = '#fff4dc';
+  g.font = '700 96px Cinzel, Palatino, Georgia, serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('EXIT', 256, 100);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.05), new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide }));
+  // On the player's left, just off the board, tilted up toward them.
+  mesh.position.set(-0.31, 0.05, 0.16);
+  mesh.rotation.set(-0.9, 0.35, 0);
+  mesh.userData.action = 'exit';
+  mesh.visible = false;
+  board.add(mesh);
+  return mesh;
+})();
+function exitXR() {
+  const session = renderer.xr.getSession();
+  if (session) session.end().catch(() => {});
+}
+
 function pickWithRay() {
+  if (exitPlaque.visible && raycaster.intersectObject(exitPlaque, false).length) return { action: 'exit' };
   if (game.phase === 'over') {
     const hits = raycaster.intersectObjects(pickables, true);
     for (const hit of hits) {
@@ -1437,6 +1476,7 @@ function frame(t, xrFrame) {
     if (laser) laser.visible = renderer.xr.isPresenting && game.phase !== 'combat';
   }
   tabletop.turnSprite.visible = renderer.xr.isPresenting && !combatView;
+  exitPlaque.visible = renderer.xr.isPresenting && !combatView && !placing;
 
   updateHitTest(xrFrame);
   if (renderer.xr.isPresenting && xrKind === 'vr') seatInFront(xrFrame);
