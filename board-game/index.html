@@ -13,7 +13,8 @@
   </head>
   <body>
     <script>
-      if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+      // Optional: if the browser refuses the worker, the game still runs.
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
     </script>
     <div id="overlay">
       <div id="hurt"></div>
