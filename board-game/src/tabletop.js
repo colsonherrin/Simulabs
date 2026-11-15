@@ -217,12 +217,12 @@ export function createTabletop(scene) {
           blob.position.y = 0.001;
           mesh.add(blob);
           const pick = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.032, 0.032, 0.09, 8),
+            new THREE.CylinderGeometry(0.034, 0.034, 0.12, 8),
             new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
           );
-          pick.position.y = 0.045;
+          pick.position.y = 0.06;
           mesh.add(pick);
-          mesh.userData = {
+          Object.assign(mesh.userData, {
             id: piece.id,
             type: piece.type,
             side: piece.side,
@@ -230,7 +230,8 @@ export function createTabletop(scene) {
             c,
             pop: 1,
             seed: Math.random() * 10,
-          };
+            face: mesh.rotation.y,
+          });
           mesh.position.copy(dest);
           mesh.rotation.y = piece.side === GOLD ? Math.PI : 0;
           board.add(mesh);
@@ -249,7 +250,7 @@ export function createTabletop(scene) {
             };
             const dx = dest.x - mesh.position.x;
             const dz = dest.z - mesh.position.z;
-            if (dx * dx + dz * dz > 0.0001) mesh.rotation.y = Math.atan2(dx, dz);
+            if (dx * dx + dz * dz > 0.0001) mesh.userData.face = Math.atan2(dx, dz);
           }
         }
       }
@@ -333,6 +334,24 @@ export function createTabletop(scene) {
         mesh.position.x = base.x;
         mesh.position.z = base.z;
         mesh.position.y = base.y + Math.sin(clock.t * 2.2 + data.seed) * 0.0016;
+      }
+      if (data.face == null) data.face = mesh.rotation.y;
+      if (!data.held && data.face != null) {
+        const delta = Math.atan2(Math.sin(data.face - mesh.rotation.y), Math.cos(data.face - mesh.rotation.y));
+        mesh.rotation.y += delta * (1 - Math.exp(-8 * dt));
+      }
+      if (data.rig) {
+        let action = 'idle';
+        if (data.slay) action = 'slump';
+        else if (data.tween) action = 'walk';
+        else if (data.held || data.chosen) action = 'ready';
+        data.rig.drive(dt, {
+          action,
+          gaitPhase: clock.t * 8 + (data.seed || 0),
+          idlePhase: clock.t * 1.35 + (data.seed || 0),
+          strike: data.slay ? Math.min(1, data.slay / 0.35) : 0,
+          speed: data.tween ? 1 : 0,
+        });
       }
       if (data.pop) {
         data.pop = Math.max(0, data.pop - dt * 1.8);

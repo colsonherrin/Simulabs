@@ -194,7 +194,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   }
 
   function spawnSwordsman() {
-    const mesh = createSoldier('sword', paletteForEnemy(attackerSide));
+    const mesh = createSoldier('sword', paletteForEnemy(attackerSide), attackerSide === 0 ? 1 : 0);
     const a = (Math.random() - 0.5) * 0.7;
     const dist = 8.2 + Math.random() * 1.6;
     mesh.position.set(Math.sin(a) * dist, 0, -Math.cos(a) * dist);
@@ -212,7 +212,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   function spawnArchers() {
     const n = TUNING.archerCount;
     for (let i = 0; i < n; i++) {
-      const mesh = createSoldier('archer', paletteForEnemy(attackerSide));
+      const mesh = createSoldier('archer', paletteForEnemy(attackerSide), attackerSide === 0 ? 1 : 0);
       const spread = 0.8;
       const a = -spread / 2 + (spread * i) / Math.max(1, n - 1);
       const dist = 7.4;
@@ -544,6 +544,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       if (e.dying) {
         e.dying += dt;
         e.mesh.rotation.x = -Math.min(1.4, e.dying * 2.2);
+        e.mesh.userData.rig?.drive(dt, { action: 'slump', strike: Math.min(1, e.dying / 0.35), idlePhase: e.seed });
         if (e.dying > 0.8) {
           group.remove(e.mesh);
           e.dying = 0;
@@ -552,30 +553,27 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         continue;
       }
       if (!e.alive) continue;
-      const limbs = e.mesh.userData.limbs;
+      const rig = e.mesh.userData.rig;
       _dir.set(_player.x - e.mesh.position.x, 0, _player.z - e.mesh.position.z);
       const dist = Math.hypot(_dir.x, _dir.z) || 0.0001;
-      e.mesh.rotation.y = Math.atan2(_dir.x, _dir.z);
+      const targetYaw = Math.atan2(_dir.x, _dir.z);
+      const yawDelta = Math.atan2(Math.sin(targetYaw - e.mesh.rotation.y), Math.cos(targetYaw - e.mesh.rotation.y));
+      e.mesh.rotation.y += yawDelta * (1 - Math.exp(-10 * dt));
 
       if (e.kind === 'sword') {
         if (dist > 1.2) {
           const step = TUNING.meleeSpeed * dt;
           e.mesh.position.x += (_dir.x / dist) * step;
           e.mesh.position.z += (_dir.z / dist) * step;
-          const s = Math.sin(phaseT * 10 + e.seed);
-          limbs.legL.rotation.x = s * 0.7;
-          limbs.legR.rotation.x = -s * 0.7;
-          limbs.armL.rotation.x = -s * 0.45;
-          limbs.armR.rotation.x = s * 0.45 - 0.4;
+          rig?.drive(dt, { action: 'walk', gaitPhase: phaseT * 9 + e.seed, idlePhase: phaseT + e.seed, speed: 1 });
           e.windup = 0;
         } else {
-          limbs.legL.rotation.x = 0.15;
-          limbs.legR.rotation.x = -0.1;
           e.windup += dt;
-          limbs.armR.rotation.x = -1.3 + Math.sin(e.windup * 8) * 0.4;
+          const strike = e.windup > 0 ? Math.min(1, e.windup / 0.55) : 0;
+          rig?.drive(dt, { action: 'strike', strike, idlePhase: phaseT + e.seed, speed: 0 });
           if (e.windup > 0.62) {
             damagePlayer();
-            e.windup = -0.15;
+            e.windup = -0.28;
           }
         }
         if (hot > 0 && usesSword()) {
@@ -586,12 +584,18 @@ export function createCombat({ scene, camera, renderer, hooks }) {
           if (blade || inFront(chest, 2.15, 0.2)) killEnemy(e, chest);
         }
       } else {
-        limbs.armL.rotation.x = -0.6;
-        const drawing = e.cooldown < 0.45;
-        limbs.armR.rotation.x = drawing ? -1.15 : -0.3;
+        const drawing = e.cooldown < 0.55 ? 1 - e.cooldown / 0.55 : 0;
+        rig?.drive(dt, { action: 'draw', draw: drawing, idlePhase: phaseT + e.seed, speed: 0 });
         e.cooldown -= dt;
         if (e.cooldown <= 0 && vulnerable) {
-          const origin = _local.set(e.mesh.position.x, 1.35, e.mesh.position.z);
+          const origin = _shotOrigin;
+          const muzzle = e.mesh.userData.rig?.muzzle;
+          if (muzzle) {
+            muzzle.getWorldPosition(origin);
+            group.worldToLocal(origin);
+          } else {
+            origin.set(e.mesh.position.x, 1.35, e.mesh.position.z);
+          }
           _aim.set(_chest.x - origin.x, _chest.y - origin.y, _chest.z - origin.z);
           _aim.x += (Math.random() - 0.5) * 0.25;
           _aim.normalize();
