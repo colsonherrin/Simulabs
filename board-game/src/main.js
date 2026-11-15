@@ -1128,6 +1128,7 @@ async function enterXR(kind) {
       // The tracking origin is not always where the head is. Wait for a real
       // pose, then turn Gold (the side you move) to the near edge.
       seatWait = 2;
+      sim.resetPlace();
       simGreet();
     } else {
       beginPlacement();
@@ -1429,6 +1430,9 @@ function frame(t, xrFrame) {
   if (seatWait > 0 && renderer.xr.isPresenting && !combatView) {
     seatWait -= dt;
     seatAtTable();
+    if (seatWait <= 0) sim.standStill();
+  } else if (!renderer.xr.isPresenting) {
+    sim.standStill();
   }
   movePlayer(dt);
   if (input.primaryPressed || mouseMag > 34 || dragSpeed > 32) input.slash = true;
