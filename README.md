@@ -1,26 +1,123 @@
-# Simulacra
+# Sundai
 
-An embodied AI companion: a human character that stands on the floor of your real room, talks with
-you by voice, knows what is around it, and decides for itself when to walk somewhere.
+**Team Simulabs · Immerse the Bay (Stanford XR Hackathon)**
 
-Built for Immerse the Bay (Stanford XR Hackathon). Quest 3S first; the brain and the protocol are
-device-independent so XREAL and Spectacles clients can reuse them.
+Sundai is an embodied AI companion that sees, speaks, moves, and interacts with your world. Meet
+her in **Swords and Arrows**, an immersive AR/VR strategy game where chess meets medieval combat.
 
-> **Status — read this first.** Nothing here has run on a headset or inside a Unity editor yet;
-> that first run is yours. What has been verified:
-> - **Backend:** unit and end-to-end tests pass, and the simulator was driven in a real browser.
->   Claude, speech-to-text and text-to-speech have only been exercised against stand-in servers,
->   not the live APIs; no live latency has been measured yet (`npm run bench` does that).
-> - **Quest C#:** every method body binds without errors against the real Meta SDK 85 source
->   (MR Utility Kit + Core) and the real Unity 6000.0.66f2 assemblies.
-> - **XREAL C#:** same check against the real XREAL SDK 3.1.0, AR Foundation 5.2.0, Input System
->   and Unity 2022.3.62f2 assemblies.
-> - **Not verifiable without the hardware:** scene assembly in the editor, tracking quality, plane
->   detection behaviour, audio levels, frame rate. See [Troubleshooting](#troubleshooting).
-> - **Snap Spectacles (2024):** a Lens Studio client exists in `spectacles/`. Its core logic is
->   tested against the real backend; the Lens Studio binding has never been compiled or run.
-> - **WebXR (browser):** a no-install client is served at `/xr/`. It passes in a desktop browser
->   and in an emulated Quest 3 AR session; it has never run on a physical headset.
+**Play it on a Meta Quest 3 or 3S:** open
+**https://colsonherrin.github.io/simulacra/crownfall/** in the Quest Browser and press
+**Talk to Sundai**. Allow the microphone and camera when asked. There is nothing to install and
+nothing to type.
+
+## What she does
+
+- **Talks with you in real time.** Live two-way voice; you can interrupt her.
+- **Moves through your room.** "Come here", "stand on my left", "back up a step", "walk with me",
+  "sit down". She can also wander on her own and choose where to go.
+- **Carries herself like a person.** She stops at conversational distance, plans a path around
+  you, turns toward where she is going before she steps, and keeps her eyes on you while her body
+  stays relaxed. Her motion comes from motion-capture recordings.
+- **Looks at your surroundings.** Ask what she sees and she names the objects in front of you and
+  remembers where each one was. Recognition runs on the headset; no image leaves the device.
+- **Plays with you.** Say "let's play a game" and your room opens into a castle terrace at sunset.
+  She changes into a court gown and crown and becomes your opponent and your coach. Say "leave the
+  game" to come back to your room.
+
+## Swords and Arrows
+
+A 5×5 board. Each side has two archers, two swordsmen and a monarch. Every piece steps one square
+in any direction. Archers and swordsmen can attack a neighbouring piece, and then you fight for
+the square yourself, in first person:
+
+| Your piece | Against swordsmen | Against archers |
+|---|---|---|
+| Swordsman | Cut down twelve soldiers charging in two waves | Knock their arrows out of the air; a clean hit sends the arrow back |
+| Archer | One hand holds the bow, the other draws the string; release to fire | Shoot the archers down, two volleys of five |
+
+Win the duel and you take the square. Lose it and the attacking piece is removed. Strike the enemy
+monarch and you win the game. Sundai teases you as you play, explains any matchup you ask about,
+and gives a hint when you want one.
+
+## Things to say to her
+
+| Before a game | During a game |
+|---|---|
+| "What can you do?" | "How do I play?" |
+| "Come here." / "Stand on my right." | "What should I do?" |
+| "Go to your left." / "Back up a little." | "How do I win this fight?" |
+| "Walk with me." / "Stop." | "Leave the game." |
+| "Sit down." / "Stand up." | |
+| "Walk around on your own." | |
+| "What do you see?" / "Where is my cup?" | |
+| "Let's play a game." | |
+| "Goodbye, close everything." | |
+
+## How it is built
+
+| Part | How |
+|---|---|
+| Platform | WebXR on Three.js, a static site on GitHub Pages (`board-game/`, `webxr/`) |
+| Voice and reasoning | An ElevenLabs conversational agent with Claude as the language model, over WebRTC. Her abilities are client tools (`come_here`, `stand_beside`, `step`, `walk_to`, `roam`, `follow_me`, `sit`, `look_around`, `start_game`, `leave_game`, ...) that run in the browser and move her body |
+| Body | A rigged human avatar driven by 17 motion-capture clips, with cross-fades, gaze and lip movement from the live audio level (`webxr/avatar.js`) |
+| Locomotion | Short planned routes that keep out of the player's personal space and go around them (`board-game/src/sim.js`) |
+| Vision | TensorFlow.js COCO-SSD in the browser on the headset's outward camera, with a memory of where things were last seen (`board-game/src/see.js`) |
+| Game AI | A three-ply search that adapts to how the player does in duels. The language model never picks moves; it is told what was played and why (`board-game/src/search.js`) |
+| World and combat | Hand-modelled pieces, a battlefield with ruins, fire and catapults, a sunset castle, sword and bow combat with controllers or hands |
+
+## Run it yourself
+
+The game, with Sundai:
+```bash
+cd board-game
+```
+```bash
+npm install
+```
+```bash
+npm run dev
+```
+Her voice uses the public agent id in `webxr/sim-config.json`. To point it at your own ElevenLabs
+agent, change `crownfallAgentId` there and push her instructions and tools to it:
+```bash
+ELEVENLABS_API_KEY=... node tools/update-agent.mjs
+```
+
+The published site is built from `main` into the `gh-pages` branch: the Simulacra page from
+`webxr/` (`npm run build:webxr` in `backend/`) and the game from `board-game/` (`vite build`).
+
+## What has been checked, and how
+
+- **On a Quest headset (by the team):** entering AR, her voice, the board game and the duels.
+- **In a desktop browser (automated):** her movement skills, following, sitting, starting and
+  leaving a game, the costume change, and the vision path with a test camera.
+- **Against the live voice agent (ElevenLabs test runner):** that each spoken command picks the
+  right skill.
+- **Depends on the headset's browser:** vision needs the Quest Browser to hand over its
+  passthrough camera. Where it does not, she says she cannot see.
+
+## Team
+
+- **Cole** built Sundai: her real-time voice and reasoning, body and motion, movement and vision
+  skills, the game search and coaching, and the castle world.
+- **Arthur** built the WebXR board game into a headset-playable experience and keeps the live site
+  current: seating across from Sundai, two-handed bow aiming, tile selection, the
+  sword-versus-archer fights with arrow deflection and dodges, and the win/lose banners.
+- **Tanaya** created the chess-piece characters, from low-poly models to detailed figures, and
+  built the battlefield with ruins, fires, smoke, catapults, weapons and cinematic lighting.
+
+---
+
+# Simulacra: the platform underneath
+
+Sundai grew out of Simulacra, a device-independent embodied-AI stack: a backend "mind", a wire
+protocol, and native clients for Quest (Unity), XREAL and Snap Spectacles. The rest of this file
+documents that stack. The web experience above does not need any of it to run.
+
+> **Status of the native clients.** The backend's tests pass and its simulator was driven in a
+> real browser. The Quest and XREAL C# code was checked against the real SDK sources but has not
+> been run in a Unity editor or on a device; the Spectacles Lens Studio binding has never been
+> compiled. See [Troubleshooting](#troubleshooting).
 
 ## How it fits together
 
