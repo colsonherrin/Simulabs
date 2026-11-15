@@ -365,3 +365,64 @@ test('relative movement: stand beside the user, take a step, and come back into 
     await srv.close();
   }
 });
+
+test('sitting: sits where she is or on a named thing, keeps still while seated, and stands to walk', async () => {
+  const srv = await startServer({ port: 0, brain: 'mock', realtimeModel: 'x', realtimeVoice: 'v', visionModel: 'x', memoryPath: null, quiet: true });
+  const dev = virtualRoom(srv.port);
+  const act = (msg: object) => dev.core.onMessage(JSON.stringify({ type: 'action', ...msg }));
+  const done = async (id: string) => {
+    await dev.run(14, () => dev.sent.some((m: any) => m.type === 'action_result' && m.id === id));
+    return dev.sent.find((m: any) => m.type === 'action_result' && m.id === id);
+  };
+  const lastWorld = () => [...dev.sent].reverse().find((m: any) => m.type === 'world').world;
+  try {
+    await dev.run(0.5, () => dev.core.brain === 'mock');
+    assert.ok(dev.core.placeInFrontOfUser(1.5));
+    const a = dev.core.avatar;
+
+    // Left alone, she does not move at all: no strolling, no walking back into view.
+    const start = { ...a.pos };
+    dev.room.fwd = { x: 0, y: 0, z: -1 }; // the user turns away
+    await dev.run(20);
+    assert.ok(dev.flat(a.pos, start) < 0.01, 'stays put when nothing is asked of her');
+    dev.room.fwd = { x: 0, y: 0, z: 1 };
+
+    act({ id: 'sit1', action: 'sit' });
+    assert.equal((await done('sit1')).status, 'succeeded');
+    assert.equal(a.sitting, true);
+    await dev.run(1);
+    assert.equal(lastWorld().avatar.state, 'sitting');
+
+    // Seated, the user speaking does not spin her round, and she stays seated.
+    const yaw = a.yaw;
+    dev.core.onMessage(JSON.stringify({ type: 'state', status: 'listening' }));
+    await dev.run(1.5);
+    assert.equal(a.yaw, yaw);
+    assert.equal(a.sitting, true);
+
+    act({ id: 'up', action: 'stand_up' });
+    assert.equal((await done('up')).status, 'succeeded');
+    assert.equal(a.sitting, false);
+
+    // Sit on a thing: walks to its edge, faces the user, sits.
+    dev.core.register('chair', { x: 2, y: -1.0, z: 1.5 }, 'manual');
+    act({ id: 'sit2', action: 'sit', target_id: 'chair_1' });
+    const r = await done('sit2');
+    assert.equal(r.status, 'succeeded', JSON.stringify(r));
+    assert.equal(a.sitting, true);
+    assert.ok(dev.flat(a.pos, { x: 2, y: 0, z: 1.5 }) < 0.75, `at the chair (${dev.flat(a.pos, { x: 2, y: 0, z: 1.5 }).toFixed(2)} m)`);
+    const toUser = Math.atan2(dev.room.head.x - a.pos.x, dev.room.head.z - a.pos.z);
+    assert.ok(Math.abs(Math.atan2(Math.sin(toUser - a.yaw), Math.cos(toUser - a.yaw))) < 0.15, 'facing the user');
+
+    // Asked to come over, she gets up and walks.
+    act({ id: 'come', action: 'approach_user' });
+    assert.equal(a.sitting, false);
+    assert.equal((await done('come')).status, 'succeeded');
+
+    act({ id: 'sit3', action: 'sit', target_id: 'sofa_9' });
+    assert.match((await done('sit3')).reason, /unknown thing to sit on/);
+  } finally {
+    dev.ws.close();
+    await srv.close();
+  }
+});

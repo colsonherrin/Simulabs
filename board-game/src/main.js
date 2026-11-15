@@ -327,7 +327,7 @@ setInterval(() => {
     return;
   }
   if (!thinkingSince || hintedFor !== stamp && thinkingSince.stamp !== stamp) thinkingSince = { at: performance.now(), stamp };
-  if (hintedFor !== stamp && performance.now() - thinkingSince.at > 22000) {
+  if (hintedFor !== stamp && performance.now() - thinkingSince.at > 45000) {
     hintedFor = stamp;
     sim.offerHint(game);
   }

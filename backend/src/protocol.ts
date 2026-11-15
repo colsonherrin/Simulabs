@@ -42,6 +42,8 @@ export type ActionName =
   | 'approach_user'
   | 'follow_user'
   | 'step' // params: { direction, metres }: a short move relative to herself or the user
+  | 'sit' // optional target: sit on a known thing, or where she stands
+  | 'stand_up'
   | 'stand_by_user' // params: { side }: take a place relative to the way the user is facing
   | 'gesture'
   | 'inspect_object'

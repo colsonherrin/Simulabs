@@ -351,7 +351,9 @@ const host = {
 
 let previewMode = true;
 const core = new SimulacraCore(host, 'webxr');
-const wanderWanted = params.get('wander') !== '0'; // strolls between requests, but only across floor it actually knows; ?wander=0 keeps it still
+// She stays where she is unless asked to move. ?wander=1 lets her stroll between requests (only
+// across floor she knows); ?stay_in_view=1 makes her walk back in front of you when you turn away.
+const wanderWanted = params.get('wander') === '1';
 let socket = null;
 
 /**
@@ -460,7 +462,7 @@ const lookTarget = new THREE.Vector3();
 function animateBody(dt, metres) {
   const a = core.avatar;
   const p = protocolToXr(a.pos);
-  avatar.animate(dt, { x: p.x, y: p.y, z: p.z, yaw: a.yaw, speed01: a.speed01, gesture: a.gesture, metres }, speechLevel(), viewCamera().getWorldPosition(lookTarget));
+  avatar.animate(dt, { x: p.x, y: p.y, z: p.z, yaw: a.yaw, speed01: a.speed01, gesture: a.gesture, metres, sitting: a.sitting }, speechLevel(), viewCamera().getWorldPosition(lookTarget));
 }
 
 // ---------------------------------------------------------------- preview room (no headset)
@@ -884,6 +886,7 @@ function frame(timeMs, xrFrame) {
     core.announce();
   }
   core.autoLook = sees && params.get('look') !== '0' ? Number(params.get('look')) || 10 : 0;
+  core.keepInView = params.get('stay_in_view') === '1';
   core.wander = wanderWanted && (room.source === 'room_scan' || room.source === 'simulated'); // never stroll blind
   core.update(dt);
   avatarRoot.visible = core.placed;
