@@ -10,7 +10,7 @@ import {
   SIDE_NAME,
   TYPE_NAME,
 } from './rules.js';
-import { createTabletop, SQ, TOP, squareLocal } from './tabletop.js';
+import { createTabletop, SQ, squareLocal } from './tabletop.js';
 import { createCombat, INLINE_ARENA } from './combat.js';
 import { chooseMove } from './ai.js';
 import { createSim } from './sim.js';
@@ -397,8 +397,6 @@ let floorBased = false;
 let placing = false;
 let xrKind = null;
 let seatWait = 0;
-const _goldEdge = new THREE.Vector3();
-const _violetEdge = new THREE.Vector3();
 let epoch = 0;
 let pending = null;
 let combatView = false;
@@ -1034,17 +1032,15 @@ function placeBoard() {
   simGreet();
 }
 
-// Gold's row is the board's +Z edge. If the head is closer to Violet, turn
-// the table so the pieces you move are on your side and Sim stays opposite.
+// Gold's row is the board's +Z edge. Point that edge at the head so the
+// pieces you move stay on your side of the table.
 function seatAtTable() {
   const cam = renderer.xr.getCamera();
   cam.getWorldPosition(_cam);
-  board.updateMatrixWorld(true);
-  board.localToWorld(_goldEdge.set(0, 0, TOP / 2));
-  board.localToWorld(_violetEdge.set(0, 0, -TOP / 2));
-  if (_cam.distanceToSquared(_violetEdge) < _cam.distanceToSquared(_goldEdge)) {
-    board.rotateY(Math.PI);
-  }
+  const dx = _cam.x - board.position.x;
+  const dz = _cam.z - board.position.z;
+  if (dx * dx + dz * dz < 0.04) return;
+  board.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(dx, dz));
 }
 
 function beginPlacement() {
@@ -1099,7 +1095,7 @@ async function enterXR(kind) {
       board.quaternion.identity();
       // The tracking origin is not always where the head is. Wait for a real
       // pose, then turn Gold (the side you move) to the near edge.
-      seatWait = 0.45;
+      seatWait = 2;
       simGreet();
     } else {
       beginPlacement();
@@ -1398,9 +1394,9 @@ function frame(t, xrFrame) {
   tabletop.turnSprite.visible = renderer.xr.isPresenting && !combatView;
 
   updateHitTest(xrFrame);
-  if (seatWait > 0 && renderer.xr.isPresenting) {
+  if (seatWait > 0 && renderer.xr.isPresenting && !combatView) {
     seatWait -= dt;
-    if (seatWait <= 0) seatAtTable();
+    seatAtTable();
   }
   movePlayer(dt);
   if (input.primaryPressed || mouseMag > 34 || dragSpeed > 32) input.slash = true;

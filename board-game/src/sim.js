@@ -81,6 +81,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
   const eyes = new THREE.Vector3();
   const spot = new THREE.Vector3();
   const centre = new THREE.Vector3();
+  const away = new THREE.Vector3();
   let attendBoardFor = 0; // seconds she keeps looking at the square she is playing
   let nextGesture = '';
   let voiceLevel = 0;
@@ -148,12 +149,16 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     avatar.root.visible = visible && loaded;
     sign.sprite.visible = false;
     if (!avatar.root.visible) return;
-    // Violet's edge. seatAtTable keeps that edge across the board from the user.
+    // Across the table from the head, not a fixed edge. If the user is on
+    // Violet's side she stands on Gold's, and the other way around.
     board.updateMatrixWorld(true);
-    spot.set(0, 0, -(TOP / 2 + 0.5));
-    board.localToWorld(spot);
     centre.set(0, 0, 0);
     board.localToWorld(centre);
+    getCamera().getWorldPosition(eyes);
+    away.set(centre.x - eyes.x, 0, centre.z - eyes.z);
+    if (away.lengthSq() < 1e-4) away.set(0, 0, -1);
+    away.normalize();
+    spot.copy(centre).addScaledVector(away, TOP / 2 + 0.55);
     pose.x = spot.x;
     pose.y = floorY;
     pose.z = spot.z;
@@ -162,7 +167,6 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     pose.gesture = nextGesture;
     nextGesture = '';
     attendBoardFor = Math.max(0, attendBoardFor - dt);
-    getCamera().getWorldPosition(eyes);
     lookAt.copy(attendBoardFor > 0 ? pointAt : eyes);
     voiceLevel = Math.max(voice.level(), fallback.level(), builtIn.level());
     avatar.animate(dt, pose, voiceLevel, lookAt, pointAt);
