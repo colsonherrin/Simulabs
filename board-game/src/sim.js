@@ -94,7 +94,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
   function update(dt, { visible, floorY }) {
     avatar.root.visible = visible && loaded;
     if (!avatar.root.visible) return;
-    // Her place: across the board from the user (Violet's side), a step back from its edge, feet on the floor.
+    // Violet's edge. seatAtTable keeps that edge across the board from the user.
     board.updateMatrixWorld(true);
     spot.set(0, 0, -(TOP / 2 + 0.5));
     board.localToWorld(spot);
