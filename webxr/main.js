@@ -657,6 +657,7 @@ async function enterAR() {
     return;
   }
   xrSession = session;
+  $('exit').hidden = false;
   xrFeatures = Array.from(session.enabledFeatures || []);
   previewMode = false;
   previewGroup.visible = false;
@@ -680,7 +681,9 @@ async function enterAR() {
     // Trigger or pinch: cut the avatar off mid-sentence. Grip: bring the avatar back in front of you.
     c.addEventListener('selectstart', () => {
       lastPointer = c;
-      core.interrupt();
+      // Pointing at the Exit button and pulling the trigger (or pinching) leaves AR; anywhere else cuts her off mid-sentence.
+      if (exitButton.hitBy(c)) exitAR();
+      else core.interrupt();
     });
     c.addEventListener('squeezestart', () => {
       lastPointer = c;
@@ -690,8 +693,83 @@ async function enterAR() {
   }
   session.addEventListener('end', () => {
     xrSession = null;
-    note('AR session ended. Reload the page to start again.');
+    // Start clean: a fresh page is ready to enter AR again, with the key and settings kept.
+    location.reload();
   });
+}
+
+// ---------------------------------------------------------------- exit button (AR only)
+
+// A button that stays low on your right in the headset. Point at it and pull the trigger, or
+// pinch, to leave AR and get back to the page.
+const exitButton = (() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 160;
+  const g = canvas.getContext('2d');
+  g.fillStyle = 'rgba(150, 30, 30, 0.92)';
+  g.beginPath();
+  g.roundRect(4, 4, 504, 152, 36);
+  g.fill();
+  g.lineWidth = 6;
+  g.strokeStyle = '#ffd9d2';
+  g.stroke();
+  g.fillStyle = '#fff';
+  g.font = '700 76px system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('EXIT AR', 256, 84);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.075), new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthTest: false, side: THREE.DoubleSide }));
+  mesh.renderOrder = 12;
+  mesh.visible = false;
+  scene.add(mesh);
+  const ray = new THREE.Raycaster();
+  const p = new THREE.Vector3();
+  const d = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const want = new THREE.Vector3();
+  return {
+    mesh,
+    update(dt) {
+      mesh.visible = renderer.xr.isPresenting;
+      if (!mesh.visible) return;
+      const cam = viewCamera();
+      cam.getWorldPosition(p);
+      cam.getWorldDirection(d);
+      d.y = 0;
+      if (d.lengthSq() < 1e-6) d.set(0, 0, -1);
+      d.normalize();
+      right.crossVectors(d, UP).normalize();
+      want.copy(p).addScaledVector(d, 0.75).addScaledVector(right, 0.4);
+      want.y = p.y - 0.5;
+      // It only drifts after you once you have turned well away, so it holds still while you aim at it.
+      if (mesh.position.distanceTo(want) > 0.35 || mesh.position.lengthSq() === 0) this.following = true;
+      if (this.following) {
+        mesh.position.lerp(want, Math.min(1, dt * 5));
+        if (mesh.position.distanceTo(want) < 0.03) this.following = false;
+      }
+      mesh.lookAt(p);
+    },
+    following: true,
+    /** Is this controller or hand pointing at the button? (A little slack around it: it is small.) */
+    hitBy(pointer) {
+      if (!mesh.visible) return false;
+      pointer.getWorldPosition(p);
+      pointer.getWorldDirection(d).negate(); // controllers point down their own -Z
+      ray.set(p, d);
+      mesh.scale.setScalar(1.5);
+      mesh.updateMatrixWorld(true);
+      const hit = ray.intersectObject(mesh, false).length > 0;
+      mesh.scale.setScalar(1);
+      return hit;
+    },
+  };
+})();
+function exitAR() {
+  debugLog('exit pressed');
+  if (xrSession) xrSession.end().catch(() => {});
 }
 
 // ---------------------------------------------------------------- heads-up text (AR only)
@@ -898,6 +976,7 @@ function frame(timeMs, xrFrame) {
   const text = statusText();
   if ($('status').textContent !== text) $('status').textContent = text;
   const voiceLog = voiceDebugText();
+  exitButton.update(dt);
   hud.update(debugOn ? debugSummary().concat(debugLines.slice(-4)).join('\n') : text, now, dt);
   voicePanel.update(voiceLog, dt);
   if (!renderer.xr.isPresenting && now - debugShownAt > 0.3) {
@@ -912,6 +991,7 @@ function frame(timeMs, xrFrame) {
 
 async function start() {
   $('mic').onclick = startMic;
+  $('exit').onclick = exitAR; // for browsers that keep the page visible during AR (phones)
   const showDebug = () => {
     $('debug').hidden = false;
     $('debugCopy').hidden = !debugOn;
@@ -978,5 +1058,5 @@ async function start() {
   }
 }
 
-window.simulacra = { debugLines, debugSummary, core, room, body, scene, camera, renderer, avatarRoot, enterAR, isFloor, get features() { return xrFeatures; }, get preview() { return previewMode; } };
+window.simulacra = { exitAR, exitButton, debugLines, debugSummary, core, room, body, scene, camera, renderer, avatarRoot, enterAR, isFloor, get features() { return xrFeatures; }, get preview() { return previewMode; } };
 start();
