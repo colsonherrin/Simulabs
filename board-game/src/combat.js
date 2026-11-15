@@ -937,7 +937,11 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     if (!ready(right) && !ready(left)) return;
 
     if (!stringHeld) {
-      if (right.pull && !left.pull && ready(right)) bowSide = 'right';
+      const drawHand = hooks.clickHand?.();
+      if (drawHand === 'left' || drawHand === 'right') {
+        // The hand they click with draws the string. The other holds the bow.
+        bowSide = drawHand === 'left' ? 'right' : 'left';
+      } else if (right.pull && !left.pull && ready(right)) bowSide = 'right';
       else if (left.pull && !right.pull && ready(left)) bowSide = 'left';
       else if (right.pull && left.pull && ready(right) && ready(left)) {
         const held = bowSide === 'left' ? left : right;

@@ -428,6 +428,8 @@ let dragSpeed = 0;
 
 const controllers = [];
 let triggerHand = null;
+let clickHand = null;
+try { clickHand = localStorage.getItem('crownfall.clickHand'); } catch { /* keep the default */ }
 const grips = [];
 const POINTER_DROP = THREE.MathUtils.degToRad(-20);
 const _aimOrigin = new THREE.Vector3();
@@ -492,6 +494,11 @@ for (let i = 0; i < 2; i++) {
   controller.addEventListener('select', () => {
     if (triggerHand !== controller) return;
     triggerHand = null;
+    const hand = controller.userData.handedness;
+    if (hand === 'left' || hand === 'right') {
+      clickHand = hand;
+      try { localStorage.setItem('crownfall.clickHand', hand); } catch { /* not stored */ }
+    }
     if (game.phase !== 'combat') onXRSelect(controller);
   });
   scene.add(controller);
@@ -552,6 +559,7 @@ const combat = createCombat({
     // Trigger or grip button: either one holds the bow string.
     rightSelecting: () => !!(findHand('right')?.userData.selecting || findHand('right')?.userData.squeezing),
     leftSelecting: () => !!(findHand('left')?.userData.selecting || findHand('left')?.userData.squeezing),
+    clickHand: () => clickHand,
     lock: (on) => crosshair.classList.toggle('locked', on),
     floorBased: () => floorBased && renderer.xr.isPresenting,
     isAR: () => xrKind === 'ar' && renderer.xr.isPresenting,
