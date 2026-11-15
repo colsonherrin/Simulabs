@@ -289,6 +289,11 @@ export class RealtimeBrain implements Brain {
       case 'response.done': {
         this.responseActive = false;
         const output: any[] = ev.response?.output ?? [];
+        for (const item of output) {
+          if (item?.type !== 'message') continue;
+          const said = (item.content ?? []).map((p: any) => p?.transcript || p?.text || '').filter(Boolean).join(' ').trim();
+          if (said) this.ctx.send({ type: 'transcript', role: 'assistant', text: said });
+        }
         const calls = output.filter((i) => i.type === 'function_call' && i.call_id && !this.handledCalls.has(i.call_id));
         if (ev.response?.status === 'failed') this.ctx.log('error', `response failed: ${JSON.stringify(ev.response?.status_details)}`);
         if (calls.length) this.runCalls(calls);

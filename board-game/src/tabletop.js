@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GOLD, SIDE_NAME, options } from './rules.js';
 import { createMiniature, metal, standard } from './pieces.js';
+import { steelTex, woodTex } from './textures.js';
 import { makeTextSprite, paintText, setSpriteText } from './text.js';
 
 export const TOP = 0.4;
@@ -86,8 +87,8 @@ export function createTabletop(scene, sfx = {}) {
   const board = new THREE.Group();
   scene.add(board);
 
-  const bodyMat = standard(0x221c18, 0.78);
-  bodyMat.color.set(0x2a221c);
+  // Dark oak body with an aged-bronze rim.
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.7, map: woodTex() });
   const body = new THREE.Mesh(new THREE.BoxGeometry(TOP + 0.045, 0.024, TOP + 0.045), bodyMat);
   body.position.y = 0.012;
   board.add(body);
@@ -104,7 +105,7 @@ export function createTabletop(scene, sfx = {}) {
   top.position.y = 0.0245;
   board.add(top);
 
-  const brass = metal(0xc6a15a, 0x3a2a10);
+  const brass = new THREE.MeshStandardMaterial({ color: 0x8a6c3c, metalness: 0.75, roughness: 0.42, map: steelTex() });
   const rimH = 0.012;
   const rimY = 0.028;
   const outer = TOP / 2 + 0.02;
@@ -147,7 +148,7 @@ export function createTabletop(scene, sfx = {}) {
   const turnBars = [0, 1].map((side) => {
     const bar = new THREE.Mesh(
       new THREE.BoxGeometry(TOP + 0.05, 0.006, 0.02),
-      new THREE.MeshBasicMaterial({ color: SIDE_GLOW[side], transparent: true, opacity: 0.9 }),
+      new THREE.MeshBasicMaterial({ color: SIDE_GLOW[side], transparent: true, opacity: 0.6 }),
     );
     bar.position.set(0, 0.037, side === 0 ? TOP / 2 + 0.02 : -(TOP / 2 + 0.02));
     bar.raycast = () => {};
@@ -254,10 +255,10 @@ export function createTabletop(scene, sfx = {}) {
           blob.position.y = 0.001;
           mesh.add(blob);
           const pick = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.032, 0.032, 0.09, 8),
+            new THREE.CylinderGeometry(0.034, 0.034, 0.12, 8),
             new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
           );
-          pick.position.y = 0.045;
+          pick.position.y = 0.06;
           mesh.add(pick);
           mesh.userData = {
             id: piece.id,
@@ -288,7 +289,8 @@ export function createTabletop(scene, sfx = {}) {
             sfx.onSlide?.(piece);
             const dx = dest.x - mesh.position.x;
             const dz = dest.z - mesh.position.z;
-            if (dx * dx + dz * dz > 0.0001) mesh.rotation.y = Math.atan2(dx, dz);
+            // Turn smoothly toward the destination rather than snapping.
+            if (dx * dx + dz * dz > 0.0001) mesh.userData.face = Math.atan2(dx, dz);
           }
           // On a new game every piece walks home, then turns to face the
           // other side.
@@ -477,7 +479,12 @@ export function createTabletop(scene, sfx = {}) {
         mesh.position.z = base.z;
         mesh.position.y = base.y + Math.sin(clock.t * 2.2 + data.seed) * 0.0016;
       }
-      if (data.faceHome && !data.tween && !data.fall && !data.held && !data.slay) {
+      if (data.face != null && !data.fall && !data.held && !data.slay) {
+        const delta = Math.atan2(Math.sin(data.face - mesh.rotation.y), Math.cos(data.face - mesh.rotation.y));
+        mesh.rotation.y += delta * (1 - Math.exp(-14 * dt));
+        if (!data.tween && Math.abs(delta) < 0.01) data.face = null;
+      }
+      if (data.faceHome && data.face == null && !data.tween && !data.fall && !data.held && !data.slay) {
         const home = data.side === GOLD ? Math.PI : 0;
         const delta = Math.atan2(Math.sin(home - mesh.rotation.y), Math.cos(home - mesh.rotation.y));
         if (Math.abs(delta) < 0.01) {
@@ -580,9 +587,12 @@ function buildRoom() {
     const flame = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff9a55 }));
     flame.position.set(x, 2.45, z);
     room.add(flame);
-    const light = new THREE.PointLight(0xff8a4a, 3.2, 3.5, 2);
-    light.position.set(x, 2.4, z);
-    room.add(light);
+    // Only the two far braziers light the room: point lights are costly on Quest.
+    if (z < -2) {
+      const light = new THREE.PointLight(0xff8a4a, 4.2, 4.5, 2);
+      light.position.set(x, 2.4, z);
+      room.add(light);
+    }
   }
   const dome = new THREE.Mesh(
     new THREE.SphereGeometry(5.5, 24, 16),

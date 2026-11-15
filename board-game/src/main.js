@@ -234,7 +234,12 @@ const btnArMini = $('btn-ar-mini');
 const btnVrMini = $('btn-vr-mini');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+// Soft-edged sun shadows in the duels (only the sun casts them).
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+// Render the headset's periphery at lower resolution: free frame time on Quest.
+renderer.xr.setFoveation(1);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -407,6 +412,7 @@ const input = {
   primaryPressed: false,
   primaryReleased: false,
   slash: false,
+  block: false,
 };
 let ptr = null;
 let mouseMag = 0;
@@ -458,6 +464,12 @@ for (let i = 0; i < 2; i++) {
     controller.userData.selecting = true;
     input.primaryDown = true;
     input.primaryPressed = true;
+  });
+  controller.addEventListener('squeezestart', () => {
+    controller.userData.squeezing = true;
+  });
+  controller.addEventListener('squeezeend', () => {
+    controller.userData.squeezing = false;
   });
   controller.addEventListener('selectend', () => {
     controller.userData.selecting = false;
@@ -522,7 +534,9 @@ const combat = createCombat({
       const left = controllers.find((c) => c.userData.connected && c.userData.handedness === 'left' && !c.userData.inputSource?.hand);
       return left ? grips[controllers.indexOf(left)] : null;
     },
-    rightSelecting: () => !!findHand('right')?.userData.selecting,
+    // Trigger or grip button: either one holds the bow string.
+    rightSelecting: () => !!(findHand('right')?.userData.selecting || findHand('right')?.userData.squeezing),
+    leftSelecting: () => !!(findHand('left')?.userData.selecting || findHand('left')?.userData.squeezing),
     lock: (on) => crosshair.classList.toggle('locked', on),
     floorBased: () => floorBased && renderer.xr.isPresenting,
     isAR: () => xrKind === 'ar' && renderer.xr.isPresenting,
@@ -614,7 +628,8 @@ function onCombatView(enter) {
     savedFov = camera.fov;
     controls.enabled = false;
     // Night fog belongs to the virtual arena; in AR it would tint the real room.
-    scene.fog = xrKind === 'ar' && renderer.xr.isPresenting ? null : new THREE.Fog(0x120e0c, 7, 21);
+    // Warm battlefield haze that softens the far ruins; none in AR.
+    scene.fog = xrKind === 'ar' && renderer.xr.isPresenting ? null : new THREE.FogExp2(0x5e4635, 0.024);
     if (!renderer.xr.isPresenting) {
       camera.fov = 72;
       camera.updateProjectionMatrix();
@@ -1057,6 +1072,7 @@ async function enterXR(kind) {
     hitTestSource = null;
     hitTestRequested = false;
     session.addEventListener('end', onSessionEnd);
+    renderer.xr.setFoveation(1);
     await renderer.xr.setSession(session);
     hideGameOver();
     if (kind === 'vr') {
@@ -1325,10 +1341,32 @@ function updateHands() {
   }
 }
 
+// Auto quality: if a headset can't hold its refresh rate in a duel for a few
+// seconds, drop the sun's shadows. Never comes back up
+// mid-session, so it doesn't oscillate.
+let quality = 'high';
+let avgFrame = 1 / 72;
+let slowFor = 0;
+function watchQuality(rawDt) {
+  if (quality === 'low' || !renderer.xr.isPresenting || game.phase !== 'combat') {
+    slowFor = 0;
+    return;
+  }
+  avgFrame += (Math.min(rawDt, 0.1) - avgFrame) * 0.05;
+  slowFor = avgFrame > 0.0175 ? slowFor + rawDt : Math.max(0, slowFor - rawDt);
+  if (slowFor > 3) {
+    quality = 'low';
+    combat.setQuality('low');
+    console.info('Crownfall: lowering quality to hold the frame rate');
+  }
+}
+
 function frame(t, xrFrame) {
   const now = t || performance.now();
-  const dt = Math.min(0.05, last ? (now - last) / 1000 : 0.016);
+  const rawDt = last ? (now - last) / 1000 : 0.016;
+  const dt = Math.min(0.05, rawDt);
   last = now;
+  watchQuality(rawDt);
   if (!renderer.xr.isPresenting && controls.enabled) controls.update();
 
   const camObj = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
@@ -1373,6 +1411,13 @@ function onResize() {
 window.addEventListener('resize', onResize);
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 
+// Right mouse button raises the shield in a sword clash.
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (event.button === 2 && game.phase === 'combat') input.block = true;
+});
+window.addEventListener('pointerup', (event) => {
+  if (event.button === 2) input.block = false;
+});
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) return;
   ptr = { x: event.clientX, y: event.clientY, id: event.pointerId, dragged: false };
@@ -1439,8 +1484,10 @@ window.addEventListener('keydown', (event) => {
   keys[event.code] = true;
   if (event.repeat) return;
   if ((event.code === 'Space' || event.code === 'KeyF') && combatView) input.slash = true;
+  if (event.code === 'KeyQ' && combatView) input.block = true;
 });
 window.addEventListener('keyup', (event) => {
+  if (event.code === 'KeyQ') input.block = false;
   keys[event.code] = false;
 });
 

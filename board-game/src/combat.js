@@ -9,14 +9,14 @@ import {
   setBowString,
 } from './pieces.js';
 import { playArrow, playDeflect, playHit, playHurt, playWhoosh } from './audio.js';
-import { bowGrip, isTracked, pinch, swordGrip, wrist } from './handgrip.js';
-import { createWarZone } from './war.js';
+import { bowGrip, fist, isTracked, pinch, swordGrip, wrist } from './handgrip.js';
+import { createWarZone, makeSkyEnvironment } from './war.js';
 import { startWarAmbience, stopWarAmbience } from './audio.js';
 
 export const INLINE_ARENA = { x: 0, y: -40, z: 0, eye: 1.62 };
 
 const TUNING = {
-  meleeQuota: 5,
+  meleeQuota: 6,
   meleeSpeed: 2.65,
   archerCount: 4,
   archerInterval: 3.05,
@@ -61,6 +61,7 @@ const _fwdW = new THREE.Vector3();
 const _zW = new THREE.Vector3();
 const _xW = new THREE.Vector3();
 const _pullW = new THREE.Vector3();
+const _upW = new THREE.Vector3();
 const _basis = new THREE.Matrix4();
 const _vel = new THREE.Vector3();
 const _edge = new THREE.Vector3();
@@ -81,6 +82,9 @@ function swordPose(out, pitch, lean, spin = Math.PI / 2) {
   return out;
 }
 const SWORD_UP = 1.25;
+// Swordsmen start swinging this far out, and a cut lands within this reach.
+const SWING_FROM = 5.5;
+const SWORD_REACH = 1.75;
 const _lockOrigin = new THREE.Vector3();
 const _lockDir = new THREE.Vector3();
 const _lockTo = new THREE.Vector3();
@@ -115,15 +119,50 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   // in the player's real room, which the war zone turns into a battlefield.
   const arenaBackdrop = buildArena(group);
   const war = createWarZone(group);
+  // A cheap disc that catches the soldiers' shadows around the fight.
+  let quality = 'high';
+  const shadowCatcher = new THREE.Mesh(
+    new THREE.CircleGeometry(7, 32),
+    new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.42, depthWrite: false }),
+  );
+  shadowCatcher.rotation.x = -Math.PI / 2;
+  shadowCatcher.position.y = 0.003;
+  shadowCatcher.receiveShadow = true;
+  group.add(shadowCatcher);
+  // Steel reflects the smoky battlefield sky, not a studio.
+  let battleEnv = null;
+  let savedEnv = null;
+  function useBattleEnv(on) {
+    if (on) {
+      if (!battleEnv) battleEnv = makeSkyEnvironment(renderer);
+      if (!battleEnv) return;
+      savedEnv = scene.environment;
+      scene.environment = battleEnv;
+    } else if (battleEnv && scene.environment === battleEnv) {
+      scene.environment = savedEnv;
+    }
+  }
   function applyArenaMode() {
     const ar = !!hooks.isAR?.();
-    for (const obj of arenaBackdrop) obj.visible = !ar;
+    // The catcher carries the soldiers' shadows on the real floor in AR and
+    // on the battlefield in VR (the terrain itself doesn't take shadows).
+    shadowCatcher.visible = ar || war.hasField();
+    // Shadows are the first thing to go if the headset is struggling.
+    if (arenaBackdrop.sun) arenaBackdrop.sun.castShadow = quality !== 'low';
+    // The plain night arena only shows if the battlefield failed to load.
+    for (const obj of arenaBackdrop) obj.visible = !ar && !war.hasField();
     war.setAR(ar);
   }
+  war.onFieldLoaded(() => applyArenaMode());
 
   const sword = createBattleSword(0xf0d090);
   const bow = createBattleBow(0xf0d090);
   const shield = createBattleShield(0xd9d4f0);
+  for (const w of [sword, bow, shield]) {
+    w.traverse((o) => {
+      if (o.isMesh) o.castShadow = true;
+    });
+  }
   sword.visible = false;
   bow.visible = false;
   shield.visible = false;
@@ -153,6 +192,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   let quota = TUNING.meleeQuota;
   let vulnerable = false;
   let spawnT = 0;
+  let spawned = 0;
+  let blocks = 0;
   let draw = 0;
   let reload = 0;
   let swingU = -1;
@@ -171,6 +212,9 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   // (weapons posed from tracked hand joints every frame).
   let gripMode = 'screen';
   let stringHeld = false;
+  let drawPeak = 0;
+  let releaseWait = 0;
+  const _peakNock = new THREE.Vector3();
   let pinching = false;
   let haveTipPrev = false;
 
@@ -202,24 +246,16 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   }
 
   function setWeaponColor(side) {
+    // Steel stays steel; the player's court shows on the shield's paint.
     weaponColor = side === 0 ? 0xf0d090 : 0xd5d0ff;
-    sword.traverse((obj) => {
-      if (obj.isMesh && obj.material?.metalness > 0.4) {
-        obj.material.color.set(weaponColor);
-        obj.material.emissive?.set(side === 0 ? 0x5a4014 : 0x2a2158);
-      }
-    });
-    bow.traverse((obj) => {
-      if (obj.isMesh && obj.material?.metalness > 0.4) {
-        obj.material.color.set(weaponColor);
-      }
-    });
+    shield.userData.setCourt?.(side);
   }
 
   function detachWeapons() {
     sword.removeFromParent();
     bow.removeFromParent();
     shield.removeFromParent();
+    shield.scale.setScalar(1);
     sword.visible = false;
     bow.visible = false;
     shield.visible = false;
@@ -232,6 +268,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     weapon.scale.setScalar(1);
     gripMode = wantedGripMode();
     stringHeld = false;
+    drawPeak = 0;
     pinching = false;
     haveTipPrev = false;
     if (gripMode === 'controller2') {
@@ -260,7 +297,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         const grip = hooks.rightGrip?.() || hand;
         grip.add(weapon);
         weapon.position.set(0, 0, 0.03);
-        weapon.quaternion.setFromAxisAngle(_Z, Math.PI / 2);
+        weapon.quaternion.setFromAxisAngle(_Z, Math.PI / 2).multiply(_q1.setFromAxisAngle(_X, Math.PI / 6));
         if (left && left !== hand) {
           shield.visible = true;
           left.add(shield);
@@ -279,6 +316,10 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         weapon.scale.setScalar(1);
         weapon.position.set(0.2, -0.3, -0.5);
         swordPose(weapon.quaternion, SWORD_UP, 0.18);
+        // Shield low on the left; raised in front while blocking.
+        camera.add(shield);
+        shield.visible = true;
+        shield.scale.setScalar(0.85);
       } else {
         weapon.scale.setScalar(0.55);
         weapon.position.set(0.1, -0.13, -0.45);
@@ -311,8 +352,10 @@ export function createCombat({ scene, camera, renderer, hooks }) {
 
   function spawnSwordsman() {
     const mesh = createSoldier('sword', paletteForEnemy(attackerSide));
-    // Straight down the lane from the attacking end.
-    const a = (Math.random() - 0.5) * 0.25;
+    // From the attacking end in a loose column: each new swordsman takes a
+    // slightly different line, and later ones come on a little faster.
+    spawned += 1;
+    const a = [0, 0.22, -0.22][(spawned - 1) % 3] + (Math.random() - 0.5) * 0.1;
     const dist = 8.6;
     mesh.position.set(Math.sin(a) * dist, 0, -Math.cos(a) * dist);
     group.add(mesh);
@@ -324,6 +367,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       swing: Math.floor(Math.random() * 2),
       seed: Math.random() * 10,
       dying: 0,
+      speed: TUNING.meleeSpeed * (1 + Math.min(spawned - 1, 5) * 0.04),
     });
   }
 
@@ -372,11 +416,92 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     e.alive = false;
     e.dying = 0.001;
     kills += 1;
-    spawnT = 0;
     sparks.burst(point || e.mesh.position.clone().setY(1.2), 0xffe1b0, 10, 3.5);
     playHit();
     hooks.haptic?.(0.7);
-    if (navigator.vibrate) navigator.vibrate(18);
+    // Browsers refuse vibration until the page has been tapped.
+    if (navigator.vibrate && navigator.userActivation?.isActive) navigator.vibrate(18);
+  }
+
+  // ------------------------------------------------------------ shield --
+  // The shield is impenetrable: any strike or arrow it covers is stopped.
+  // With controllers or hands it covers what it is held toward; on a flat
+  // screen, raising it (right mouse button or Q) covers everything in front.
+  const _shieldP = new THREE.Vector3();
+  const _toFoe = new THREE.Vector3();
+  const _toShield = new THREE.Vector3();
+  let shieldUp = 0;
+
+  function shieldReady() {
+    return usesSword() && shield.parent && shield.visible;
+  }
+
+  function shieldPosLocal(out) {
+    shield.getWorldPosition(out);
+    return group.worldToLocal(out);
+  }
+
+  // Is the shield between the player and a threat at (x, y, z)?
+  function shieldCovers(x, y, z) {
+    if (!shieldReady()) return false;
+    _toFoe.set(x - _player.x, 0, z - _player.z);
+    if (scripted) {
+      // Flat screen: a raised shield guards the front, ±55 degrees.
+      if (shieldUp < 0.6) return false;
+      const len = _toFoe.length() || 1;
+      return (_look.x * _toFoe.x + _look.z * _toFoe.z) / len > 0.57;
+    }
+    shieldPosLocal(_shieldP);
+    _toShield.set(_shieldP.x - _player.x, 0, _shieldP.z - _player.z);
+    const reach = _toShield.length();
+    if (reach < 0.12 || reach > 0.95) return false;
+    // Held out toward the threat: within 40 degrees of its direction.
+    return _toShield.dot(_toFoe) / (reach * (_toFoe.length() || 1)) > 0.77;
+  }
+
+  // Does an incoming arrow strike the shield this frame?
+  function shieldStops(arrow) {
+    if (!shieldReady()) return false;
+    if (scripted) {
+      return shieldUp >= 0.6 && arrow.mesh.position.distanceTo(_chest) < 1.1
+        && shieldCovers(arrow.mesh.position.x, arrow.mesh.position.y, arrow.mesh.position.z);
+    }
+    shieldPosLocal(_shieldP);
+    const from = arrow.prev || arrow.mesh.position;
+    return distPointSeg(_shieldP, from, arrow.mesh.position) < 0.36;
+  }
+
+  function blockHit(x, y, z) {
+    shieldPosLocal(_shieldP);
+    sparks.burst(_shieldP.lengthSq() > 0 ? _shieldP : _local.set(x, y, z), 0xfff0c0, 12, 3);
+    playDeflect();
+    hooks.haptic?.(0.7);
+    blocks += 1;
+  }
+
+  // A swordsman's cut that reaches the player: blocked by the shield (he
+  // staggers back) or it hurts.
+  function landBlow(e, dist) {
+    if (shieldCovers(e.mesh.position.x, 1.25, e.mesh.position.z)) {
+      blockHit(e.mesh.position.x, 1.25, e.mesh.position.z);
+      e.windup = -0.55;
+      e.mesh.position.x -= (_dir.x / dist) * 0.35;
+      e.mesh.position.z -= (_dir.z / dist) * 0.35;
+    } else {
+      damagePlayer();
+      e.windup = -0.28;
+    }
+    e.swing += 1;
+  }
+
+  // The swish of a swordsman's blade as it comes down, if he is near enough
+  // to hear.
+  function swingWhoosh(e, dist) {
+    if (e.windup >= 0.42 && !e.whooshed) {
+      e.whooshed = true;
+      if (dist < 6) playWhoosh();
+    }
+    if (e.windup < 0.42) e.whooshed = false;
   }
 
   function damagePlayer() {
@@ -386,7 +511,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     playHurt();
     hooks.haptic?.(1);
     hooks.hurt?.();
-    if (navigator.vibrate) navigator.vibrate(40);
+    if (navigator.vibrate && navigator.userActivation?.isActive) navigator.vibrate(40);
   }
 
   function reflectArrow(arrow, owner) {
@@ -453,6 +578,9 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     quota = TUNING.meleeQuota;
     vulnerable = false;
     spawnT = 0;
+    spawned = 0;
+    blocks = 0;
+    shieldUp = 0;
     draw = 0;
     reload = 0;
     swingU = -1;
@@ -465,6 +593,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     presented = renderer.xr.isPresenting;
     group.visible = true;
     war.reset();
+    useBattleEnv(true);
     applyArenaMode();
     startWarAmbience();
     anchor();
@@ -493,6 +622,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     mousePull = false;
     detachWeapons();
     clearActors();
+    useBattleEnv(false);
     group.visible = false;
     anchored = false;
     active = false;
@@ -536,6 +666,13 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       const mix = (i) => a[i] + (b[i] - a[i]) * t;
       swordPose(weapon.quaternion, mix(0), mix(1));
       weapon.position.set(mix(2), mix(3), -0.5);
+
+      // Raise the shield across the front while blocking (right mouse button
+      // or Q); it drops back to the lower left when released.
+      shieldUp += ((input.block ? 1 : 0) - shieldUp) * (1 - Math.exp(-14 * dt));
+      const u = shieldUp;
+      shield.position.set(-0.3 + 0.2 * u, -0.36 + 0.24 * u, -0.52 + 0.08 * u);
+      shield.rotation.set(-0.6 * (1 - u), 0.55 * (1 - u) + 0.08, 0.15 * (1 - u));
     }
 
     if (gripMode === 'hand') poseFromHands(dt);
@@ -695,31 +832,57 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     if (locked?.alive) arrow.target = locked;
     playArrow();
     draw = 0;
+    drawPeak = 0;
     reload = 0.32;
   }
 
   // Pull the string with a hand or controller at `point` (world space):
-  // grabbing it within `radius` of the string, drawing it back along the
+  // grabbing it while within `radius` of the string or grip, drawing it back along the
   // bow, and letting go to shoot along the arrow, onto the lock if any.
-  function pullString(point, pulling, justStarted, radius, dt) {
+  // Full draw is a little under a real archer's arm length.
+  const FULL_DRAW = 0.45;
+  let nearString = false;
+  function pullString(point, pulling, radius, dt) {
     bow.localToWorld(_nockW.set(0, 0, bow.userData.restZ));
-    if (justStarted && reload <= 0 && point.distanceTo(_nockW) < radius) {
+    bow.localToWorld(_gripW.copy(bow.userData.grip));
+    // The hand can catch the string anywhere near it or the bow's grip, and
+    // in either order: press then reach, or reach then press.
+    const near = Math.min(point.distanceTo(_nockW), point.distanceTo(_gripW) + 0.05) < radius;
+    if (near && !nearString && !stringHeld) hooks.haptic?.(0.12);
+    nearString = near;
+    if (pulling && !stringHeld && near) {
       stringHeld = true;
-      hooks.haptic?.(0.25);
+      drawPeak = 0;
+      releaseWait = 0;
+      hooks.haptic?.(0.35);
     }
     if (stringHeld && pulling) {
+      releaseWait = 0;
       bow.worldToLocal(_nockL.copy(point));
       // The string only travels backward; keep it near the bow's centre line.
       _nockL.x = THREE.MathUtils.clamp(_nockL.x, -0.06, 0.06);
       _nockL.y = THREE.MathUtils.clamp(_nockL.y, -0.08, 0.08);
       _nockL.z = Math.max(bow.userData.restZ, _nockL.z);
       const was = draw;
-      draw = THREE.MathUtils.clamp((_nockL.z - bow.userData.restZ) / 0.55, 0, 1);
-      if (draw >= 1 && was < 1) hooks.haptic?.(0.35);
+      draw = THREE.MathUtils.clamp((_nockL.z - bow.userData.restZ) / FULL_DRAW, 0, 1);
+      // Remember the deepest point of the pull, so a string that slips
+      // forward as the fingers open still looses at full strength.
+      if (draw >= drawPeak) {
+        drawPeak = draw;
+        _peakNock.copy(_nockL);
+      }
+      if (draw >= 1 && was < 1) hooks.haptic?.(0.5);
     }
     if (stringHeld && !pulling) {
+      releaseWait += dt || 0.016;
+      if (releaseWait < 0.06) return;
+      releaseWait = 0;
       stringHeld = false;
-      if (draw > 0.2 && reload <= 0) {
+      const power = Math.max(draw, drawPeak);
+      if (drawPeak > draw) _nockL.copy(_peakNock);
+      drawPeak = 0;
+      if (power > 0.15) {
+        draw = power;
         // Fly along the drawn arrow: from the nock through the grip.
         bow.localToWorld(_nockW.copy(_nockL));
         bow.localToWorld(_gripW.copy(bow.userData.grip));
@@ -735,20 +898,40 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       draw = 0;
       _nockL.set(0, 0, bow.userData.restZ);
     }
-    if (!stringHeld) draw = Math.max(0, draw - dt * 3);
+    if (!stringHeld) {
+      draw = Math.max(0, draw - dt * 3);
+      if (draw <= 0) drawPeak = 0;
+    }
   }
 
-  // Two controllers: the bow is held in the left one (limbs along its
-  // handle, facing where it points) and the right one pulls the string.
-  let rightWasSelecting = false;
+  // The string glows gold when the drawing hand can catch it, and brighter
+  // while it is held.
+  let stringMat = null;
+  function glowString() {
+    if (!stringMat) {
+      stringMat = new THREE.MeshStandardMaterial({ color: 0xd8c39a, emissive: 0xffc860, emissiveIntensity: 0, roughness: 0.5 });
+      bow.userData.stringTop.material = stringMat;
+      bow.userData.stringBot.material = stringMat;
+    }
+    stringMat.emissiveIntensity = stringHeld ? 1.6 : nearString ? 0.9 : 0;
+  }
+
+  // Two controllers: the bow is held in the right one and the left one
+  // pulls the string. Releasing the left grip is what looses the arrow.
   function poseFromControllers(dt) {
-    const leftGrip = hooks.leftGrip?.();
-    const leftRay = hooks.leftHand?.();
+    const leftGrip = hooks.rightGrip?.();
+    const leftRay = hooks.rightHand?.();
     if (!leftGrip || !leftRay) return;
     leftGrip.getWorldPosition(_gripPos);
-    _y.copy(_negZ).applyQuaternion(leftGrip.getWorldQuaternion(_q1)); // along the handle
-    _fwdW.copy(_negZ).applyQuaternion(leftRay.getWorldQuaternion(_q2)); // where it points
-    _fwdW.addScaledVector(_y, -_fwdW.dot(_y)).normalize();
+    // The bow faces where the left controller points and stands upright,
+    // leaning a little with the wrist's roll. (Following the controller's
+    // handle tilted it 40-60 degrees forward on Quest controllers.)
+    leftRay.getWorldQuaternion(_q2);
+    _fwdW.copy(_negZ).applyQuaternion(_q2).normalize();
+    _y.set(0, 1, 0).lerp(_upW.set(0, 1, 0).applyQuaternion(_q2), 0.3);
+    _y.addScaledVector(_fwdW, -_y.dot(_fwdW));
+    if (_y.lengthSq() < 1e-6) _y.set(0, 0, 1).addScaledVector(_fwdW, -_fwdW.z);
+    _y.normalize();
     _zW.copy(_fwdW).negate();
     _xW.crossVectors(_y, _zW);
     _basis.makeBasis(_xW, _y, _zW);
@@ -757,13 +940,15 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     bow.visible = true;
     bow.updateMatrixWorld(true);
 
-    const rightGrip = hooks.rightGrip?.();
-    const selecting = !!hooks.rightSelecting?.();
+    const rightGrip = hooks.leftGrip?.();
+    const selecting = !!hooks.leftSelecting?.();
     if (rightGrip) {
       rightGrip.getWorldPosition(_pullW);
-      pullString(_pullW, selecting, selecting && !rightWasSelecting, 0.22, dt);
+      pullString(_pullW, selecting, 0.3, dt);
+    } else if (stringHeld) {
+      pullString(_pullW, false, 0.3, dt);
     }
-    rightWasSelecting = selecting;
+    glowString();
   }
 
   // Hand-tracking: put the weapon in the fist, and let the right hand pinch
@@ -793,23 +978,75 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       return;
     }
 
+    // Bow hand. Tracking blips keep the bow where it was for half a second
+    // instead of dropping it.
     const left = trackedHand('left');
-    if (!left || !bowGrip(left, _gripPos, _gripQuat)) {
-      bow.visible = false;
-      stringHeld = false;
-      return;
+    if (left && bowGrip(left, _gripPos, _gripQuat)) {
+      bowLostT = 0;
+      // Upright with a little cant from the wrist; while drawing, the bow
+      // lines up from the drawing hand through the bow hand, so the arrow
+      // flies where the two hands point.
+      _y.set(0, 1, 0).lerp(_upW.set(0, 1, 0).applyQuaternion(_gripQuat), 0.25);
+      if (stringHeld) _fwdW.subVectors(_gripPos, lastPull).normalize();
+      else _fwdW.copy(_negZ).applyQuaternion(_gripQuat);
+      _y.addScaledVector(_fwdW, -_y.dot(_fwdW));
+      if (_y.lengthSq() < 1e-6) _y.set(0, 0, 1);
+      _y.normalize();
+      _zW.copy(_fwdW).negate();
+      _xW.crossVectors(_y, _zW);
+      _basis.makeBasis(_xW, _y, _zW);
+      _gripQuat.setFromRotationMatrix(_basis);
+      // Smooth out tracking jitter; snap when the bow first appears.
+      if (!bow.visible) {
+        bow.position.copy(_gripPos);
+        bow.quaternion.copy(_gripQuat);
+      } else {
+        bow.position.lerp(_gripPos, 1 - Math.exp(-35 * dt));
+        bow.quaternion.slerp(_gripQuat, 1 - Math.exp(-(stringHeld ? 30 : 18) * dt));
+      }
+      bow.visible = true;
+    } else {
+      bowLostT += dt;
+      if (bowLostT > 0.5) {
+        bow.visible = false;
+        stringHeld = false;
+        return;
+      }
     }
-    bow.visible = true;
-    bow.position.copy(_gripPos);
-    bow.quaternion.copy(_gripQuat);
     bow.updateMatrixWorld(true);
 
+    // Drawing hand: a pinch or a closed fist holds the string. Thresholds
+    // are loose for tracking noise, and letting go only counts once it has
+    // lasted 80 ms (or the hand has been lost for 0.35 s), so a flicker
+    // never fires the arrow early.
     const right = trackedHand('right');
-    const gap = right ? pinch(right, _pinchPt) : null;
-    const was = pinching;
-    pinching = gap != null && (was ? gap < 0.035 : gap < 0.02);
-    pullString(_pinchPt, pinching, pinching && !was, 0.1, dt);
+    let holding = false;
+    if (right) {
+      const gap = pinch(right, _pinchPt);
+      if (gap != null) lastPull.copy(_pinchPt); // where the drawing hand is
+      const pinched = gap != null && (pinching ? gap < 0.05 : gap < 0.028);
+      pinching = pinched;
+      if (pinched) {
+        lastPull.copy(_pinchPt);
+        holding = true;
+      } else if (fist(right, _pinchPt)) {
+        lastPull.copy(_pinchPt);
+        holding = true;
+      }
+      handLostT = 0;
+    } else {
+      handLostT += dt;
+    }
+    if (holding) letGoT = 0;
+    else letGoT += dt;
+    const held = holding || (stringHeld && (right ? letGoT < 0.08 : handLostT < 0.35));
+    pullString(lastPull, held, 0.18, dt);
+    glowString();
   }
+  let bowLostT = 0;
+  let handLostT = 0;
+  let letGoT = 0;
+  const lastPull = new THREE.Vector3();
 
   function refreshLook() {
     const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
@@ -865,7 +1102,15 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     }
 
     if (phase === 'result') {
-      if (phaseT > 1.05) {
+      let falling = false;
+      for (const e of enemies) {
+        if (!e.dying) continue;
+        e.dying += dt;
+        e.mesh.rotation.x = -Math.min(1.4, Math.max(0, e.dying - 0.12) * 2.6);
+        e.mesh.userData.rig?.drive(dt, { action: 'die', t: e.dying });
+        if (e.dying < 1.1) falling = true;
+      }
+      if (phaseT > 1.15 && !falling) {
         const win = resultWin;
         teardown();
         resolveFn?.(win);
@@ -923,20 +1168,35 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         }
         if (!mousePull && !autoDraw) draw = Math.max(0, draw - dt * 3);
       } else if (gripMode === 'controller') {
-        if (input.primaryDown) draw = Math.min(1, draw + dt / 0.5);
-        if (input.primaryReleased && draw > 0.32 && reload <= 0) loose();
-        else if (!input.primaryDown) draw = Math.max(0, draw - dt * 3);
+        if (input.primaryDown) {
+          draw = Math.min(1, draw + dt / 0.5);
+          drawPeak = Math.max(drawPeak, draw);
+        }
+        if (input.primaryReleased) {
+          const power = Math.max(draw, drawPeak);
+          drawPeak = 0;
+          if (power > 0.2) {
+            draw = power;
+            loose();
+          } else draw = 0;
+        } else if (!input.primaryDown) {
+          draw = Math.max(0, draw - dt * 3);
+          if (draw <= 0) drawPeak = 0;
+        }
       }
     }
     if (!usesSword()) reload = Math.max(0, reload - dt);
 
     const melee = mode === 'sword-melee' || mode === 'bow-melee';
     if (melee) {
-      // One at a time: the next swordsman sets off from the far end only
-      // after the one before him has fallen.
+      // The first swordsman charges; the second appears 0.3 s behind him so
+      // they come at the player together, and the rest keep coming
+      // (1.8 s shrinking to 1.2 s), at most three on the field, and straight
+      // away whenever the field is empty.
       spawnT += dt;
       const alive = enemies.filter((e) => e.alive && e.kind === 'sword').length;
-      if (alive === 0 && spawnT > 0.7 && kills < quota) {
+      const gap = spawned <= 1 ? 0.3 : Math.max(1.2, 1.8 - (spawned - 2) * 0.15);
+      if (spawned < quota && alive < 3 && (spawnT > gap || (alive === 0 && spawnT > 0.5))) {
         spawnSwordsman();
         spawnT = 0;
       }
@@ -964,20 +1224,33 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       e.mesh.rotation.y += turn * (1 - Math.exp(-10 * dt));
 
       if (e.kind === 'sword') {
+        const speed = e.speed || TUNING.meleeSpeed;
         if (dist > 1.2) {
-          const step = TUNING.meleeSpeed * dt;
+          const step = speed * dt;
           e.mesh.position.x += (_dir.x / dist) * step;
           e.mesh.position.z += (_dir.z / dist) * step;
-          rig?.drive(dt, { action: 'run', speed: TUNING.meleeSpeed, look: _camPos });
-          e.windup = 0;
+          if (dist < SWING_FROM) {
+            // Charging in already swinging: cuts start well before he
+            // reaches the player, and land only once he is within reach.
+            e.windup += dt;
+            rig?.drive(dt, { action: 'charge', t: e.windup, variant: e.swing, speed, look: _camPos });
+            swingWhoosh(e, dist);
+            if (e.windup > 0.62) {
+              if (dist <= SWORD_REACH) landBlow(e, dist);
+              else {
+                e.windup = -0.2;
+                e.swing += 1;
+              }
+            }
+          } else {
+            rig?.drive(dt, { action: 'run', speed, look: _camPos });
+            e.windup = 0;
+          }
         } else {
           e.windup += dt;
           rig?.drive(dt, { action: 'strike', t: e.windup, variant: e.swing, look: _camPos });
-          if (e.windup > 0.62) {
-            damagePlayer();
-            e.windup = -0.28;
-            e.swing += 1;
-          }
+          swingWhoosh(e, dist);
+          if (e.windup > 0.62) landBlow(e, dist);
         }
         if (hot > 0 && usesSword()) {
           const chest = _local.set(e.mesh.position.x, 1.25, e.mesh.position.z);
@@ -1080,6 +1353,10 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         }
       }
 
+      if (arrow.alive && !arrow.fromPlayer && !arrow.reflected && arrow.age > 0.12 && shieldStops(arrow)) {
+        arrow.alive = false;
+        blockHit(arrow.mesh.position.x, arrow.mesh.position.y, arrow.mesh.position.z);
+      }
       if (arrow.alive && !arrow.fromPlayer && !arrow.reflected && arrow.age > 0.12) {
         if (arrow.mesh.position.distanceTo(_chest) < 0.38) {
           arrow.alive = false;
@@ -1128,6 +1405,10 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     update,
     force,
     isActive: () => active,
+    setQuality(q) {
+      quality = q;
+      applyArenaMode();
+    },
   };
 }
 
@@ -1137,6 +1418,7 @@ function buildArena(group) {
     new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.95, metalness: 0 }),
   );
   ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
   group.add(ground);
 
   const ring = new THREE.Mesh(
@@ -1162,11 +1444,25 @@ function buildArena(group) {
   group.add(moon);
   backdrop.push(moon);
 
-  const hemi = new THREE.HemisphereLight(0xffd2b0, 0x2a1a12, 0.85);
+  // Warm, smoky daylight: a low sun (matching the sky) and a dusty fill.
+  const hemi = new THREE.HemisphereLight(0xd0a57c, 0x3a2a1c, 1.15);
   group.add(hemi);
-  const moonLight = new THREE.DirectionalLight(0xc9d4ff, 1.15);
-  moonLight.position.set(-4, 8, -2);
-  group.add(moonLight);
+  const moonLight = new THREE.DirectionalLight(0xffb878, 2.4);
+  moonLight.position.set(-4.5, 3.6, -8.6);
+  // A low sun throws long shadows from the attackers toward the player.
+  moonLight.castShadow = true;
+  moonLight.shadow.mapSize.set(1024, 1024);
+  const sc = moonLight.shadow.camera;
+  sc.left = -7;
+  sc.right = 7;
+  sc.top = 5;
+  sc.bottom = -5;
+  sc.near = 1;
+  sc.far = 24;
+  moonLight.shadow.bias = -0.0008;
+  moonLight.shadow.normalBias = 0.03;
+  moonLight.target.position.set(0, 0, -2);
+  group.add(moonLight, moonLight.target);
 
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * Math.PI * 2;
@@ -1182,9 +1478,7 @@ function buildArena(group) {
       new THREE.MeshBasicMaterial({ color: 0xff8a3c }),
     );
     flame.position.set(x, 1.55, z);
-    const light = new THREE.PointLight(0xff7a3a, 5, 7, 2);
-    light.position.set(x, 1.55, z);
-    group.add(pole, flame, light);
+    group.add(pole, flame);
   }
 
   for (let i = 0; i < 6; i++) {
@@ -1196,7 +1490,14 @@ function buildArena(group) {
     rock.position.set(Math.sin(a) * (3 + (i % 3)), 0.18, -2.2 - (i % 4));
     rock.rotation.set(i, i * 0.4, 0);
     group.add(rock);
+    backdrop.push(rock);
   }
+  // A soft warm fill from behind the player so the attackers' armour and
+  // faces read against the low sun (no shadows; cheap).
+  const fill = new THREE.DirectionalLight(0xffd2a6, 0.85);
+  fill.position.set(2.5, 3, 6);
+  group.add(fill);
+  backdrop.sun = moonLight;
   return backdrop;
 }
 

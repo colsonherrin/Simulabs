@@ -1,5 +1,236 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { playBoom } from './audio.js';
+import { mudTex, stoneTex, woodTex, steelTex } from './textures.js';
+
+// The Blender scenes carry flat vertex colours. On load, every surface gets
+// tiling detail (mud and gravel, dressed stone, wood grain, pitted iron) laid
+// on with box-projected UVs, and casts / catches the sun's shadow.
+const DETAIL = [
+  [/ground|mud|crater|scorch/i, () => mudTex(), 1.6, 1.4],
+  [/stone|rock|wall|ruin|castle/i, () => stoneTex(), 1.8, 1.2],
+  [/wood|char|palisade|log|plank/i, () => woodTex(), 0.9, 0.6],
+  [/iron|metal|steel/i, () => steelTex(), 0.8, 0.3],
+];
+function boxUV(geo, tile) {
+  const pos = geo.attributes.position;
+  const nrm = geo.attributes.normal;
+  if (!pos || !nrm) return;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    const ax = Math.abs(nrm.getX(i));
+    const ay = Math.abs(nrm.getY(i));
+    const az = Math.abs(nrm.getZ(i));
+    let u;
+    let v;
+    if (ay >= ax && ay >= az) [u, v] = [pos.getX(i), pos.getZ(i)];
+    else if (ax >= az) [u, v] = [pos.getZ(i), pos.getY(i)];
+    else [u, v] = [pos.getX(i), pos.getY(i)];
+    uv[i * 2] = u / tile;
+    uv[i * 2 + 1] = v / tile;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+}
+export function dressScene(scene, { cast = true, receive = false } = {}) {
+  scene.updateMatrixWorld(true);
+  const lambert = new Map();
+  scene.traverse((o) => {
+    if (!o.isMesh) return;
+    // Scenery uses the cheap diffuse (Lambert) shader and doesn't receive
+    // shadows: on a headset the full PBR shader with shadow lookups across
+    // the whole terrain cost more than everything else in the duel together.
+    o.receiveShadow = receive;
+    // Only person-sized props may cast (none do by default: soldiers do): long walls and palisades under a low
+    // sun would throw the whole arena into shade.
+    o.geometry.computeBoundingBox();
+    const size = o.geometry.boundingBox.getSize(new THREE.Vector3()).multiply(o.getWorldScale(new THREE.Vector3()));
+    o.castShadow = cast && size.x * size.z < 6 && !/ground|terrain/i.test(o.name + (o.material?.name || ''));
+    const mat = o.material;
+    if (!mat || Array.isArray(mat)) return;
+    const glowing = mat.emissive && mat.emissive.getHex() > 0x101010;
+    const rule = !mat.map && !glowing && DETAIL.find(([re]) => re.test(mat.name || '') || re.test(o.name));
+    if (rule) {
+      const sc = o.getWorldScale(new THREE.Vector3()).x || 1;
+      o.geometry = o.geometry.clone();
+      boxUV(o.geometry, rule[2] / sc);
+    }
+    if (!lambert.has(mat)) {
+      const map = rule ? rule[1]() : mat.map;
+      lambert.set(mat, new THREE.MeshLambertMaterial({
+        name: mat.name,
+        color: mat.color,
+        map,
+        vertexColors: mat.vertexColors,
+        emissive: mat.emissive,
+        emissiveIntensity: mat.emissiveIntensity,
+        emissiveMap: mat.emissiveMap,
+        side: mat.side,
+        transparent: mat.transparent,
+        opacity: mat.opacity,
+        alphaTest: mat.alphaTest,
+      }));
+    }
+    o.material = lambert.get(mat);
+  });
+}
+
+// Set pieces modelled in Blender (tools/blender/war_props.py): ruined walls,
+// a wrecked catapult, a burnt siege tower, an overturned cart, torn tents, a
+// palisade, craters and supplies, plus FIRE_* markers where fires burn.
+const WAR_PROPS_URL = 'models/war_props.glb';
+// The far battlefield for VR and flat-screen duels (tools/blender/battlefield.py):
+// rolling muddy ground, rocks, castle ruins and a distant city, banners,
+// palisades, debris, plus FIRE_* and SMOKE_* markers.
+const BATTLEFIELD_URL = 'models/battlefield.glb';
+let fieldPromise = null;
+function loadBattlefield() {
+  if (!fieldPromise) {
+    const url = new URL(BATTLEFIELD_URL, document.baseURI).href;
+    fieldPromise = new GLTFLoader().loadAsync(url).catch((err) => {
+      console.warn('Battlefield did not load; the duel uses the plain arena.', err);
+      return null;
+    });
+  }
+  return fieldPromise;
+}
+
+// Sky dome: an amber horizon rising into smoke-grey, a hazy sun and slowly
+// drifting clouds, all in the shader so it costs almost nothing.
+const SUN_DIR = new THREE.Vector3(-0.45, 0.22, -0.86).normalize();
+let noiseTex = null;
+function cloudNoise() {
+  if (noiseTex) return noiseTex;
+  // Tiling value-noise fbm, baked once into a small texture.
+  const N = 128;
+  const hash = (x, y) => {
+    const v = Math.sin((((x % 32) + 32) % 32) * 127.1 + (((y % 32) + 32) % 32) * 311.7) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  const vnoise = (x, y, period) => {
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uy = fy * fy * (3 - 2 * fy);
+    const h = (a, b) => hash(((a % period) + period) % period, ((b % period) + period) % period);
+    const a = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * ux;
+    const b = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * ux;
+    return a + (b - a) * uy;
+  };
+  const data = new Uint8Array(N * N * 4);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      let v = 0;
+      let amp = 0.5;
+      for (let o = 0; o < 4; o++) {
+        const period = 4 << o;
+        v += amp * vnoise((x / N) * period, (y / N) * period, period);
+        amp *= 0.5;
+      }
+      const c = Math.round(Math.min(1, v / 0.9375) * 255);
+      const i = (y * N + x) * 4;
+      data[i] = data[i + 1] = data[i + 2] = c;
+      data[i + 3] = 255;
+    }
+  }
+  noiseTex = new THREE.DataTexture(data, N, N);
+  noiseTex.wrapS = noiseTex.wrapT = THREE.RepeatWrapping;
+  noiseTex.magFilter = THREE.LinearFilter;
+  noiseTex.minFilter = THREE.LinearMipmapLinearFilter;
+  noiseTex.generateMipmaps = true;
+  noiseTex.needsUpdate = true;
+  return noiseTex;
+}
+function makeSky() {
+  const material = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    uniforms: { uTime: { value: 0 }, uSun: { value: SUN_DIR.clone() }, uNoise: { value: cloudNoise() } },
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform float uTime;
+      uniform vec3 uSun;
+      varying vec3 vDir;
+      uniform sampler2D uNoise;
+      // Two lookups of a baked, tiling noise texture stand in for a
+      // five-octave procedural fbm: same clouds, a fraction of the cost.
+      float fbm(vec2 p) {
+        return texture2D(uNoise, p * 0.25).r * 0.62 + texture2D(uNoise, p * 0.53 + 0.37).r * 0.38;
+      }
+      void main() {
+        vec3 d = normalize(vDir);
+        float h = d.y;
+        // Colours are picked in sRGB and squared into linear light, since the
+        // renderer converts back to sRGB on output.
+        vec3 horizon = pow(vec3(0.74, 0.47, 0.27), vec3(2.2));
+        vec3 mid = pow(vec3(0.44, 0.35, 0.29), vec3(2.2));
+        vec3 top = pow(vec3(0.2, 0.18, 0.18), vec3(2.2));
+        vec3 col = mix(horizon, mid, smoothstep(0.0, 0.22, h));
+        col = mix(col, top, smoothstep(0.22, 0.85, h));
+        float s = max(dot(d, uSun), 0.0);
+        col += pow(vec3(1.0, 0.7, 0.42), vec3(2.2)) * (pow(s, 6.0) * 0.45 + pow(s, 90.0) * 0.9);
+        // Smoke-laden clouds, lit warm toward the sun.
+        vec2 uv = d.xz / (max(h, 0.0) + 0.18) * 0.9 + vec2(uTime * 0.012, uTime * 0.005);
+        float c = fbm(uv * 1.4);
+        float clouds = smoothstep(0.42, 0.8, c) * smoothstep(-0.02, 0.18, h);
+        vec3 cloudCol = mix(pow(vec3(0.17, 0.15, 0.14), vec3(2.2)), pow(vec3(0.82, 0.55, 0.32), vec3(2.2)), clamp(pow(s, 2.5) * 0.9 + 0.08, 0.0, 1.0));
+        col = mix(col, cloudCol, clouds * 0.9);
+        // Below the horizon, fade into the ground haze.
+        col = mix(col, horizon * 0.72, smoothstep(0.02, -0.12, h));
+        gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(68, 32, 16), material);
+  // Drawn after the opaque scene so the GPU skips every sky pixel the
+  // terrain and ruins already cover.
+  sky.renderOrder = 10;
+  sky.frustumCulled = false;
+  return sky;
+}
+
+let propsPromise = null;
+function loadWarProps() {
+  if (!propsPromise) {
+    const url = new URL(WAR_PROPS_URL, document.baseURI).href;
+    propsPromise = new GLTFLoader().loadAsync(url).catch((err) => {
+      console.warn('War props did not load; the duel goes on without them.', err);
+      return null;
+    });
+  }
+  return propsPromise;
+}
+
+/** A PMREM environment of the battlefield sky, for metal reflections. */
+export function makeSkyEnvironment(renderer) {
+  try {
+    const env = new THREE.Scene();
+    const sky = makeSky();
+    sky.scale.setScalar(0.5);
+    env.add(sky);
+    // A dark, muddy lower hemisphere so armour doesn't mirror the sky below.
+    const ground = new THREE.Mesh(
+      new THREE.SphereGeometry(30, 16, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x4a3626, side: THREE.BackSide }),
+    );
+    env.add(ground);
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const tex = pmrem.fromScene(env, 0.02).texture;
+    pmrem.dispose();
+    return tex;
+  } catch (err) {
+    console.warn('Battle environment skipped', err);
+    return null;
+  }
+}
 
 // A battlefield that surrounds the duels.
 //
@@ -216,14 +447,16 @@ export function createWarZone(group) {
     logs.position.set(x, 0, z);
     root.add(logs);
     const flames = [];
-    for (let k = 0; k < 3; k++) {
+    for (let k = 0; k < 2; k++) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex.flame, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
       s.position.set(x + rand(-0.12, 0.12), 0.45, z + rand(-0.12, 0.12));
       root.add(s);
       flames.push({ s, phase: rand(0, 6), size: rand(0.6, 0.9) });
     }
     fires.push({ x, z, flames, smokeT: rand(0, 1) });
-    if (i < 3) {
+    // Two flickering lights are plenty; per-fragment point lights are what
+    // costs most on a standalone headset.
+    if (i < 2) {
       const light = new THREE.PointLight(0xff7a30, 6, 9, 2);
       light.position.set(x, 0.9, z);
       root.add(light);
@@ -233,7 +466,7 @@ export function createWarZone(group) {
 
   // ------------------------------------------------------------- smoke --
   const smoke = [];
-  for (let i = 0; i < 46; i++) {
+  for (let i = 0; i < 18; i++) {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex.puff, color: 0x3a3632, transparent: true, depthWrite: false, opacity: 0 }));
     s.visible = false;
     root.add(s);
@@ -257,7 +490,7 @@ export function createWarZone(group) {
   }
 
   // ------------------------------------------------------------ embers --
-  const EMBERS = 160;
+  const EMBERS = 110;
   const emberPos = new Float32Array(EMBERS * 3);
   const emberVel = new Float32Array(EMBERS * 3);
   const emberLife = new Float32Array(EMBERS);
@@ -325,6 +558,86 @@ export function createWarZone(group) {
     playBoom(Math.min(1, 5 / Math.hypot(at.x, at.z)));
   }
 
+  // Blender set pieces: placed as modelled, with a fire at every FIRE_*
+  // marker (flames, smoke and embers; no extra lights, to stay light on a
+  // headset).
+  loadWarProps().then((gltf) => {
+    if (!gltf) return;
+    const props = gltf.scene;
+    props.name = 'war_props';
+    dressScene(props, { cast: false });
+    root.add(props);
+    for (const node of props.children) {
+      if (!node.name.startsWith('FIRE_')) continue;
+      const { x, y, z } = node.position;
+      const flames = [];
+      for (let k = 0; k < 2; k++) {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex.flame, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+        s.position.set(x + rand(-0.2, 0.2), y + 0.5, z + rand(-0.2, 0.2));
+        root.add(s);
+        flames.push({ s, phase: rand(0, 6), size: rand(0.8, 1.2) });
+      }
+      fires.push({ x, z, flames, smokeT: rand(0, 1) });
+    }
+  });
+
+  // ----------------------------------------------- far battlefield (VR) --
+  // Hidden in AR so the player's room stays the arena.
+  const far = new THREE.Group();
+  far.name = 'battlefield';
+  root.add(far);
+  const sky = makeSky();
+  far.add(sky);
+  let fieldLoaded = false;
+  const plumes = [];
+  const plumePool = [];
+  for (let i = 0; i < 14; i++) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex.puff, color: 0x2e2a27, transparent: true, depthWrite: false, opacity: 0 }));
+    s.visible = false;
+    far.add(s);
+    plumePool.push({ s, life: 0, max: 1, vx: 0, vy: 0, peak: 0.5, grow: 1 });
+  }
+  let plumeNext = 0;
+  function plumePuff(x, y, z, big) {
+    const p = plumePool[plumeNext];
+    plumeNext = (plumeNext + 1) % plumePool.length;
+    p.s.position.set(x + rand(-0.6, 0.6), y, z + rand(-0.6, 0.6));
+    p.s.scale.setScalar(big ? rand(3, 4.5) : rand(1.6, 2.4));
+    p.s.visible = true;
+    p.life = 0;
+    p.max = big ? rand(11, 15) : rand(7, 9);
+    p.vx = rand(0.25, 0.5); // the wind carries it off to one side
+    p.vy = big ? rand(1.1, 1.5) : rand(0.6, 0.9);
+    p.peak = big ? 0.55 : 0.4;
+    p.grow = big ? 0.9 : 0.7;
+  }
+
+  loadBattlefield().then((gltf) => {
+    if (!gltf) return;
+    const field = gltf.scene;
+    // The far field only catches shadows; it is too big to cast them cheaply.
+    dressScene(field, { cast: false });
+    far.add(field);
+    for (const node of field.children) {
+      const { x, y, z } = node.position;
+      if (node.name.startsWith('SMOKE_')) {
+        plumes.push({ x, y, z, t: rand(0, 3), big: /tower|city|wall/.test(node.name) });
+      } else if (node.name.startsWith('FIRE_')) {
+        const flames = [];
+        for (let k = 0; k < 2; k++) {
+          const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex.flame, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+          s.position.set(x + rand(-0.2, 0.2), y + 0.45, z + rand(-0.2, 0.2));
+          far.add(s);
+          flames.push({ s, phase: rand(0, 6), size: rand(0.7, 1.0) });
+        }
+        fires.push({ x, z, flames, smokeT: rand(0, 1), far: true });
+      }
+    }
+    fieldLoaded = true;
+    onField?.();
+  });
+  let onField = null;
+
   // ------------------------------------------------------------ update --
   let time = 0;
   let isAR = false;
@@ -332,7 +645,32 @@ export function createWarZone(group) {
     if (!root.visible) return;
     time += dt;
 
+    sky.material.uniforms.uTime.value = time;
+    if (far.visible) {
+      for (const p of plumes) {
+        p.t -= dt;
+        if (p.t <= 0) {
+          p.t = p.big ? rand(0.7, 1.1) : rand(0.9, 1.4);
+          plumePuff(p.x, p.y, p.z, p.big);
+        }
+      }
+    }
+    for (const p of plumePool) {
+      if (!p.s.visible) continue;
+      p.life += dt;
+      const k = p.life / p.max;
+      if (k >= 1) {
+        p.s.visible = false;
+        continue;
+      }
+      p.s.position.x += p.vx * dt;
+      p.s.position.y += p.vy * dt;
+      p.s.scale.multiplyScalar(1 + p.grow * dt * 0.12);
+      p.s.material.opacity = Math.sin(Math.PI * Math.min(1, k * 1.3)) * p.peak;
+    }
+
     for (const f of fires) {
+      if (f.far && !far.visible) continue;
       for (const fl of f.flames) {
         const k = 1 + Math.sin(time * 13 + fl.phase) * 0.12 + Math.sin(time * 23 + fl.phase * 2) * 0.08;
         fl.s.scale.set(fl.size * 0.8 * k, fl.size * 1.25 * k, 1);
@@ -417,8 +755,16 @@ export function createWarZone(group) {
   return {
     root,
     update,
+    // True once the Blender battlefield is in, so the plain arena can hide.
+    hasField: () => fieldLoaded,
+    onFieldLoaded(fn) {
+      onField = fn;
+      if (fieldLoaded) fn();
+    },
+    sunDir: SUN_DIR,
     setAR(on) {
       isAR = on;
+      far.visible = !on;
       // Over a real room the scorch is lighter so the floor still reads.
       scorch.material.opacity = on ? 0.75 : 1;
     },
