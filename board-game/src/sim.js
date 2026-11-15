@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { createAvatar } from '../../webxr/avatar.js';
 import { rtcConnector } from '../../webxr/realtime-rtc.js';
+import { relayUrl, voicePass } from '../../webxr/voice-pass.js';
 import { TOP, squareLocal } from './tabletop.js';
 import { assess, bestMove, boardText, clashRecord, describeAction } from './search.js';
 
@@ -420,6 +421,11 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     record,
     root: avatar.root,
     hasKey: () => { try { return !!storage.getItem(KEY_NAME); } catch (e) { return false; } },
+    /** True if her live voice can be started here: a key was given, or the site has a voice relay. */
+    async canGoLive() {
+      try { if (storage.getItem(KEY_NAME)) return true; } catch (e) { /* none */ }
+      return !!(await relayUrl());
+    },
     setKey(key) {
       try {
         if (key) storage.setItem(KEY_NAME, key);
@@ -430,8 +436,9 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     async startVoice() {
       let key = '';
       try { key = storage.getItem(KEY_NAME) || ''; } catch (e) { /* none */ }
-      if (!key) return false;
-      await voice.start(key);
+      // No key typed here: use a short-lived pass from the site's voice relay, if it has one.
+      if (!key && !(await relayUrl())) return false;
+      await voice.start(key || voicePass);
       return voice.state() === 'live';
     },
     voiceState: () => voice.state(),

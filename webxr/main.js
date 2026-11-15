@@ -15,6 +15,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { SimulacraCore, xrToProtocol, protocolToXr } from '../spectacles/Assets/Scripts/SimulacraCore.ts';
 import { startLocal } from './local-backend.ts';
 import { createAvatar } from './avatar.js';
+import { relayUrl, voicePass } from './voice-pass.js';
 
 const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
@@ -357,11 +358,20 @@ function backendAddress() {
 }
 
 /** The user's OpenAI key for stand-alone use. It lives in this browser only and is sent only to OpenAI. */
+// A link can carry the key (…/#key=sk-…): it is saved and removed from the address at once.
+{
+  const m = /[#&]key=(sk-[\w-]{20,})/.exec(location.hash);
+  if (m) {
+    try { localStorage.setItem('simulacra.openaiKey', m[1]); } catch (e) { /* storage unavailable */ }
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+}
 function savedKey() {
   try { return localStorage.getItem('simulacra.openaiKey') || ''; } catch (e) { return ''; }
 }
 /** Stand-alone: the page is hosted on its own, has a key, and was not pointed at a backend. */
-const standalone = () => hostedElsewhere && !params.get('backend') && !!savedKey();
+let relay = ''; // the site's voice relay, if it has one: live voice with no key in the page
+const standalone = () => hostedElsewhere && !params.get('backend') && (!!savedKey() || !!relay);
 
 // ---------------------------------------------------------------- debug
 
@@ -406,7 +416,7 @@ function connect() {
   const mine = ++generation;
   if (standalone()) {
     // No backend: the same session code runs right here and talks to OpenAI directly.
-    const local = startLocal(savedKey(), (text) => { if (mine === generation) fromBackend(text); }, media, params.get('mind') === 'audio' ? 'audio' : 'realtime');
+    const local = startLocal(savedKey(), (text) => { if (mine === generation) fromBackend(text); }, media, savedKey() && params.get('mind') === 'audio' ? 'audio' : 'realtime', voicePass);
     socket = { readyState: WebSocket.OPEN, send: (text) => local.send(text), close: () => { local.close(); core.onClose(); connect(); } };
     core.onOpen();
     return;
@@ -841,6 +851,7 @@ async function start() {
     $('text').value = '';
   });
 
+  if (hostedElsewhere) relay = await relayUrl();
   movePreview = buildPreviewRoom();
   await loadAvatar();
   connect();

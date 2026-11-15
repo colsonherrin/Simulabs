@@ -2,6 +2,9 @@
 // voice travel as real-time audio tracks (the browser handles echo cancellation and jitter), and
 // the session's events travel over a data channel. This is the lowest-latency way to talk to it.
 //
+// `apiKey` is an OpenAI key, a short-lived pass from the relay (relay/worker.js), or a function
+// returning (a promise of) either, called each time a call is started.
+//
 // `media.onMic(cb)` gives the microphone stream now or whenever it is switched on;
 // `media.onVoice(stream|null)` receives the model's voice to play.
 export function rtcConnector(apiKey, model, media) {
@@ -38,7 +41,7 @@ export function rtcConnector(apiKey, model, media) {
       await pc.setLocalDescription(await pc.createOffer());
       const res = await fetch('https://api.openai.com/v1/realtime/calls?model=' + encodeURIComponent(model), {
         method: 'POST',
-        headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/sdp' },
+        headers: { Authorization: 'Bearer ' + (typeof apiKey === 'function' ? await apiKey() : apiKey), 'Content-Type': 'application/sdp' },
         body: pc.localDescription.sdp,
         signal: AbortSignal.timeout(8000),
       });

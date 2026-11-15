@@ -13,6 +13,7 @@ const out = resolve(process.argv[2] ?? join(root, 'webxr-site'));
 mkdirSync(join(out, 'avatar'), { recursive: true });
 await build({ ...webxrBuild('main.js'), outfile: join(out, 'app.js'), logLevel: 'warning' });
 cpSync(join(root, 'webxr', 'index.html'), join(out, 'index.html'));
+cpSync(join(root, 'webxr', 'sim-config.json'), join(out, 'sim-config.json')); // names the voice relay, if any
 const avatar = join(root, 'packages', 'com.simulacra.core', 'Avatar', 'Rocketbox');
 for (const f of ['RocketboxAdult.fbx', 'f006_body_color.png', 'f006_body_normal.png', 'f006_head_color.png', 'f006_head_normal.png', 'f006_opacity_color.png', 'LICENSE.md']) cpSync(join(avatar, f), join(out, 'avatar', f));
 writeFileSync(join(out, '.nojekyll'), '');
