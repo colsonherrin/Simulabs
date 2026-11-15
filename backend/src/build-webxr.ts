@@ -15,7 +15,7 @@ await build({ ...webxrBuild('main.js'), outfile: join(out, 'app.js'), logLevel: 
 cpSync(join(root, 'webxr', 'index.html'), join(out, 'index.html'));
 cpSync(join(root, 'webxr', 'sim-config.json'), join(out, 'sim-config.json')); // names the voice relay, if any
 const avatar = join(root, 'packages', 'com.simulacra.core', 'Avatar', 'Rocketbox');
-for (const f of ['RocketboxAdult.fbx', 'f006_body_color.png', 'f006_body_normal.png', 'f006_head_color.png', 'f006_head_normal.png', 'f006_opacity_color.png', 'LICENSE.md']) cpSync(join(avatar, f), join(out, 'avatar', f));
+for (const f of ['RocketboxAdult.fbx', 'f006_body_color.png', 'f006_body_normal.png', 'f006_head_color.png', 'f006_head_normal.png', 'f006_opacity_color.png', 'animations.json', 'animations.bin', 'LICENSE.md']) cpSync(join(avatar, f), join(out, 'avatar', f));
 writeFileSync(join(out, '.nojekyll'), '');
 // People type /xr/ (the backend-served address) or a wrong path: send them to the page instead of a 404.
 const redirect = (to: string) => `<!doctype html><meta charset="utf-8"><title>Simulacra</title><script>location.replace(${to})</script>`;

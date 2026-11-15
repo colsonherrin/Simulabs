@@ -12,3 +12,11 @@ Rocketbox library and the utility of freely available rigged avatars", Frontiers
 Reality, 2020, doi:10.3389/frvir.2020.561558.
 
 It is used automatically when `Assets/Simulacra/Avatar/` in a project holds no model of its own.
+
+## Animations
+
+`animations.json` and `animations.bin` are 17 motion-capture clips from the same library's
+`Assets/Animations` folder (MIT), recorded for this character's skeleton: idles, a walk, waves,
+talking and listening gestures, a nod, a head shake, a shrug and seated idles. They are converted
+from FBX with `backend/tools/convert-animations.mjs` (about 50 MB down to 2 MB) and played by
+`webxr/avatar.js`. Unity does not use them.
