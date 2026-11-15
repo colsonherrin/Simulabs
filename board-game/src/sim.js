@@ -206,7 +206,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     nextGesture = 'point';
   }
 
-  function update(dt, { visible, floorY, prelude = false }) {
+  function update(dt, { visible, floorY, prelude = false, aside = 0 }) {
     avatar.root.visible = visible && loaded;
     sign.sprite.visible = false;
     if (!avatar.root.visible) return;
@@ -229,7 +229,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     let faceZ = eyes.z;
     if (prelude) {
       if (!at.known) {
-        const p = near(2.2);
+        const p = near(2.2, aside); // on the title screen she stands to one side of the title card
         at.x = p.x;
         at.z = p.z;
         at.yaw = Math.atan2(eyes.x - at.x, -(eyes.z - at.z));
@@ -804,6 +804,8 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     },
     /** She is in the room, before any game: say hello. */
     arrived() {
+      at.known = false; // take her place in front of wherever the player is now
+      route = [];
       situation = 'No game yet. You are in the room in everyday clothes. There is no board.';
       report('You have just appeared in the room, in everyday clothes, facing a visitor. There is no game yet. Say hello in one short sentence.', true, "Sundai: Hi, I'm Sundai.");
     },
