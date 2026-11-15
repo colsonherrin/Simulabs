@@ -316,13 +316,26 @@ async function talkToSim() {
   }
   status.textContent = 'Connecting Sim’s voice…';
   const live = await sim.startVoice();
-  status.textContent = live ? 'Sim’s voice is live: just talk to her.' : `Sim’s voice could not start (${sim.voiceProblem() || 'unknown reason'}). She will coach in text.`;
+  status.textContent = live ? 'Sim’s voice is live: just talk to her.' : `Live voice could not start (${sim.voiceProblem() || 'unknown reason'}). She will still speak her coaching, but cannot hear you. Open “Voice log” for details.`;
   $('btn-sim').textContent = live ? 'Sim: voice on' : 'Talk to Sim';
   if (live) {
     simGreeted = -1;
     if (!menu) simGreet();
+    else sim.hello(); // so you hear her before you start
   }
+  return live;
 }
+// Starting a game switches her voice on if there is a key and it is not on yet: nobody should have
+// to remember a separate button. The microphone prompt comes before any AR session, where it would be hidden.
+async function voiceThenStart(start) {
+  unlockAudio();
+  if (sim.hasKey() && sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting') await talkToSim();
+  start();
+}
+setInterval(() => {
+  const el = $('sim-log');
+  if (el && !el.hidden) el.textContent = `voice: ${sim.voiceState()}${sim.voiceProblem() ? ' (' + sim.voiceProblem() + ')' : ''}; heard her on the call: ${sim.heardHer() ? 'yes' : 'not yet'}\n` + sim.voiceLog().slice(-40).join('\n');
+}, 500);
 
 const fadeMat = new THREE.MeshBasicMaterial({
   color: 0x07060a,
@@ -1044,7 +1057,8 @@ async function enterXR(kind) {
     updateHUD();
   } catch (err) {
     console.warn(err);
-    toast('The XR session was blocked.');
+    // Answering the microphone prompt can use up the tap that starting AR needs.
+    toast(sim.voiceState() === 'live' ? 'Sim can hear you now. Press Enter AR once more.' : 'The XR session was blocked.');
     xrKind = null;
     applyScenery();
   }
@@ -1414,12 +1428,14 @@ window.addEventListener('keyup', (event) => {
   keys[event.code] = false;
 });
 
-btnPlay.addEventListener('click', () => {
-  unlockAudio();
+btnPlay.addEventListener('click', () => voiceThenStart(() => {
   menu = false;
   controls.enabled = true;
   updateHUD();
   simGreet();
+}));
+$('btn-sim-log').addEventListener('click', () => {
+  $('sim-log').hidden = !$('sim-log').hidden;
 });
 // Sim's voice. The key is kept in this browser and sent only to OpenAI.
 $('sim-key-save').addEventListener('click', () => {
@@ -1433,9 +1449,9 @@ $('btn-sim').addEventListener('click', () => {
   unlockAudio();
   talkToSim();
 });
-$('sim-status').textContent = sim.hasKey() ? 'A key is saved. Tap "Talk to Sim" before you start so she can hear you.' : 'Optional: paste an OpenAI key so Sim can talk with you in real time.';
-btnAr.addEventListener('click', () => enterXR('ar'));
-btnVr.addEventListener('click', () => enterXR('vr'));
+$('sim-status').textContent = sim.hasKey() ? 'A key is saved: her voice starts when you start a game.' : 'Optional: paste an OpenAI key so Sim can talk with you in real time.';
+btnAr.addEventListener('click', () => voiceThenStart(() => enterXR('ar')));
+btnVr.addEventListener('click', () => voiceThenStart(() => enterXR('vr')));
 btnArMini.addEventListener('click', () => enterXR('ar'));
 btnVrMini.addEventListener('click', () => enterXR('vr'));
 btnAgain.addEventListener('click', () => {

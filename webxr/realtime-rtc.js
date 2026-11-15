@@ -7,9 +7,22 @@
 export function rtcConnector(apiKey, model, media) {
   return async ({ onMessage, onClose }) => {
     const pc = new RTCPeerConnection();
-    const sender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
-    const stopMic = media.onMic((stream) => sender.replaceTrack(stream.getAudioTracks()[0] || null));
-    pc.ontrack = (e) => media.onVoice(e.streams[0]);
+    // The microphone goes on the call as an ordinary track when it is already on (the usual case);
+    // otherwise a send/receive slot is reserved and filled when the microphone is switched on.
+    let sender = null;
+    const stopMic = media.onMic((stream) => {
+      const track = stream.getAudioTracks()[0];
+      if (!track) return;
+      if (sender) sender.replaceTrack(track);
+      else sender = pc.addTrack(track, stream);
+    });
+    if (!sender) sender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+    const note = media.log || (() => {});
+    pc.addEventListener('connectionstatechange', () => note('call ' + pc.connectionState));
+    pc.ontrack = (e) => {
+      note('voice track received');
+      media.onVoice(e.streams[0] || new MediaStream([e.track]));
+    };
     const events = pc.createDataChannel('oai-events');
     events.onmessage = (e) => onMessage(String(e.data));
     let ended = false;

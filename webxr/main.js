@@ -154,9 +154,13 @@ let micStream = null;
 const micWaiters = new Set();
 let voiceAnalyser = null;
 let voiceSource = null;
-const voiceElement = new Audio();
+const voiceElement = document.createElement('audio');
 voiceElement.autoplay = true;
+voiceElement.playsInline = true;
+voiceElement.style.display = 'none';
+document.body.appendChild(voiceElement);
 const media = {
+  log: (line) => debugLog('voice ' + line),
   onMic(cb) {
     if (micStream) cb(micStream);
     micWaiters.add(cb);
@@ -168,7 +172,7 @@ const media = {
     voiceSource = null;
     voiceAnalyser = null;
     if (!stream) return;
-    voiceElement.play().catch(() => {});
+    voiceElement.play().then(() => debugLog('voice playing'), (e) => debugLog('VOICE REFUSED by the browser: ' + e.message));
     // A second tap on the same stream, only to read loudness for the mouth.
     const ctx = audioContext();
     voiceSource = ctx.createMediaStreamSource(stream);

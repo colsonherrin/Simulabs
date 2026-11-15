@@ -110,7 +110,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     attendBoardFor = Math.max(0, attendBoardFor - dt);
     getCamera().getWorldPosition(eyes);
     lookAt.copy(attendBoardFor > 0 ? pointAt : eyes);
-    voiceLevel = voice.level();
+    voiceLevel = Math.max(voice.level(), fallback.level());
     avatar.animate(dt, pose, voiceLevel, lookAt, pointAt);
   }
 
@@ -125,14 +125,21 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     let analyser = null;
     let source = null;
     let audioCtx = null;
-    const element = new Audio();
+    // Her voice plays through an audio element that is part of the page (some browsers will not
+    // play a detached one), with Web Audio as a second route if the element is refused.
+    const element = document.createElement('audio');
     element.autoplay = true;
+    element.playsInline = true;
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    let viaWebAudio = false;
     const levelBuf = new Uint8Array(256);
     let responding = false;
     let wantResponse = false;
     let userSpeaking = false;
     const handled = new Set();
     const pendingEvents = [];
+    const lines = [];
 
     const media = {
       onMic(cb) {
@@ -140,13 +147,14 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
         micWaiters.add(cb);
         return () => micWaiters.delete(cb);
       },
+      log,
       onVoice(stream) {
         element.srcObject = stream;
         if (source) source.disconnect();
         source = null;
         analyser = null;
+        viaWebAudio = false;
         if (!stream) return;
-        element.play().catch(() => {});
         try {
           audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
           if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -154,10 +162,22 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
           analyser = audioCtx.createAnalyser();
           analyser.fftSize = 512;
           source.connect(analyser);
-        } catch (e) { /* no mouth movement, the voice still plays */ }
+        } catch (e) { log('no audio analyser: ' + e.message); }
+        element.play().then(() => log('voice playing'), (e) => {
+          log('audio element refused (' + e.message + '); playing through Web Audio');
+          if (analyser && !viaWebAudio) {
+            viaWebAudio = true;
+            analyser.connect(audioCtx.destination);
+          }
+        });
       },
     };
 
+    function log(line) {
+      lines.push(new Date().toLocaleTimeString() + '  ' + line);
+      if (lines.length > 80) lines.shift();
+    }
+    let heardHer = false;
     const up = (event) => { if (call) call.send(JSON.stringify(event)); };
     function respond() {
       if (responding || userSpeaking) {
@@ -200,7 +220,11 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     function handle(text) {
       let ev;
       try { ev = JSON.parse(text); } catch (e) { return; }
+      if (!/delta$/.test(ev.type)) log(ev.type + (ev.type === 'response.done' && ev.response ? ' ' + ev.response.status + (ev.response.status_details ? ' ' + JSON.stringify(ev.response.status_details).slice(0, 160) : '') : ev.transcript ? ': ' + String(ev.transcript).slice(0, 80) : ''));
       switch (ev.type) {
+        case 'output_audio_buffer.started':
+          heardHer = true;
+          break;
         case 'response.created':
           responding = true;
           break;
@@ -230,6 +254,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
           if (/no active response|cancellation failed/i.test(msg)) break;
           if (/active response/i.test(msg)) { wantResponse = true; break; }
           console.warn('[Sim voice] ' + msg);
+          log('ERROR ' + msg);
           problem = msg;
           break;
         }
@@ -243,6 +268,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
       try {
         // The microphone first: its prompt must not be hidden behind an AR session.
         if (!micStream) {
+          log('asking for the microphone');
           micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
           for (const cb of micWaiters) cb(micStream);
         }
@@ -259,12 +285,14 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
         });
         up({ type: 'session.update', session: sessionSettings() });
         state = 'live';
+        log('connected; settings sent');
         responding = false;
         for (const [text, speak] of pendingEvents.splice(0)) tell(text, speak);
       } catch (e) {
         call = null;
         state = 'failed';
         problem = (e && e.message) || String(e);
+        log('FAILED to start: ' + problem);
         pendingEvents.length = 0;
         console.warn('[Sim voice] ' + problem);
       }
@@ -275,6 +303,9 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
       tell,
       state: () => state,
       problem: () => problem,
+      lines,
+      heardHer: () => heardHer,
+      mic: () => micStream,
       level() {
         if (!analyser) return 0;
         analyser.getByteTimeDomainData(levelBuf);
@@ -288,12 +319,59 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
     };
   })();
 
+  // ---------------------------------------------------------------- spoken fallback
+
+  // If the live call cannot be used but there is a key, her lines are still spoken, one request
+  // each (she cannot hear you in this mode). Slower, but she is never mute.
+  const fallback = (() => {
+    let chain = Promise.resolve();
+    let ctx = null;
+    let node = null;
+    const buf = new Uint8Array(256);
+    return {
+      speak(text) {
+        let key = '';
+        try { key = storage.getItem(KEY_NAME) || ''; } catch (e) { /* none */ }
+        if (!key) return;
+        chain = chain.then(async () => {
+          try {
+            const res = await fetch('https://api.openai.com/v1/audio/speech', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: 'marin', input: text.replace(/^Sim:\s*/, ''), response_format: 'mp3' }), signal: AbortSignal.timeout(15000) });
+            if (!res.ok) throw new Error('speech request ' + res.status);
+            ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') await ctx.resume();
+            const audio = await ctx.decodeAudioData(await res.arrayBuffer());
+            const src = ctx.createBufferSource();
+            src.buffer = audio;
+            node = node || ctx.createAnalyser();
+            node.fftSize = 512;
+            src.connect(node);
+            node.connect(ctx.destination);
+            src.start();
+            await new Promise((r) => (src.onended = r));
+          } catch (e) {
+            console.warn('[Sim voice] spoken fallback failed: ' + e.message);
+          }
+        });
+      },
+      level() {
+        if (!node) return 0;
+        node.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) sum += ((buf[i] - 128) / 128) ** 2;
+        return Math.min(1, Math.sqrt(sum / buf.length) * 5);
+      },
+    };
+  })();
+
   // ---------------------------------------------------------------- the game, as she hears it
 
   /** Tell her (by voice if live, otherwise as text on screen). `spoken` is what to show without a voice. */
   function report(text, speak, spoken) {
     const heard = voice.tell(`[game] ${text}`, speak);
-    if (!heard && speak && spoken && voice.state() !== 'connecting') say(spoken);
+    if (!heard && speak && spoken && voice.state() !== 'connecting') {
+      say(spoken);
+      fallback.speak(spoken);
+    }
   }
   const boardNow = () => `\nBoard now:\n${boardText(getGame().board)}`;
 
@@ -317,6 +395,13 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
       return voice.state() === 'live';
     },
     voiceState: () => voice.state(),
+    voiceLog: () => voice.lines.slice(),
+    /** Whether her voice has actually been heard on the live call yet. */
+    heardHer: () => voice.heardHer(),
+    /** Have her say something now (used to prove the voice works before a game starts). */
+    hello() {
+      report('The user has just switched your voice on, before the game. Say hello in one short sentence and tell them to start a game when ready.', true, 'Sim: I am here. Start a game when you are ready.');
+    },
     voiceProblem: () => voice.problem(),
 
     /** Her move, or null if she has none. */
