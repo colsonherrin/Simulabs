@@ -611,6 +611,17 @@ let voiceTex = null;
 let voiceShown = '';
 let voiceHold = false;
 let voiceWait = 0;
+let debugOn = false;
+let paused = false;
+let menuWasDown = false;
+let pauseSel = 0;
+let stickWas = 0;
+let trigWas = false;
+let pauseMesh = null;
+let pauseCtx = null;
+let pauseTex = null;
+let pauseShown = '';
+const pausePos = new THREE.Vector3();
 const voiceCamP = new THREE.Vector3();
 const voiceCamD = new THREE.Vector3();
 const voiceWant = new THREE.Vector3();
@@ -666,7 +677,7 @@ function ensureVoicePanel(scene) {
 }
 
 function updateVoicePanel(ctx, dt, text) {
-  const show = ctx.renderer.xr.isPresenting && params.get('log') !== '0';
+  const show = ctx.renderer.xr.isPresenting && debugOn && params.get('log') !== '0';
   if (!show) {
     voiceHold = false;
     voiceWait = 0;
@@ -708,10 +719,136 @@ function updateVoicePanel(ctx, dt, text) {
   voiceMesh.visible = true;
 }
 
+function pauseChoices() {
+  return ['Resume', 'Restart', debugOn ? 'Hide debug' : 'Show debug'];
+}
+
+function drawPause() {
+  if (!pauseCtx) return;
+  const choices = pauseChoices();
+  const text = 'PAUSED\n' + choices.map((label, i) => (i === pauseSel ? '> ' : '  ') + label).join('\n');
+  if (text === pauseShown) return;
+  pauseShown = text;
+  pauseCtx.clearRect(0, 0, 1024, 512);
+  pauseCtx.fillStyle = 'rgba(12, 10, 8, 0.92)';
+  pauseCtx.beginPath();
+  pauseCtx.roundRect(0, 0, 1024, 512, 36);
+  pauseCtx.fill();
+  pauseCtx.font = '52px system-ui, sans-serif';
+  pauseCtx.fillStyle = '#e6c27a';
+  pauseCtx.fillText('Paused', 72, 110);
+  pauseCtx.font = '44px system-ui, sans-serif';
+  choices.forEach((label, i) => {
+    pauseCtx.fillStyle = i === pauseSel ? '#fff6e4' : '#cbb992';
+    pauseCtx.fillText((i === pauseSel ? '▸  ' : '    ') + label, 72, 210 + i * 84);
+  });
+  pauseCtx.font = '28px system-ui, sans-serif';
+  pauseCtx.fillStyle = '#a89878';
+  pauseCtx.fillText('Stick to move, trigger to choose, menu to close', 72, 460);
+  pauseTex.needsUpdate = true;
+}
+
+function ensurePause(scene) {
+  if (!pauseMesh) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 512;
+    pauseCtx = canvas.getContext('2d');
+    pauseTex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) pauseTex.colorSpace = THREE.SRGBColorSpace;
+    pauseMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.72, 0.36),
+      new THREE.MeshBasicMaterial({ map: pauseTex, transparent: true, depthTest: true }),
+    );
+    pauseMesh.name = 'pause-menu';
+    pauseMesh.renderOrder = 12;
+    pauseMesh.frustumCulled = false;
+  }
+  if (pauseMesh.parent !== scene) scene.add(pauseMesh);
+}
+
+function placePause(ctx) {
+  const cam = viewCamera(ctx);
+  cam.getWorldPosition(voiceCamP);
+  cam.getWorldDirection(voiceCamD);
+  voiceCamD.y = 0;
+  if (voiceCamD.lengthSq() < 1e-6) voiceCamD.set(0, 0, -1);
+  voiceCamD.normalize();
+  pausePos.copy(voiceCamP).addScaledVector(voiceCamD, 1.05);
+  pausePos.y -= 0.12;
+  pauseMesh.position.copy(pausePos);
+  voiceWant.copy(voiceCamP);
+  voiceWant.y = pauseMesh.position.y;
+  pauseMesh.lookAt(voiceWant);
+  pauseShown = '';
+  drawPause();
+}
+
+function choosePause() {
+  const choice = pauseChoices()[pauseSel];
+  if (choice === 'Resume') paused = false;
+  else if (choice === 'Restart') {
+    paused = false;
+    const again = document.getElementById('btn-again');
+    if (again) again.click();
+  } else {
+    debugOn = !debugOn;
+    voiceHold = false;
+    voiceWait = 0;
+    if (voiceMesh) voiceMesh.visible = false;
+    pauseShown = '';
+    drawPause();
+  }
+}
+
+function pollPause(ctx) {
+  const session = ctx.renderer.xr.getSession && ctx.renderer.xr.getSession();
+  if (!session) {
+    paused = false;
+    return;
+  }
+  let menu = false;
+  let stick = 0;
+  let trig = false;
+  for (const source of session.inputSources) {
+    const pad = source.gamepad;
+    if (!pad || !pad.buttons) continue;
+    if (source.handedness === 'left') {
+      const idx = pad.buttons.length > 6 ? 6 : 5;
+      if (pad.buttons[idx] && pad.buttons[idx].pressed) menu = true;
+      const axis = pad.axes && pad.axes.length > 3 ? pad.axes[3] : pad.axes && pad.axes[1];
+      const y = axis || 0;
+      if (y < -0.55) stick = -1;
+      else if (y > 0.55) stick = 1;
+    }
+    if (pad.buttons[0] && pad.buttons[0].pressed) trig = true;
+  }
+  if (menu && !menuWasDown) {
+    paused = !paused;
+    if (paused) {
+      ensurePause(ctx.scene);
+      placePause(ctx);
+    }
+  }
+  menuWasDown = menu;
+  if (!paused || !pauseMesh) return;
+  if (stick && !stickWas) {
+    pauseSel = (pauseSel + stick + pauseChoices().length) % pauseChoices().length;
+    drawPause();
+  }
+  stickWas = stick;
+  if (trig && !trigWas) choosePause();
+  trigWas = trig;
+}
+
 function tick(ctx) {
   latest = ctx;
   const dt = Math.min(0.1, ctx.dt || 0.016);
-  if (ctx.renderer.xr.isPresenting) pollA(ctx.renderer);
+  if (ctx.renderer.xr.isPresenting) {
+    pollA(ctx.renderer);
+    pollPause(ctx);
+  } else paused = false;
+  if (pauseMesh) pauseMesh.visible = paused && ctx.renderer.xr.isPresenting;
   core.micMuted = userMuted || (halfDuplex && core.speakingFor > 0 && !voiceAnalyser);
   if (core.lastAction && /walk|follow|approach|stop/.test(core.lastAction)) commanded = true;
 
@@ -740,7 +877,10 @@ function tick(ctx) {
   const voiceLog = voiceDebugText();
   updateVoicePanel(ctx, dt, voiceLog);
   const voicePre = $('companion-voice');
-  if (voicePre && !ctx.renderer.xr.isPresenting) voicePre.textContent = voiceLog;
+  if (voicePre) {
+    voicePre.hidden = !debugOn || params.get('log') === '0';
+    if (!voicePre.hidden && !ctx.renderer.xr.isPresenting) voicePre.textContent = voiceLog;
+  }
   if (modelNote) setStatus(modelNote);
   else if (core.connected) setStatus(core.brain && core.brain !== '-' ? 'She is here · ' + core.brain + '.' : 'She is connected.');
   else if (!socket && !local) setStatus('She is beside the board. Paste an OpenAI key to talk.');
