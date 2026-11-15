@@ -62,6 +62,8 @@ export interface AvatarPose {
   speed01: number;
   /** A gesture started this frame (wave, nod, shake_head, shrug) or ''. */
   gesture: string;
+  /** True while she is seated; the renderer bends her legs and lowers her onto the seat. */
+  sitting: boolean;
 }
 
 /** Lens Studio world space (centimetres, right-handed, cameras look down -Z) to protocol space. */
@@ -159,14 +161,14 @@ export class SimulacraCore {
    */
   wander = false;
   /** Walk back into the user's view when left out of it (see update). */
-  keepInView = true;
+  keepInView = false;
   private outOfView = 0;
   private idleFor = 0;
   private wanderAfter = 6;
   private wanderOut = true;
 
   readonly objects: WorldObject[] = [];
-  readonly avatar: AvatarPose = { pos: { x: 0, y: 0, z: 0 }, yaw: 0, state: 'idle', speed01: 0, gesture: '' };
+  readonly avatar: AvatarPose = { pos: { x: 0, y: 0, z: 0 }, yaw: 0, state: 'idle', speed01: 0, gesture: '', sitting: false };
   connected = false;
   brain = '-';
   lastAction = '';
@@ -597,7 +599,7 @@ export class SimulacraCore {
 
   /** Drop a stroll in progress (never a requested action) and face the user. */
   private attend(): void {
-    if (this.done || this.following || !this.placed) return;
+    if (this.done || this.following || !this.placed || this.avatar.sitting) return; // seated, she turns her head, not her chair
     this.goal = this.avatar.pos;
     this.route = [];
     this.face = this.userFloor();
@@ -682,6 +684,8 @@ export class SimulacraCore {
       if (data) r.data = data;
       this.sendJson(r);
     };
+    // Anything that moves her gets her up first.
+    if (action !== 'sit' && action !== 'gesture' && action !== 'look_at' && action !== 'register_marker' && action !== 'scan_surroundings' && action !== 'stop') this.avatar.sitting = false;
     const started = (pathM: number): void => this.sendJson({ type: 'event', name: 'action_started', data: { id: id, plan_ms: 0, path_m: Math.round(pathM * 10) / 10 } });
     this.lastAction = action + (target ? ' ' + target : '') + ' ...';
 
@@ -781,6 +785,43 @@ export class SimulacraCore {
       this.avatar.state = 'following';
       started(0);
       return reply(true, '', { following: true });
+    }
+    if (action === 'stand_up') {
+      this.avatar.sitting = false;
+      return reply(true, '', { standing: true });
+    }
+    if (action === 'sit') {
+      if (!this.placed) return reply(false, 'the floor has not been found yet');
+      if (this.done) this.finish(false, 'superseded by a newer action');
+      this.following = false;
+      if (!target) {
+        // Sit down right here.
+        this.goal = null;
+        this.route = [];
+        this.avatar.sitting = true;
+        return reply(true, '', { sitting: true, where: 'where she stood' });
+      }
+      const t = this.resolve(target);
+      if (!t || target.toLowerCase() === 'user') return reply(false, "unknown thing to sit on '" + target + "'");
+      // Walk right up to it, turn to face the user, then sit: its edge is the seat.
+      const o = this.find(target);
+      const half = o ? Math.max(o.size.x, o.size.z) / 2 : 0.25;
+      const stand = this.standPoint(t.pos, Math.max(0.3, Math.min(1.2, half + 0.12)));
+      if (!stand) return reply(false, 'there is no reachable floor next to ' + target);
+      this.route = this.planned.slice(1);
+      this.goal = this.planned[0];
+      this.face = this.userFloor();
+      this.goalTarget = '';
+      this.stuckFor = 0;
+      this.bestDistance = flat(this.avatar.pos, this.goal);
+      this.sideBias = 0;
+      this.avatar.state = 'turning';
+      started(flat(this.avatar.pos, stand));
+      this.done = (ok, reason) => {
+        if (ok) this.avatar.sitting = true;
+        reply(ok, reason, { sitting: ok, on: target, note: 'She sits at the edge of it; she cannot tell exactly where its seat is.' });
+      };
+      return;
     }
     if (action === 'stop') {
       this.following = false;
@@ -952,7 +993,7 @@ export class SimulacraCore {
     // Stay where the user can see her. If nothing was asked of her and she has been out of the
     // user's view (well off to the side, behind them, or far away) for a few seconds, she walks
     // back to a spot in front of them. A character you cannot find is a character that vanished.
-    if (this.placed && !this.goal && !this.following && !this.done) {
+    if (this.placed && !this.goal && !this.following && !this.done && !this.avatar.sitting) {
       const u = this.userFloor();
       const f = this.host.headForward();
       const fl = Math.sqrt(f.x * f.x + f.z * f.z);
@@ -999,7 +1040,7 @@ export class SimulacraCore {
       }
     }
 
-    if (this.wander && this.placed && !this.goal && !this.following && this.speakingFor <= 0 && this.status === 'idle') {
+    if (this.wander && !this.avatar.sitting && this.placed && !this.goal && !this.following && this.speakingFor <= 0 && this.status === 'idle') {
       this.idleFor += dt;
       if (this.idleFor > this.wanderAfter) this.startStroll();
     } else if (this.done || this.following || this.speakingFor > 0) this.idleFor = 0;
@@ -1019,7 +1060,7 @@ export class SimulacraCore {
       const o = this.objects[i];
       objects.push({ id: o.id, label: o.label, pos: v(o.pos), size: v(o.size), source: o.source, confidence: o.confidence, lastSeen: Math.round((this.clock - o.seenAt) * 10) / 10, reachable: true });
     }
-    const state = this.avatar.state === 'idle' && this.speakingFor > 0 ? 'speaking' : this.avatar.state;
+    const state = this.avatar.sitting && !this.goal ? 'sitting' : this.avatar.state === 'idle' && this.speakingFor > 0 ? 'speaking' : this.avatar.state;
     this.sendJson({
       type: 'world',
       world: {

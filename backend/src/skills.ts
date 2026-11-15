@@ -37,6 +37,8 @@ export const TOOLS: ToolDef[] = [
   { type: 'function', name: 'step', description: 'Take a short walk in a direction without a target: forward, back, left or right from your own point of view, or closer to / away from the user. Use for "take a step forward", "back up a bit", "move over to the right", "come a little closer". Outcome arrives later as an [action_result].', parameters: obj({ direction: { type: 'string', enum: ['forward', 'back', 'left', 'right', 'closer', 'away'], description: 'forward/back/left/right are from your own point of view; closer/away are relative to the user.' }, metres: { type: 'number', description: 'How far, 0.3 to 2. One step is about 0.6.' } }, ['direction']) },
   { type: 'function', name: 'follow_user', description: 'Keep following the user around at a comfortable distance until told to stop or given another movement. The body handles the walking by itself.', parameters: obj() },
   { type: 'function', name: 'gesture', description: 'Make a body gesture.', parameters: obj({ type: { type: 'string', enum: ['wave', 'nod', 'shake_head', 'shrug'] } }, ['type']) },
+  { type: 'function', name: 'sit', description: 'Sit down. With target_id: walk to that thing (a chair, couch, bed, bench) and sit on its edge, facing the user. Without: sit down right where you are. You stay seated, and can keep talking, until you call stand_up or any movement skill. Outcome arrives later as an [action_result].', parameters: obj({ target_id: { type: 'string', description: 'Object id of the thing to sit on. Leave out to sit where you are.' } }) },
+  { type: 'function', name: 'stand_up', description: 'Stand up from sitting.', parameters: obj() },
   { type: 'function', name: 'stop_moving', description: 'Stop walking or following immediately.', parameters: obj() },
   {
     type: 'function',
@@ -137,6 +139,20 @@ export class SkillExecutor {
         }
         case 'run_sequence':
           return this.runSequence(args);
+        case 'stand_up': {
+          const r = await this.device.request('stand_up', undefined, undefined, QUICK_TIMEOUT);
+          return { status: r.status, reason: r.reason, ...r.data };
+        }
+        case 'sit': {
+          const seat = typeof args.target_id === 'string' && args.target_id.trim() ? String(args.target_id) : undefined;
+          if (seat && (seat === 'user' || !this.world.find(seat))) return this.fail(name, seat, seat === 'user' ? 'You cannot sit on the user.' : this.unknownTarget(seat));
+          this.background(name, seat, async () => {
+            const r = await this.device.request('sit', seat, undefined, MOVE_TIMEOUT);
+            this.record(name, seat, r.status, r.reason);
+            return { status: r.status, skill: name, target_id: seat, reason: r.reason, ...r.data };
+          });
+          return { status: 'started', note: 'In progress. Say a brief acknowledgement now; the outcome will arrive as an [action_result].' };
+        }
         case 'stop_moving': {
           this.runToken++;
           const r = await this.device.request('stop', undefined, undefined, QUICK_TIMEOUT);
