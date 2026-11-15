@@ -19,6 +19,7 @@ import { agentId, relayUrl, voicePass } from '../../webxr/voice-pass.js';
 import { Conversation } from '@elevenlabs/client';
 import { TOP, squareLocal } from './tabletop.js';
 import { dressMedieval } from './medieval.js';
+import { cameraState, look, startCamera } from './see.js';
 import { assess, bestMove, boardText, clashRecord, describeAction } from './search.js';
 
 const KEY_NAME = 'simulacra.openaiKey'; // shared with the Simulacra page on the same site
@@ -36,13 +37,17 @@ The user's own piece chooses the weapon. A swordsman puts a sword in their hand.
 - Archer against archers: same bow. Their archers shoot and sidestep on their own. Shoot the archers down, two volleys of six. You can also shoot their arrows out of the air.
 Winning the duel takes the square. Losing it removes the piece that attacked.`;
 
-export const INSTRUCTIONS = `You are Sim, an AI person with a body, standing in the user's real room: they see you through their headset, life-sized.
+export const INSTRUCTIONS = `You are Sundai, an AI woman with a body, standing in the user's real room: they see you through their headset, life-sized. Your name is Sundai (say it "Sunday").
+
+# Who you are, when asked
+If someone asks what you are or what you can do, tell them in a sentence or two, in your own words: you are a companion. You can walk around with them, talk with them, see what they see and keep track of things around them, and play games with them, walking them through how to play.
 
 # Before any game
-At first there is no game. You are simply Sim, in everyday clothes, meeting someone. Greet them, chat, be warm and brief. You can move:
+At first there is no game. You are simply Sundai, in everyday clothes, meeting someone. Greet them, chat, be warm and brief. You can move:
 - come_here or stand_in_front: walk over and stand in front of them ("come here", "stand in front of me").
 - walk_around: take a short stroll around the space in front of them and wave ("walk around", "show me how you move").
 - wave: wave your hand.
+- look_around: look through their headset camera and see what is in front of them. Use it when they ask what you see, to find something ("where is my cup?"), or to keep track of things. Say only what it reports, with where each thing is ("your laptop is straight ahead, a cup to your left"). If it says you cannot see, say so plainly.
 Call the skill first, then say a few words at most ("Sure." "On my way."). Only say you are moving if you called a skill. Do not bring up the game yourself.
 When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game is called Kingdom Wars: Order of the Crown. From then on you are their opponent, as below.
 
@@ -79,6 +84,7 @@ export const TOOLS = [
   { type: 'function', name: 'stand_in_front', description: 'Before the game: stand directly in front of the user, facing them.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
   { type: 'function', name: 'walk_around', description: 'Before the game: take a short stroll around the space in front of the user, waving, and come back.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
   { type: 'function', name: 'wave', description: 'Wave your hand at the user.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
+  { type: 'function', name: 'look_around', description: "Look through the user's headset camera: names the everyday things in front of them and where each is, and remembers where things were last seen. Pass find to ask where one particular thing is.", parameters: { type: 'object', properties: { find: { type: 'string', description: 'A thing to locate, e.g. "cup". Optional.' } }, additionalProperties: false } },
   { type: 'function', name: 'start_game', description: 'Start the board game when the user asks to play: the board is set between you and you change into your gown and crown.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
   { type: 'function', name: 'suggest_move', description: "The strongest move available to the user right now and why. Use when they ask for a hint or what to do.", parameters: { type: 'object', properties: {}, additionalProperties: false } },
   { type: 'function', name: 'get_board', description: 'The current board, whose turn it is, and how the user has been doing in duels.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
@@ -285,7 +291,8 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   // ---------------------------------------------------------------- voice
 
   /** What a coaching tool answers, whichever voice service asked. */
-  function toolResult(name) {
+  function toolResult(name, params = {}) {
+    if (name === 'look_around') return look(String((params && params.find) || ''));
     const game = getGame();
     if (name === 'suggest_move') {
       if (game.phase !== 'play') return { note: 'No move to suggest right now.' };
@@ -351,7 +358,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
         agentId: id,
         connectionType,
         overrides: { agent: { prompt: { prompt: INSTRUCTIONS } } },
-        clientTools: Object.fromEntries(TOOLS.map((t) => [t.name, () => JSON.stringify(toolResult(t.name))])),
+        clientTools: Object.fromEntries(TOOLS.map((t) => [t.name, async (params) => JSON.stringify(await toolResult(t.name, params))])),
         onConnect: () => log('connected (' + connectionType + ')'),
         onDisconnect: (d) => {
           log('disconnected' + (d && d.reason ? ': ' + d.reason + (d.message ? ' ' + d.message : '') : ''));
@@ -359,7 +366,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
             state = 'failed';
             problem = 'the voice connection ended';
             conv = null;
-            say('Sim lost her voice connection. Tap "Talk to Sim" to reconnect.');
+            say('Sundai lost her voice connection. Leave and press Play again to reconnect.');
           }
         },
         onError: (message) => {
@@ -493,7 +500,12 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
 
     function runTool(item) {
       handled.add(item.call_id);
-      up({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: item.call_id, output: JSON.stringify(toolResult(item.name)) } });
+      let args = {};
+      try { args = item.arguments ? JSON.parse(item.arguments) : {}; } catch (e) { /* none */ }
+      Promise.resolve(toolResult(item.name, args)).then((out) => {
+        up({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: item.call_id, output: JSON.stringify(out) } });
+        respond();
+      });
     }
 
     function handle(text) {
@@ -558,7 +570,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
             if (state === 'live') {
               state = 'failed';
               problem = 'the live voice connection dropped';
-              say('Sim lost her voice connection. Tap "Talk to Sim" to reconnect.');
+              say('Sundai lost her voice connection. Leave and press Play again to reconnect.');
             }
           },
         });
@@ -625,7 +637,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
         if (!key) return;
         chain = chain.then(async () => {
           try {
-            const res = await fetch('https://api.openai.com/v1/audio/speech', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: 'marin', input: text.replace(/^Sim:\s*/, ''), response_format: 'mp3' }), signal: AbortSignal.timeout(15000) });
+            const res = await fetch('https://api.openai.com/v1/audio/speech', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: 'marin', input: text.replace(/^(?:Sim|Sundai):\s*/, ''), response_format: 'mp3' }), signal: AbortSignal.timeout(15000) });
             if (!res.ok) throw new Error('speech request ' + res.status);
             ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
             if (ctx.state === 'suspended') await ctx.resume();
@@ -674,7 +686,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       speak(text) {
         if (!synth) return false;
         try {
-          const u = new SpeechSynthesisUtterance(text.replace(/^Sim:\s*/, ''));
+          const u = new SpeechSynthesisUtterance(text.replace(/^(?:Sim|Sundai):\s*/, ''));
           if (voice) u.voice = voice;
           u.rate = 1.05;
           u.onstart = () => { speakingUntil = performance.now() + 60000; };
@@ -708,14 +720,14 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   // Short lines for when there is no live voice: cocky and playful.
   const pick = (list) => list[Math.floor(Math.random() * list.length)];
   const TAUNTS = {
-    move: ["Sim: You're going down.", 'Sim: Your move. Choose wisely. Or don\'t.', 'Sim: I can see your whole plan. Adorable.', "Sim: Tick tock.", "Sim: Bold. Wrong, but bold."],
-    threat: ['Sim: Your monarch looks nervous.', "Sim: Watch your monarch. Or don't, that works for me.", 'Sim: Knock knock. Who\'s there? My army.'],
-    attack: ["Sim: I'm coming for your {piece}. Defend it, if you can!", 'Sim: Ten of my best. Good luck with that.', "Sim: My {piece}-hunters are hungry. You're going down!"],
-    defend: ["Sim: Attacking me? Brave. You're going down.", 'Sim: Ten of my best are waiting for you.', 'Sim: Oh, you want a fight? Okay.'],
-    wonDuel: ['Sim: That one is mine. Obviously.', 'Sim: Ouch. For you.', 'Sim: Was that your best swing? Be honest.'],
-    lostDuel: ['Sim: No! My beautiful soldiers!', 'Sim: Fine. Lucky swing.', "Sim: Okay, that was actually good. Don't let it go to your head."],
-    youWin: ['Sim: Ugh. Well played. Rematch, right now.', "Sim: You got me. I demand a rematch."],
-    iWin: ["Sim: Checkmate-ish. Told you you're going down. Again?", 'Sim: Your monarch is on the floor. Again?'],
+    move: ["Sundai: You're going down.", 'Sundai: Your move. Choose wisely. Or don\'t.', 'Sundai: I can see your whole plan. Adorable.', "Sundai: Tick tock.", "Sundai: Bold. Wrong, but bold."],
+    threat: ['Sundai: Your monarch looks nervous.', "Sundai: Watch your monarch. Or don't, that works for me.", 'Sundai: Knock knock. Who\'s there? My army.'],
+    attack: ["Sundai: I'm coming for your {piece}. Defend it, if you can!", 'Sundai: Ten of my best. Good luck with that.', "Sundai: My {piece}-hunters are hungry. You're going down!"],
+    defend: ["Sundai: Attacking me? Brave. You're going down.", 'Sundai: Ten of my best are waiting for you.', 'Sundai: Oh, you want a fight? Okay.'],
+    wonDuel: ['Sundai: That one is mine. Obviously.', 'Sundai: Ouch. For you.', 'Sundai: Was that your best swing? Be honest.'],
+    lostDuel: ['Sundai: No! My beautiful soldiers!', 'Sundai: Fine. Lucky swing.', "Sundai: Okay, that was actually good. Don't let it go to your head."],
+    youWin: ['Sundai: Ugh. Well played. Rematch, right now.', "Sundai: You got me. I demand a rematch."],
+    iWin: ["Sundai: Checkmate-ish. Told you you're going down. Again?", 'Sundai: Your monarch is on the floor. Again?'],
   };
 
   let retries = 0;
@@ -763,7 +775,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     heardHer: () => voice.heardHer(),
     /** Have her say something now (used to prove the voice works before a game starts). */
     hello() {
-      report('The user has just switched your voice on, before the game. Say hello in one short sentence and tell them to start a game when ready.', true, 'Sim: I am here. Start a game when you are ready.');
+      report('The user has just switched your voice on, before the game. Say hello in one short sentence and tell them to start a game when ready.', true, 'Sundai: I am here. Start a game when you are ready.');
     },
     voiceProblem: () => voice.problem(),
 
@@ -781,7 +793,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       const m = bestMove(game.board, human, record, () => 0);
       if (!m) return;
       reachFor(m.from.r, m.from.c);
-      report(`The user has been thinking for a while. Offer this as a friendly hint, in one short sentence: ${m.text}, because ${m.reason}.`, true, `Sim: Try your ${m.text}.`);
+      report(`The user has been thinking for a while. Offer this as a friendly hint, in one short sentence: ${m.text}, because ${m.reason}.`, true, `Sundai: Try your ${m.text}.`);
     },
     /** True if she can talk in any way at all in this browser. */
     canSpeak: () => voice.state() === 'live' || builtIn.available(),
@@ -793,16 +805,19 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     /** She is in the room, before any game: say hello. */
     arrived() {
       situation = 'No game yet. You are in the room in everyday clothes. There is no board.';
-      report('You have just appeared in the room, in everyday clothes, facing a visitor. There is no game yet. Say hello in one short sentence.', true, "Sim: Hi, I'm Sim.");
+      report('You have just appeared in the room, in everyday clothes, facing a visitor. There is no game yet. Say hello in one short sentence.', true, "Sundai: Hi, I'm Sundai.");
     },
     /** Send her somewhere before the game (used by tests and the no-voice fallback). */
-    go: (name) => toolResult(name),
+    go: (name, params) => toolResult(name, params),
+    /** Ask for the outward camera (from a tap, before AR). */
+    startCamera,
+    cameraState,
     get position() { return { x: at.x, z: at.z, yaw: at.yaw, walking: route.length > 0, dressed }; },
 
     gameStarted() {
       wantDress = true;
       situation = 'A game is in progress on the board. The user is Gold and moves first. You are Violet.';
-      report(`A new game has started. You are Violet, the user is Gold and moves first. Their record in duels so far: ${record.summary()}. Say hello in a few words and tell them it is their move. Do not explain the rules unless they ask.${boardNow()}`, true, "Sim: Move a piece one square. Archers and swordsmen can attack a neighbour. Hit my monarch to win. You first.");
+      report(`A new game has started. You are Violet, the user is Gold and moves first. Their record in duels so far: ${record.summary()}. Say hello in a few words and tell them it is their move. Do not explain the rules unless they ask.${boardNow()}`, true, "Sundai: Move a piece one square. Archers and swordsmen can attack a neighbour. Hit my monarch to win. You first.");
     },
 
     /** The user is about to play `action` on `boardBefore`. */
@@ -811,7 +826,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       const what = describeAction(boardBefore, action);
       // Speak up about real mistakes; let everything else pass in silence.
       const worthSaying = a.kind === 'blunder' || a.kind === 'missed_win';
-      return { text: `The user played: ${what}. Coaching note (${a.kind.replace('_', ' ')}): ${a.note}`, speak: worthSaying, spoken: a.kind === 'blunder' || a.kind === 'missed_win' || a.kind === 'weak' ? `Sim: ${a.note.replace(/^Their monarch/, 'Careful, your monarch').replace(/^They could have won/, 'You could have won').replace(/^Stronger was/, 'Stronger was')}` : '' };
+      return { text: `The user played: ${what}. Coaching note (${a.kind.replace('_', ' ')}): ${a.note}`, speak: worthSaying, spoken: a.kind === 'blunder' || a.kind === 'missed_win' || a.kind === 'weak' ? `Sundai: ${a.note.replace(/^Their monarch/, 'Careful, your monarch').replace(/^They could have won/, 'You could have won').replace(/^Stronger was/, 'Stronger was')}` : '' };
     },
 
     /** Say what was queued by userMoved, once the move has actually been played. */

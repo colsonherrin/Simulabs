@@ -353,6 +353,8 @@ async function talkToSim() {
 // to remember a separate button. The microphone prompt comes before any AR session, where it would be hidden.
 async function voiceThenStart(start) {
   unlockAudio();
+  // The camera she looks through, asked for now: in AR its permission prompt would be out of sight.
+  await sim.startCamera().catch(() => false);
   if (sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting' && (await sim.canGoLive())) await talkToSim();
   start();
 }

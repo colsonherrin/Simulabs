@@ -9,7 +9,7 @@ import { clothTex, steelTex } from './textures.js';
 //     exactly (skin of the face, neck and hands, and hair untouched);
 //   - puffed sleeve-heads and the skirt's fall as meshes on
 //     her bones;
-//   - a gold crown with a jewel on her brow.
+//   - no crown (it did not sit well on her hair).
 
 // Colours of the gown, in linear light (after the reference: a wine gown
 // under a dark green velvet bodice, gold-laced, with embroidered bands).
@@ -288,9 +288,8 @@ export function dressMedieval(avatar) {
     obj.updateMatrixWorld(true);
     bone.attach(obj);
   };
-  const c = circlet();
-  // One inch forward of the head bone so the band clears her forehead.
-  place(c, headP.clone().add(new THREE.Vector3(0, 0.15, 0.025)), head);
+  // No crown: it could not be made to sit properly on her hair, so she plays bare-headed.
+  // (circlet() is kept for when a fitted one is wanted.)
 
   const b = avatar.body.bones;
   const metal = steel();

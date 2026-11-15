@@ -92,7 +92,7 @@ export function playWhoosh() {
 
 // A blow landing on armour: a heavy thud with a short metallic crunch.
 export function playHit() {
-  playTone(120, 0.18, 'sine', 0.22, 55);
+  playTone(92, 0.22, 'sine', 0.3, 42);
   bandNoise('bandpass', 1800, 600, 0.12, 0.16, 1.2);
   ring([620, 1490, 2310], 0.25, 0.05);
 }
@@ -103,13 +103,58 @@ export function playArrow(volume = 1) {
   playTone(118, 0.22, 'triangle', 0.16 * volume, 92);
   playTone(236, 0.12, 'sine', 0.06 * volume, 180);
   bandNoise('bandpass', 2600, 900, 0.22, 0.09 * volume, 0.8);
+  bandNoise('bandpass', 3600, 1400, 0.4, 0.07 * volume, 2.5); // the arrow hissing away
 }
 
-// An enemy's arrow coming at you: a falling whistle as it passes.
+// An arrow whizzing past your head: a hiss of air that rises as it comes, sweeps from one ear to
+// the other, and drops in pitch as it goes by (the Doppler fall), with the thrum of the shaft under it.
 export function playArrowIncoming() {
   if (muted) return;
-  bandNoise('bandpass', 3200, 1100, 0.45, 0.12, 4);
-  playTone(1500, 0.45, 'sine', 0.035, 760);
+  const c = ac();
+  const t = c.currentTime;
+  const dur = 0.62;
+  const side = Math.random() < 0.5 ? -1 : 1;
+  const pan = c.createStereoPanner ? c.createStereoPanner() : null;
+  if (pan) {
+    pan.pan.setValueAtTime(-0.9 * side, t);
+    pan.pan.linearRampToValueAtTime(0.9 * side, t + dur);
+    pan.connect(out());
+  }
+  const dest = pan || out();
+  // The air: band-limited noise, loudest as it passes.
+  const { src } = noise();
+  src.loop = true; // the stored noise is shorter than the pass
+  const bp = c.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.Q.value = 2.2;
+  bp.frequency.setValueAtTime(2400, t);
+  bp.frequency.linearRampToValueAtTime(4200, t + dur * 0.45);
+  bp.frequency.exponentialRampToValueAtTime(900, t + dur);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.34, t + dur * 0.45);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(bp);
+  bp.connect(g);
+  g.connect(dest);
+  src.start(t);
+  src.stop(t + dur + 0.05);
+  // The shaft: a thin whistle and a low flutter, both falling as it goes by.
+  for (const [type, from, to, level] of [['sine', 2100, 980, 0.05], ['triangle', 240, 120, 0.07]]) {
+    const o = c.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(from, t);
+    o.frequency.setValueAtTime(from, t + dur * 0.4);
+    o.frequency.exponentialRampToValueAtTime(to, t + dur);
+    const og = c.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(level, t + dur * 0.45);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(og);
+    og.connect(dest);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  }
 }
 
 // Steel on steel: inharmonic ringing partials struck hard, with a bright
@@ -153,7 +198,8 @@ export function playShout(kind = 'cry') {
   const voices = fear ? 1 : 3;
   for (let v = 0; v < voices; v++) {
     const t = now + v * 0.06;
-    const base = (fear ? 240 : 125) * (0.92 + Math.random() * 0.18);
+    // Men's voices: a low chest pitch, a touch higher in fright but never shrill.
+    const base = (fear ? 150 : 92) * (0.92 + Math.random() * 0.16);
     const o = c.createOscillator();
     o.type = 'sawtooth';
     o.frequency.setValueAtTime(base * (fear ? 1.15 : 0.9), t);
@@ -166,10 +212,11 @@ export function playShout(kind = 'cry') {
     vibG.connect(o.frequency);
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(fear ? 0.05 : 0.035, t + 0.06);
-    g.gain.setValueAtTime(fear ? 0.05 : 0.035, t + dur * 0.6);
+    g.gain.exponentialRampToValueAtTime(fear ? 0.07 : 0.06, t + 0.06);
+    g.gain.setValueAtTime(fear ? 0.07 : 0.06, t + dur * 0.6);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    for (const [f, q] of fear ? [[850, 5], [1350, 6]] : [[650, 4], [1100, 5]]) {
+    // Open-throated vowels ("hah", "rah") with a low chest resonance under them.
+    for (const [f, q] of fear ? [[240, 2], [620, 4], [1050, 5]] : [[190, 2], [560, 4], [950, 5], [2400, 6]]) {
       const bp = c.createBiquadFilter();
       bp.type = 'bandpass';
       bp.frequency.value = f;
@@ -178,6 +225,22 @@ export function playShout(kind = 'cry') {
       bp.connect(g);
     }
     g.connect(out());
+    // Breath and grit on top of the tone, so it is a roar and not a note.
+    const rough = noise().src;
+    rough.loop = true;
+    const rf = c.createBiquadFilter();
+    rf.type = 'bandpass';
+    rf.frequency.value = fear ? 900 : 700;
+    rf.Q.value = 1.2;
+    const rg = c.createGain();
+    rg.gain.setValueAtTime(0.0001, t);
+    rg.gain.exponentialRampToValueAtTime(fear ? 0.03 : 0.04, t + 0.05);
+    rg.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    rough.connect(rf);
+    rf.connect(rg);
+    rg.connect(out());
+    rough.start(t);
+    rough.stop(t + dur + 0.05);
     o.start(t);
     vib.start(t);
     o.stop(t + dur + 0.05);
@@ -189,9 +252,32 @@ export function playDeflect() {
   playClang();
 }
 
+// Taking a blow: a man's short grunt over the thud of the hit.
 export function playHurt() {
-  playTone(150, 0.3, 'sawtooth', 0.16, 60);
-  bandNoise('lowpass', 900, 200, 0.25, 0.14, 0.7);
+  if (muted) return;
+  playTone(85, 0.26, 'sine', 0.26, 45);
+  bandNoise('lowpass', 700, 160, 0.22, 0.18, 0.7);
+  const c = ac();
+  const t = c.currentTime + 0.03;
+  const o = c.createOscillator();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(118, t);
+  o.frequency.exponentialRampToValueAtTime(78, t + 0.26);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.11, t + 0.03);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+  for (const [f, q] of [[210, 2], [520, 4], [880, 5]]) {
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = f;
+    bp.Q.value = q;
+    o.connect(bp);
+    bp.connect(g);
+  }
+  g.connect(out());
+  o.start(t);
+  o.stop(t + 0.32);
 }
 
 export function playTick() {

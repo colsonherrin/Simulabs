@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@elevenlabs/client": "^1.36.1",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
     "three": "^0.170.0"
   },
   "devDependencies": {

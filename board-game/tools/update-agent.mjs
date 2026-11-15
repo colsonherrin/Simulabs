@@ -6,7 +6,7 @@ globalThis.document = { createElement: () => ({ getContext: () => ({}), style: {
 globalThis.window = {};
 const { INSTRUCTIONS, TOOLS, SKIP_TURN } = await import('../src/sim.js');
 const id = process.argv[2] || JSON.parse(readFileSync(new URL('../../webxr/sim-config.json', import.meta.url), 'utf8')).crownfallAgentId;
-const tools = [...TOOLS.map((t) => ({ type: 'client', name: t.name, description: t.description, parameters: { type: 'object', properties: {}, required: [] }, expects_response: true, response_timeout_secs: 5 })), SKIP_TURN];
+const tools = [...TOOLS.map((t) => ({ type: 'client', name: t.name, description: t.description, parameters: { type: 'object', properties: Object.fromEntries(Object.entries(t.parameters.properties || {}).map(([k, v]) => [k, { type: v.type, description: v.description || k }])), required: [] }, expects_response: true, response_timeout_secs: t.name === 'look_around' ? 20 : 5 })), SKIP_TURN];
 const res = await fetch(`https://api.elevenlabs.io/v1/convai/agents/${id}`, {
   method: 'PATCH',
   headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY ?? 'proxy-injected', 'content-type': 'application/json' },
