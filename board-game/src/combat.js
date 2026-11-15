@@ -119,7 +119,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   // in the player's real room, which the war zone turns into a battlefield.
   const arenaBackdrop = buildArena(group);
   const war = createWarZone(group);
-  // In AR the real floor catches the soldiers' shadows.
+  // A cheap disc that catches the soldiers' shadows around the fight.
   let quality = 'high';
   const shadowCatcher = new THREE.Mesh(
     new THREE.CircleGeometry(7, 32),
@@ -144,7 +144,9 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   }
   function applyArenaMode() {
     const ar = !!hooks.isAR?.();
-    shadowCatcher.visible = ar;
+    // The catcher carries the soldiers' shadows on the real floor in AR and
+    // on the battlefield in VR (the terrain itself doesn't take shadows).
+    shadowCatcher.visible = ar || war.hasField();
     // Shadows are the first thing to go if the headset is struggling.
     if (arenaBackdrop.sun) arenaBackdrop.sun.castShadow = quality !== 'low';
     // The plain night arena only shows if the battlefield failed to load.
