@@ -262,10 +262,14 @@ try {
 
 const camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 0.05, 80);
 camera.position.set(0, 1.22, 0.62);
+// The title screen looks at Sundai standing, not down at a board. (Play moves the view into AR.)
+const MENU_VIEW = { from: new THREE.Vector3(0, 1.35, 0.6), at: new THREE.Vector3(0, 0.95, -1.7) };
 scene.add(camera);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.04, 0);
+camera.position.copy(MENU_VIEW.from);
+controls.target.copy(MENU_VIEW.at);
 controls.enableDamping = true;
 controls.enablePan = false;
 controls.maxPolarAngle = Math.PI / 2.2;
@@ -728,9 +732,10 @@ function applyScenery() {
     scene.background = new THREE.Color(0x100e0c);
     renderer.setClearColor(0x100e0c, 1);
   } else {
-    diorama.visible = !prelude;
+    // On the title screen, as when first meeting her, there is no board: only Sundai, in her own clothes.
+    diorama.visible = !prelude && !menu;
     room.visible = false;
-    board.visible = !prelude;
+    board.visible = !prelude && !menu;
     scene.background = new THREE.Color(0x100e0c);
     renderer.setClearColor(0x100e0c, 1);
   }
@@ -1695,7 +1700,7 @@ function frame(t, xrFrame) {
   tabletop.update(dt, fadeSphere.position);
   // Sim stands on the floor: the headset's own floor when it gives one, otherwise table height below the board.
   board.getWorldPosition(_simAt);
-  sim.update(dt, { prelude, visible: simPlays() && (prelude || board.visible) && !combatView && !placing, floorY: renderer.xr.isPresenting && floorBased ? 0 : _simAt.y - 0.95 });
+  sim.update(dt, { aside: menu ? 1.0 : 0, prelude: prelude || menu, visible: simPlays() && (prelude || menu || board.visible) && !combatView && !placing, floorY: renderer.xr.isPresenting && floorBased ? 0 : _simAt.y - 0.95 });
   updateHands();
   if (combat.isActive()) combat.update(dt, input);
 
@@ -2036,6 +2041,8 @@ if (import.meta.env.DEV) {
     },
   };
 }
+
+applyScenery(); // the title screen starts without the board
 
 // For automated checks and for poking at the game from the browser console.
 window.crownfall = { beginPrelude, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
