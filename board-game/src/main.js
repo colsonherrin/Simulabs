@@ -427,6 +427,7 @@ let mouseMag = 0;
 let dragSpeed = 0;
 
 const controllers = [];
+let triggerHand = null;
 const grips = [];
 const POINTER_DROP = THREE.MathUtils.degToRad(-20);
 const _aimOrigin = new THREE.Vector3();
@@ -471,6 +472,7 @@ for (let i = 0; i < 2; i++) {
   });
   controller.addEventListener('selectstart', () => {
     controller.userData.selecting = true;
+    if (!triggerHand) triggerHand = controller;
     input.primaryDown = true;
     input.primaryPressed = true;
   });
@@ -484,8 +486,12 @@ for (let i = 0; i < 2; i++) {
     controller.userData.selecting = false;
     input.primaryDown = false;
     input.primaryReleased = true;
+    const hand = controller;
+    queueMicrotask(() => { if (triggerHand === hand) triggerHand = null; });
   });
   controller.addEventListener('select', () => {
+    if (triggerHand !== controller) return;
+    triggerHand = null;
     if (game.phase !== 'combat') onXRSelect(controller);
   });
   scene.add(controller);
