@@ -653,6 +653,11 @@ function onCombatHud(info) {
   crosshair.classList.toggle('hidden', renderer.xr.isPresenting || game.phase !== 'combat');
 }
 
+let returnToAR = false;
+let sessionSwap = null;
+const savedBoardPos = new THREE.Vector3();
+const savedBoardQuat = new THREE.Quaternion();
+
 function onCombatView(enter) {
   if (enter === combatView) return;
   combatView = enter;
@@ -662,9 +667,8 @@ function onCombatView(enter) {
     savedTarget.copy(controls.target);
     savedFov = camera.fov;
     controls.enabled = false;
-    // Night fog belongs to the virtual arena; in AR it would tint the real room.
-    // Warm battlefield haze that softens the far ruins; none in AR.
-    scene.fog = xrKind === 'ar' && renderer.xr.isPresenting ? null : new THREE.FogExp2(0x5e4635, 0.024);
+    // Warm battlefield haze. An AR board session is about to become a VR fight.
+    scene.fog = new THREE.FogExp2(0x5e4635, 0.024);
     if (!renderer.xr.isPresenting) {
       camera.fov = 72;
       camera.updateProjectionMatrix();
@@ -673,6 +677,11 @@ function onCombatView(enter) {
       pitch = 0;
       camera.rotation.order = 'YXZ';
       camera.rotation.set(pitch, yaw, 0);
+    } else if (xrKind === 'ar') {
+      returnToAR = true;
+      savedBoardPos.copy(board.position);
+      savedBoardQuat.copy(board.quaternion);
+      swapSession('vr');
     }
     setMusicTension(true);
   } else {
@@ -687,6 +696,9 @@ function onCombatView(enter) {
       controls.target.copy(savedTarget);
       controls.enabled = !menu;
       controls.update();
+    } else if (returnToAR) {
+      returnToAR = false;
+      swapSession('ar');
     }
   }
   applyScenery();
@@ -1291,7 +1303,20 @@ function beginPlacement() {
   updateHUD();
 }
 
-async function enterXR(kind) {
+async function swapSession(kind) {
+  sessionSwap = kind;
+  const current = renderer.xr.getSession();
+  if (current) await current.end().catch(() => {});
+  sessionSwap = null;
+  await enterXR(kind, { keepPlace: true });
+  if (kind === 'ar') {
+    board.position.copy(savedBoardPos);
+    board.quaternion.copy(savedBoardQuat);
+    applyScenery();
+  }
+}
+
+async function enterXR(kind, opts = {}) {
   unlockAudio();
   if (!navigator.xr) {
     toast('This browser has no WebXR.');
@@ -1327,7 +1352,10 @@ async function enterXR(kind) {
     renderer.xr.setFoveation(1);
     await renderer.xr.setSession(session);
     hideGameOver();
-    if (kind === 'vr') {
+    if (opts.keepPlace) {
+      menu = false;
+      placing = false;
+    } else if (kind === 'vr') {
       placing = false;
       menu = false;
       // Table height above the real floor, or below the eyes without one.
@@ -1354,6 +1382,12 @@ async function enterXR(kind) {
 function onSessionEnd() {
   releaseHeld(false);
   floorBased = false;
+  if (sessionSwap) {
+    xrKind = null;
+    hitTestSource = null;
+    hitTestRequested = false;
+    return;
+  }
   const wasFighting = combatView;
   if (game.phase === 'over' && fallEpoch === -1) setTimeout(() => game.phase === 'over' && showGameOver(), 0);
   xrKind = null;
