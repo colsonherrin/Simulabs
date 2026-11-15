@@ -341,7 +341,7 @@ async function talkToSim() {
   }
   status.textContent = 'Connecting Sim’s voice…';
   const live = await sim.startVoice();
-  status.textContent = live ? 'Sim’s voice is live: just talk to her.' : `Live voice could not start (${sim.voiceProblem() || 'unknown reason'}). She will still speak her coaching, but cannot hear you. Open “Voice log” for details.`;
+  status.textContent = live ? 'Sim’s voice is live: just talk to her.' : 'Live voice could not start. She will still speak her coaching, but cannot hear you.';
   $('btn-sim').textContent = live ? 'Sim: voice on' : 'Talk to Sim';
   if (live) {
     simGreeted = -1;
@@ -357,11 +357,6 @@ async function voiceThenStart(start) {
   if (sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting' && (await sim.canGoLive())) await talkToSim();
   start();
 }
-setInterval(() => {
-  const el = $('sim-log');
-  if (el && !el.hidden) el.textContent = `voice: ${sim.voiceState()}${sim.voiceProblem() ? ' (' + sim.voiceProblem() + ')' : ''}; heard her on the call: ${sim.heardHer() ? 'yes' : 'not yet'}\n` + sim.voiceLog().slice(-40).join('\n');
-}, 500);
-
 const fadeMat = new THREE.MeshBasicMaterial({
   color: 0x07060a,
   transparent: true,
@@ -1770,14 +1765,10 @@ btnPlay.addEventListener('click', () => voiceThenStart(() => {
   updateHUD();
   simGreet();
 }));
-$('btn-sim-log').addEventListener('click', () => {
-  $('sim-log').hidden = !$('sim-log').hidden;
-});
 $('btn-sim').addEventListener('click', () => {
   unlockAudio();
   talkToSim();
 });
-$('sim-build').textContent = 'Build ' + (typeof __BUILD__ === 'string' ? __BUILD__ : 'dev');
 sim.canGoLive().then((can) => {
   $('sim-status').textContent = can
     ? 'Sim’s live voice is ready: it starts when you tap Talk to Sim.'
