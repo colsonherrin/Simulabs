@@ -15,6 +15,7 @@ export type { ServerOptions } from './session.js';
 import { PROTOCOL_VERSION } from './protocol.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const GAME_DIR = join(HERE, '..', '..', 'board-game', 'site');
 
 /**
  * Which mind runs with the keys at hand. With an OpenAI key: the listening 'audio' mind, the fastest
@@ -134,8 +135,8 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
       });
       return;
     }
-    if (url.pathname === '/xr') {
-      res.writeHead(302, { location: '/xr/' }).end();
+    if (url.pathname === '/xr' || url.pathname === '/crownfall') {
+      res.writeHead(302, { location: url.pathname + '/' }).end();
       return;
     }
     if (url.pathname === '/xr/app.js' || url.pathname === '/xr/emulator.js') {
@@ -150,6 +151,9 @@ export function startServer(opts: ServerOptions): Promise<{ server: Server; port
     if (path === '/xr/') {
       root = WEBXR_DIR;
       path = '/index.html';
+    } else if (path === '/crownfall/' || path.startsWith('/crownfall/')) {
+      root = GAME_DIR;
+      path = path === '/crownfall/' ? '/index.html' : path.slice('/crownfall'.length);
     } else if (path.startsWith('/xr/avatar/')) {
       root = AVATAR_DIR;
       path = path.slice('/xr/avatar'.length);
@@ -229,6 +233,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   console.log(`Simulacra backend up. brain=${brain}`);
   console.log(`  setup keys: http://localhost:${port}/setup`);
   console.log(`  WebXR app:  http://localhost:${port}/xr/   (desktop preview; on Quest over USB, press Enter AR)`);
+  console.log(`  Crownfall:  http://localhost:${port}/crownfall/`);
   console.log(`  simulator:  http://localhost:${port}/`);
   console.log(`  latency:    http://localhost:${port}/metrics`);
 
