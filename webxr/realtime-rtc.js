@@ -2,14 +2,30 @@
 // voice travel as real-time audio tracks (the browser handles echo cancellation and jitter), and
 // the session's events travel over a data channel. This is the lowest-latency way to talk to it.
 //
+// `apiKey` is an OpenAI key, a short-lived pass from the relay (relay/worker.js), or a function
+// returning (a promise of) either, called each time a call is started.
+//
 // `media.onMic(cb)` gives the microphone stream now or whenever it is switched on;
 // `media.onVoice(stream|null)` receives the model's voice to play.
 export function rtcConnector(apiKey, model, media) {
   return async ({ onMessage, onClose }) => {
     const pc = new RTCPeerConnection();
-    const sender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
-    const stopMic = media.onMic((stream) => sender.replaceTrack(stream.getAudioTracks()[0] || null));
-    pc.ontrack = (e) => media.onVoice(e.streams[0]);
+    // The microphone goes on the call as an ordinary track when it is already on (the usual case);
+    // otherwise a send/receive slot is reserved and filled when the microphone is switched on.
+    let sender = null;
+    const stopMic = media.onMic((stream) => {
+      const track = stream.getAudioTracks()[0];
+      if (!track) return;
+      if (sender) sender.replaceTrack(track);
+      else sender = pc.addTrack(track, stream);
+    });
+    if (!sender) sender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+    const note = media.log || (() => {});
+    pc.addEventListener('connectionstatechange', () => note('call ' + pc.connectionState));
+    pc.ontrack = (e) => {
+      note('voice track received');
+      media.onVoice(e.streams[0] || new MediaStream([e.track]));
+    };
     const events = pc.createDataChannel('oai-events');
     events.onmessage = (e) => onMessage(String(e.data));
     let ended = false;
@@ -25,7 +41,7 @@ export function rtcConnector(apiKey, model, media) {
       await pc.setLocalDescription(await pc.createOffer());
       const res = await fetch('https://api.openai.com/v1/realtime/calls?model=' + encodeURIComponent(model), {
         method: 'POST',
-        headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/sdp' },
+        headers: { Authorization: 'Bearer ' + (typeof apiKey === 'function' ? await apiKey() : apiKey), 'Content-Type': 'application/sdp' },
         body: pc.localDescription.sdp,
         signal: AbortSignal.timeout(8000),
       });

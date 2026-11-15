@@ -34,6 +34,7 @@ export default defineConfig(async () => {
   return {
     plugins,
     base: './', // so a build can be hosted in a sub-folder (GitHub Pages)
+    define: { __BUILD__: JSON.stringify(new Date().toISOString().slice(5, 16).replace('T', ' ') + ' UTC') },
     build: { outDir: process.env.CROWNFALL_OUT || 'dist', emptyOutDir: true, target: 'es2022' },
     server: { host: true, port: 5173, fs: { allow: ['..'] } },
     preview: { host: true, port: 5173 },

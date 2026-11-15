@@ -11,6 +11,7 @@
     "test": "node test/search.test.mjs"
   },
   "dependencies": {
+    "@elevenlabs/client": "^1.36.1",
     "three": "^0.170.0"
   },
   "devDependencies": {

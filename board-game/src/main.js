@@ -313,21 +313,50 @@ function simGreet() {
   sim.gameStarted();
 }
 const boardCopy = () => game.board.map((row) => row.slice());
+// A hint by herself when you have been looking at the board for a while on your turn.
+let thinkingSince = 0;
+let hintedFor = -1;
+setInterval(() => {
+  const yours = simPlays() && !menu && !placing && game.phase === 'play' && game.turn !== COMPUTER_SIDE && !combatView;
+  const stamp = `${epoch}:${game.moveNo || 1}`;
+  if (!yours) {
+    thinkingSince = 0;
+    return;
+  }
+  if (!thinkingSince || hintedFor !== stamp && thinkingSince.stamp !== stamp) thinkingSince = { at: performance.now(), stamp };
+  if (hintedFor !== stamp && performance.now() - thinkingSince.at > 22000) {
+    hintedFor = stamp;
+    sim.offerHint(game);
+  }
+}, 1000);
 async function talkToSim() {
   const status = $('sim-status');
-  if (!sim.hasKey()) {
-    status.textContent = "Paste an OpenAI key above to give Sim her voice. Without one she plays and coaches in text.";
+  if (!(await sim.canGoLive())) {
+    status.textContent = sim.canSpeak() ? 'No key: Sim will talk with the browser’s built-in voice and coach you as you play. She cannot hear you without a key.' : 'No key, and this browser has no built-in voice: Sim will coach in text.';
     return;
   }
   status.textContent = 'Connecting Sim’s voice…';
   const live = await sim.startVoice();
-  status.textContent = live ? 'Sim’s voice is live: just talk to her.' : `Sim’s voice could not start (${sim.voiceProblem() || 'unknown reason'}). She will coach in text.`;
+  status.textContent = live ? 'Sim’s voice is live: just talk to her.' : `Live voice could not start (${sim.voiceProblem() || 'unknown reason'}). She will still speak her coaching, but cannot hear you. Open “Voice log” for details.`;
   $('btn-sim').textContent = live ? 'Sim: voice on' : 'Talk to Sim';
   if (live) {
     simGreeted = -1;
     if (!menu) simGreet();
+    else sim.hello(); // so you hear her before you start
   }
+  return live;
 }
+// Starting a game switches her voice on if there is a key and it is not on yet: nobody should have
+// to remember a separate button. The microphone prompt comes before any AR session, where it would be hidden.
+async function voiceThenStart(start) {
+  unlockAudio();
+  if (sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting' && (await sim.canGoLive())) await talkToSim();
+  start();
+}
+setInterval(() => {
+  const el = $('sim-log');
+  if (el && !el.hidden) el.textContent = `voice: ${sim.voiceState()}${sim.voiceProblem() ? ' (' + sim.voiceProblem() + ')' : ''}; heard her on the call: ${sim.heardHer() ? 'yes' : 'not yet'}\n` + sim.voiceLog().slice(-40).join('\n');
+}, 500);
 
 const fadeMat = new THREE.MeshBasicMaterial({
   color: 0x07060a,
@@ -1079,7 +1108,8 @@ async function enterXR(kind) {
     updateHUD();
   } catch (err) {
     console.warn(err);
-    toast('The XR session was blocked.');
+    // Answering the microphone prompt can use up the tap that starting AR needs.
+    toast(sim.voiceState() === 'live' ? 'Sim can hear you now. Press Enter AR once more.' : 'The XR session was blocked.');
     xrKind = null;
     applyScenery();
   }
@@ -1484,13 +1514,101 @@ window.addEventListener('keyup', (event) => {
   keys[event.code] = false;
 });
 
-btnPlay.addEventListener('click', () => {
-  unlockAudio();
+btnPlay.addEventListener('click', () => voiceThenStart(() => {
   menu = false;
   controls.enabled = true;
   updateHUD();
   simGreet();
+}));
+$('btn-sim-log').addEventListener('click', () => {
+  $('sim-log').hidden = !$('sim-log').hidden;
 });
+// Getting the key onto a headset, where pasting is awkward: the headset shows a short code, the
+// computer that has the key types the code, and the key travels straight from one browser to the
+// other (the same device-to-device link online play uses; the broker only ever sees the code).
+let pairing = null;
+const pairMsg = (text) => { $('pair-msg').textContent = text; };
+const stopPairing = () => {
+  if (pairing) pairing.close();
+  pairing = null;
+};
+$('pair-receive').addEventListener('click', async () => {
+  unlockAudio();
+  stopPairing();
+  const code = makeCode();
+  pairMsg('Getting a code…');
+  try {
+    pairing = await openRoom({
+      role: 'host',
+      code: 'K' + code,
+      onStatus: (state, detail) => {
+        if (state === 'connected') pairMsg('The computer has connected. Waiting for the key…');
+        else if (state === 'error') pairMsg(detail || 'Connection problem. Try again.');
+      },
+      onMessage: (msg) => {
+        if (msg?.t !== 'key' || typeof msg.key !== 'string' || !/^sk-[\w-]{20,}$/.test(msg.key.trim())) {
+          pairMsg('What arrived did not look like an OpenAI key (it should start with sk-).');
+          pairing?.send({ t: 'key-bad' });
+          return;
+        }
+        sim.setKey(msg.key.trim());
+        pairing?.send({ t: 'key-ok' });
+        $('pair-code').hidden = true;
+        pairMsg('Key received and saved on this device.');
+        setTimeout(stopPairing, 1500);
+        talkToSim();
+      },
+    });
+    $('pair-code').textContent = code;
+    $('pair-code').hidden = false;
+    pairMsg('On your computer, open this same page, open “Key is on another device?”, type this code and paste the key.');
+  } catch (err) {
+    pairMsg(err?.message || 'Could not get a code. Check the internet connection.');
+  }
+});
+$('pair-send').addEventListener('click', async () => {
+  const code = cleanCode($('pair-code-in').value).slice(0, 5);
+  const key = $('pair-key').value.trim().replace(/^["']|["']$/g, '');
+  if (code.length !== 5) return pairMsg('Type the 5-character code shown on the headset.');
+  if (!/^sk-[\w-]{20,}$/.test(key)) return pairMsg('That does not look like an OpenAI key (it should start with sk-).');
+  stopPairing();
+  pairMsg('Connecting to the headset…');
+  let delivered = false;
+  const giveUp = setTimeout(() => { if (!delivered) pairMsg('No answer from the headset. Check the code, and that the headset is still showing it.'); }, 15000);
+  try {
+    pairing = await openRoom({
+      role: 'join',
+      code: 'K' + code,
+      onStatus: (state, detail) => {
+        if (state === 'connected') {
+          pairing.send({ t: 'key', key });
+          pairMsg('Sent. Waiting for the headset to confirm…');
+        } else if (state === 'error') pairMsg(detail?.replace('No game with that code', 'No headset is showing that code').replace('the other player is still waiting', 'the headset is still showing it') || 'Connection problem.');
+      },
+      onMessage: (msg) => {
+        if (msg?.t === 'key-ok') {
+          delivered = true;
+          clearTimeout(giveUp);
+          $('pair-key').value = '';
+          pairMsg('Delivered. The headset has the key now.');
+          setTimeout(stopPairing, 1000);
+        } else if (msg?.t === 'key-bad') pairMsg('The headset rejected it: not a valid-looking key.');
+      },
+    });
+  } catch (err) {
+    clearTimeout(giveUp);
+    pairMsg(err?.message || 'Could not connect.');
+  }
+});
+// A link can also carry the key (…/crownfall/#key=sk-…): it is saved and removed from the address at once.
+{
+  const m = /[#&]key=(sk-[\w-]{20,})/.exec(location.hash);
+  if (m) {
+    sim.setKey(m[1]);
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+}
+
 // Sim's voice. The key is kept in this browser and sent only to OpenAI.
 $('sim-key-save').addEventListener('click', () => {
   const key = $('sim-key').value.trim().replace(/^["']|["']$/g, '');
@@ -1503,9 +1621,11 @@ $('btn-sim').addEventListener('click', () => {
   unlockAudio();
   talkToSim();
 });
-$('sim-status').textContent = sim.hasKey() ? 'A key is saved. Tap "Talk to Sim" before you start so she can hear you.' : 'Optional: paste an OpenAI key so Sim can talk with you in real time.';
-btnAr.addEventListener('click', () => enterXR('ar'));
-btnVr.addEventListener('click', () => enterXR('vr'));
+$('sim-build').textContent = 'Build ' + (typeof __BUILD__ === 'string' ? __BUILD__ : 'dev');
+sim.canGoLive().then((can) => { if (can && !sim.hasKey()) $('sim-status').textContent = 'Sim’s live voice is ready: it starts when you start a game. No key needed.'; });
+$('sim-status').textContent = sim.hasKey() ? 'A key is saved: her voice starts when you start a game.' : 'No key needed to play: Sim talks with the browser’s built-in voice and coaches you. Add an OpenAI key if you want to talk back to her.';
+btnAr.addEventListener('click', () => voiceThenStart(() => enterXR('ar')));
+btnVr.addEventListener('click', () => voiceThenStart(() => enterXR('vr')));
 btnArMini.addEventListener('click', () => enterXR('ar'));
 btnVrMini.addEventListener('click', () => enterXR('vr'));
 btnAgain.addEventListener('click', () => {

@@ -7,7 +7,7 @@
 //   await avatar.load();
 //   avatar.animate(dt, { x, y, z, yaw, speed01, gesture, metres }, voiceLevel, lookAtVec3);
 
-export function createAvatar({ THREE, FBXLoader, scene, assetBase = './avatar/', height: wantedHeight = 1.7, placeholder = false }) {
+export function createAvatar({ THREE, FBXLoader, scene, assetBase = './avatar/', height: wantedHeight = 1.7, placeholder = false, lite = false }) {
 const q1 = new THREE.Quaternion();
 const q2 = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0);
@@ -168,8 +168,21 @@ function loadAvatar() {
       return resolve();
     }
     const tex = new THREE.TextureLoader();
+    // `lite` (headsets and phones): the 4K textures are drawn down to 1K and the normal maps are
+    // left out. On a standalone headset the full set costs more memory and frame time than it shows.
     const map = (name, srgb) => {
-      const t = tex.load(assetBase + name);
+      let t;
+      if (!lite) t = tex.load(assetBase + name);
+      else {
+        t = new THREE.Texture();
+        new THREE.ImageLoader().load(assetBase + name, (img) => {
+          const c = document.createElement('canvas');
+          c.width = c.height = 1024;
+          c.getContext('2d').drawImage(img, 0, 0, 1024, 1024);
+          t.image = c;
+          t.needsUpdate = true;
+        });
+      }
       if (srgb) t.colorSpace = THREE.SRGBColorSpace;
       return t;
     };
@@ -187,8 +200,8 @@ function loadAvatar() {
             if (made[name]) return made[name];
             let m;
             if (name.includes('opacity')) m = new THREE.MeshStandardMaterial({ map: map('f006_opacity_color.png', true), transparent: true, alphaTest: 0.35, side: THREE.DoubleSide, roughness: 0.75 });
-            else if (name.includes('head')) m = new THREE.MeshStandardMaterial({ map: map('f006_head_color.png', true), normalMap: map('f006_head_normal.png', false), roughness: 0.7 });
-            else m = new THREE.MeshStandardMaterial({ map: map('f006_body_color.png', true), normalMap: map('f006_body_normal.png', false), roughness: 0.8 });
+            else if (name.includes('head')) m = new THREE.MeshStandardMaterial({ map: map('f006_head_color.png', true), ...(lite ? {} : { normalMap: map('f006_head_normal.png', false) }), roughness: 0.7 });
+            else m = new THREE.MeshStandardMaterial({ map: map('f006_body_color.png', true), ...(lite ? {} : { normalMap: map('f006_body_normal.png', false) }), roughness: 0.8 });
             m.name = old.name;
             made[name] = m;
             return m;
