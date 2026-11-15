@@ -890,7 +890,15 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     }
 
     if (phase === 'result') {
-      if (phaseT > 1.05) {
+      let falling = false;
+      for (const e of enemies) {
+        if (!e.dying) continue;
+        e.dying += dt;
+        e.mesh.rotation.x = -Math.min(1.4, Math.max(0, e.dying - 0.12) * 2.6);
+        e.mesh.userData.rig?.drive(dt, { action: 'die', t: e.dying });
+        if (e.dying < 1.1) falling = true;
+      }
+      if (phaseT > 1.15 && !falling) {
         const win = resultWin;
         teardown();
         resolveFn?.(win);
