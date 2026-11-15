@@ -38,7 +38,6 @@ const meter = $('meter');
 const meterBar = $('meter-bar');
 const toastEl = $('toast');
 const gameoverEl = $('gameover');
-const lastMoveEl = $('last-move');
 let turnShown = null;
 // What was just played, shown under the turn pill, and a running move count.
 let lastMove = '';
@@ -588,8 +587,6 @@ function updateHUD() {
   turnEl.textContent = game.phase === 'over'
     ? (game.draw ? 'Stalemate' : falling ? 'The monarch falls…' : `${SIDE_NAME[game.winner]} wins!`)
     : `Move ${game.moveNo || 1} · ${SIDE_NAME[game.turn]}${online ? (game.turn === mySide ? ' (you)' : ' (opponent)') : vsComputer && game.turn === COMPUTER_SIDE ? ' (computer)' : ''} to move`;
-  lastMoveEl.textContent = lastMove;
-  lastMoveEl.classList.toggle('hidden', !lastMove || menu);
   const lead = game.phase === 'over' ? game.winner : game.turn;
   turnEl.classList.toggle('gold', lead === 0);
   turnEl.classList.toggle('violet', lead === 1);
@@ -648,8 +645,9 @@ function settle(info) {
   scheduleComputer();
 }
 
-// The computer's turn: think briefly, show the move it has picked (its
-// piece is selected with the green and red squares, like yours), then play.
+// The computer's turn, played straight after yours: as soon as your piece
+// has landed it flashes the move it picked (its piece selected with the
+// green and red squares) and plays it.
 function scheduleComputer() {
   clearTimeout(aiTimer);
   if (!computersTurn()) return;
@@ -666,8 +664,8 @@ function scheduleComputer() {
       if (token !== epoch || !computersTurn()) return;
       if (action.attack) doAttack(action.to.r, action.to.c);
       else doMove(action.to.r, action.to.c);
-    }, 750);
-  }, 650);
+    }, 220);
+  }, 380);
 }
 
 // Squares are named like chess: files a–e from Gold's left, ranks 1–5 from

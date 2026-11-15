@@ -16,8 +16,7 @@ import { startWarAmbience, stopWarAmbience } from './audio.js';
 export const INLINE_ARENA = { x: 0, y: -40, z: 0, eye: 1.62 };
 
 const TUNING = {
-  meleeQuota: 6,
-  meleeMaxAlive: 4,
+  meleeQuota: 5,
   meleeSpeed: 2.65,
   archerCount: 4,
   archerInterval: 3.05,
@@ -309,8 +308,9 @@ export function createCombat({ scene, camera, renderer, hooks }) {
 
   function spawnSwordsman() {
     const mesh = createSoldier('sword', paletteForEnemy(attackerSide));
-    const a = (Math.random() - 0.5) * 0.7;
-    const dist = 8.2 + Math.random() * 1.6;
+    // Straight down the lane from the attacking end.
+    const a = (Math.random() - 0.5) * 0.25;
+    const dist = 8.6;
     mesh.position.set(Math.sin(a) * dist, 0, -Math.cos(a) * dist);
     group.add(mesh);
     enemies.push({
@@ -369,6 +369,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     e.alive = false;
     e.dying = 0.001;
     kills += 1;
+    spawnT = 0;
     sparks.burst(point || e.mesh.position.clone().setY(1.2), 0xffe1b0, 10, 3.5);
     playHit();
     hooks.haptic?.(0.7);
@@ -853,7 +854,6 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         hooks.caption?.('');
         if (mode === 'sword-melee' || mode === 'bow-melee') {
           spawnSwordsman();
-          spawnSwordsman();
         }
       }
       hud();
@@ -929,9 +929,11 @@ export function createCombat({ scene, camera, renderer, hooks }) {
 
     const melee = mode === 'sword-melee' || mode === 'bow-melee';
     if (melee) {
+      // One at a time: the next swordsman sets off from the far end only
+      // after the one before him has fallen.
       spawnT += dt;
       const alive = enemies.filter((e) => e.alive && e.kind === 'sword').length;
-      if (spawnT > 0.78 && alive < TUNING.meleeMaxAlive && kills + alive < quota) {
+      if (alive === 0 && spawnT > 0.7 && kills < quota) {
         spawnSwordsman();
         spawnT = 0;
       }
