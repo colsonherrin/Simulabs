@@ -1183,7 +1183,7 @@ function seatInFront(xrFrame) {
   _fwd.y = 0;
   if (_fwd.lengthSq() < 1e-4) _fwd.set(0, 0, -1);
   _fwd.normalize();
-  board.position.set(p.x, floorBased ? 0.96 : p.y - 0.64, p.z).addScaledVector(_fwd, 0.9);
+  board.position.set(p.x, floorBased ? 0.66 : p.y - 0.94, p.z).addScaledVector(_fwd, 0.9);
   faceBoardToward(p.x, p.z);
   needSeat = false;
 }
@@ -1236,7 +1236,7 @@ async function enterXR(kind) {
       placing = false;
       menu = false;
       // Table height above the real floor, or below the eyes without one.
-      board.position.set(0, floorBased ? 0.96 : -0.64, -0.85);
+      board.position.set(0, floorBased ? 0.66 : -0.94, -0.85);
       board.quaternion.identity();
       needSeat = true;
       simGreet();
