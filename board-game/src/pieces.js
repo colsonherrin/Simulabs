@@ -34,8 +34,8 @@ export function createMiniature(type, side) {
   const group = new THREE.Group();
   const kind = type === 'A' ? 'archer' : type === 'S' ? 'sword' : 'king';
   const figure = buildRanger({ kind, palette: RANGER_PALETTES[side === 0 ? 0 : 1], pose: 'mini' });
-  // The monarch stands a head taller than the court around it.
-  figure.scale.setScalar(kind === 'king' ? MINI_SCALE * 1.2 : MINI_SCALE);
+  // The monarch stands just a little taller than the court around it.
+  figure.scale.setScalar(kind === 'king' ? MINI_SCALE * 1.05 : MINI_SCALE);
   group.add(figure);
   group.traverse((obj) => {
     if (obj.isMesh) obj.userData.mini = true;
