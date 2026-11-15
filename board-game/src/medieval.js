@@ -12,6 +12,33 @@ import { clothTex, steelTex } from './textures.js';
 
 const RECOLOR = /* glsl */ `
 #include <map_fragment>
+const vec3 SKIRT = vec3(0.075, 0.008, 0.013);
+{
+  // Long sleeves, painted on the arm itself so they fit and move exactly:
+  // anything along the line from shoulder to wrist (in the bind pose, in
+  // the model's centimetres) is sleeve; the hands stay bare.
+  vec3 bp = vBindPos;
+  bp.x = abs(bp.x);
+  vec3 armDir = uWrist - uShoulder;
+  float armLen = length(armDir);
+  float along = dot(bp - uShoulder, armDir) / (armLen * armLen);
+  float across = length(bp - uShoulder - armDir * along);
+  bool onArm = along > 0.04 && along < 0.975 && across < 10.0;
+  vec3 c0 = diffuseColor.rgb;
+  float lum0 = dot(c0, vec3(0.2126, 0.7152, 0.0722));
+  float shade = clamp(lum0 * 1.4, 0.35, 1.1);
+  if (onArm) {
+    // Velvet with the arm's own light and shade; a gold cuff at the wrist.
+    diffuseColor.rgb = along > 0.93 ? vec3(0.55, 0.36, 0.09) * shade : vec3(0.3, 0.025, 0.045) * shade;
+  } else if (bp.y < uWaist && bp.x < 24.0) {
+    // Below the waist everything is the skirt's cloth, so nothing of the
+    // legs or trousers can show where the skirt moves.
+    diffuseColor.rgb = SKIRT * clamp(lum0 * 1.6, 0.75, 1.1);
+  } else if (bp.y < uBust && bp.x < 24.0) {
+    // The torso from the waist to the bust is all bodice: one complete top.
+    diffuseColor.rgb = vec3(0.3, 0.025, 0.045) * clamp(lum0 * 1.4, 0.45, 1.1);
+  }
+}
 {
   vec3 c = diffuseColor.rgb;
   float mx = max(c.r, max(c.g, c.b));
@@ -24,6 +51,9 @@ const RECOLOR = /* glsl */ `
   } else if (sat > 0.1 && c.b > c.r * 1.08 && c.b >= c.g * 0.95) {
     // The jeans: dark brown riding leather.
     diffuseColor.rgb = vec3(0.13, 0.075, 0.04) * clamp(lum * 2.2, 0.3, 1.5);
+  } else if (sat < 0.14 && lum > 0.35 && vBindPos.y > 95.0 && vBindPos.y < 147.0 && abs(vBindPos.x) < 22.0) {
+    // The top's white trims (neckline and hems) become gold braid.
+    diffuseColor.rgb = vec3(0.55, 0.36, 0.09) * clamp(lum * 1.2, 0.4, 1.1);
   }
 }
 `;
@@ -120,8 +150,13 @@ function along(geoFn, mat, a, b, cover = 1, from = 0) {
 function skirt(top, bottom) {
   const g = new THREE.Group();
   const len = top - bottom;
-  const velvet = new THREE.MeshStandardMaterial({ color: 0x4a0c14, roughness: 0.85, map: clothTex(), side: THREE.DoubleSide });
-  const geo = new THREE.CylinderGeometry(0.125, 0.34, len, 32, 6, true);
+  // Same colour the shader gives everything below her waist, so the two
+  // read as one cloth.
+  const velvet = new THREE.MeshStandardMaterial({ roughness: 0.9, side: THREE.DoubleSide });
+  velvet.color.setRGB(0.075, 0.008, 0.013);
+  // Hugging the waist at the top (her hips below are painted the same
+  // cloth, so the skirt and body read as one), flaring to the hem.
+  const geo = new THREE.CylinderGeometry(0.155, 0.38, len, 40, 8, true);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const k = (len / 2 - pos.getY(i)) / len;
@@ -135,14 +170,14 @@ function skirt(top, bottom) {
   body.position.y = -len / 2;
   g.add(body);
   const gold = new THREE.MeshStandardMaterial({ color: 0xc89a3a, metalness: 0.9, roughness: 0.35 });
-  const hem = new THREE.Mesh(new THREE.CylinderGeometry(0.345, 0.35, 0.035, 32, 1, true), gold);
+  const hem = new THREE.Mesh(new THREE.CylinderGeometry(0.385, 0.39, 0.035, 40, 1, true), gold);
   hem.position.y = -len + 0.03;
   g.add(hem);
-  const belt = new THREE.Mesh(new THREE.TorusGeometry(0.128, 0.013, 6, 32), new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.7 }));
+  const belt = new THREE.Mesh(new THREE.TorusGeometry(0.158, 0.016, 6, 40), new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.7 }));
   belt.rotation.x = Math.PI / 2;
   g.add(belt);
   const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.035, 0.01), gold);
-  buckle.position.set(0, 0, 0.135);
+  buckle.position.set(0, 0, 0.168);
   g.add(buckle);
   // A waist is wider than it is deep.
   g.scale.set(1, 1, 0.8);
@@ -161,6 +196,29 @@ export function dressMedieval(avatar) {
   if (!model || model.userData.medieval) return;
   model.userData.medieval = true;
 
+  // Where the left arm runs in the bind pose (the right mirrors it), from
+  // the skeleton's own bind matrices.
+  const arm = { shoulder: new THREE.Vector3(17.2, 138, -6.1), wrist: new THREE.Vector3(52.4, 106.3, 3.1), waist: 103, bust: 127 };
+  let pelvisY = 92.3;
+  let spineY = 128.9;
+  model.traverse((o) => {
+    if (!o.isSkinnedMesh) return;
+    o.skeleton.bones.forEach((bone, i) => {
+      const n = bone.name.toLowerCase().replace(/_/g, ' ');
+      const at = () => new THREE.Vector3().setFromMatrixPosition(o.skeleton.boneInverses[i].clone().invert());
+      if (n.endsWith('l upperarm')) arm.shoulder.copy(at());
+      if (n.endsWith('l hand')) arm.wrist.copy(at());
+      if (n.endsWith('pelvis')) pelvisY = at().y;
+      if (n.endsWith('spine2')) spineY = at().y;
+    });
+  });
+  // The waistline a little above the hip joint; the bodice runs up to just
+  // under the bust.
+  arm.waist = pelvisY + (spineY - pelvisY) * 0.29;
+  arm.bust = spineY - 2;
+  arm.shoulder.x = Math.abs(arm.shoulder.x);
+  arm.wrist.x = Math.abs(arm.wrist.x);
+
   // Dye the body's clothes (not the head or hair).
   model.traverse((o) => {
     if (!o.isMesh) return;
@@ -169,9 +227,18 @@ export function dressMedieval(avatar) {
       if (!m || name.includes('head') || name.includes('opacity') || m.userData.medieval) continue;
       m.userData.medieval = true;
       m.onBeforeCompile = (shader) => {
-        shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', RECOLOR);
+        shader.uniforms.uShoulder = { value: arm.shoulder };
+        shader.uniforms.uWrist = { value: arm.wrist };
+        shader.uniforms.uWaist = { value: arm.waist };
+        shader.uniforms.uBust = { value: arm.bust };
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBindPos;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBindPos = (bindMatrix * vec4(position, 1.0)).xyz;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vBindPos;\nuniform vec3 uShoulder;\nuniform vec3 uWrist;\nuniform float uWaist;\nuniform float uBust;')
+          .replace('#include <map_fragment>', RECOLOR);
       };
-      m.customProgramCacheKey = () => 'medieval-dye';
+      m.customProgramCacheKey = () => 'medieval-dye-3';
       m.needsUpdate = true;
     }
   });
@@ -232,31 +299,5 @@ export function dressMedieval(avatar) {
     boot.add(sole, upper, cap);
     place(boot, f, foot);
   }
-  // Long sleeves: the top's own short sleeves carry on down to the wrist.
-  // Each sleeve starts just inside the end of the short sleeve, a touch
-  // narrower, in the same colour the top is dyed, so it reads as one
-  // garment; it ends in a narrow gold band at the wrist. Each piece rides
-  // on its arm bone.
-  const sleeve = new THREE.MeshStandardMaterial({ roughness: 0.85, side: THREE.DoubleSide });
-  sleeve.color.setRGB(0.2, 0.018, 0.03); // linear, as the dye renders the top
-  const goldTrim = new THREE.MeshStandardMaterial({ color: 0xc89a3a, metalness: 0.9, roughness: 0.35 });
-  for (const s of ['l', 'r']) {
-    const upper = b[s + 'UpperArm'];
-    const fore = b[s + 'Forearm'];
-    const hand = findBone(model, (n) => n.endsWith(`${s} hand`) || n.endsWith(s === 'l' ? 'lefthand' : 'righthand'));
-    if (!upper || !fore) continue;
-    const sh = local(upper);
-    const el = local(fore);
-    const wr = hand ? local(hand) : el.clone().add(el.clone().sub(sh).multiplyScalar(0.9));
-    const attachTo = (bone, mesh) => {
-      root.add(mesh);
-      mesh.updateMatrixWorld(true);
-      bone.attach(mesh);
-    };
-    // Upper arm: from under the short sleeve's hem to just past the elbow.
-    attachTo(upper, along((h) => new THREE.CylinderGeometry(0.047, 0.043, h, 18, 1, true), sleeve, sh, el, 0.72, 0.3));
-    // Forearm: a slightly loose sleeve to the wrist.
-    attachTo(fore, along((h) => new THREE.CylinderGeometry(0.043, 0.047, h, 18, 1, true), sleeve, el, wr, 0.97, -0.03));
-    attachTo(fore, along((h) => new THREE.CylinderGeometry(0.049, 0.049, h, 18, 1, true), goldTrim, el, wr, 0.035, 0.93));
-  }
+
 }
