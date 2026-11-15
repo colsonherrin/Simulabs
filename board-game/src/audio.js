@@ -97,64 +97,133 @@ export function playHit() {
   ring([620, 1490, 2310], 0.25, 0.05);
 }
 
-// A string released: a low pluck with the arrow's swish leaving the bow.
-export function playArrow(volume = 1) {
-  if (muted) return;
-  playTone(118, 0.22, 'triangle', 0.16 * volume, 92);
-  playTone(236, 0.12, 'sine', 0.06 * volume, 180);
-  bandNoise('bandpass', 2600, 900, 0.22, 0.09 * volume, 0.8);
-  bandNoise('bandpass', 3600, 1400, 0.4, 0.07 * volume, 2.5); // the arrow hissing away
-}
-
-// An arrow whizzing past your head: a hiss of air that rises as it comes, sweeps from one ear to
-// the other, and drops in pitch as it goes by (the Doppler fall), with the thrum of the shaft under it.
-export function playArrowIncoming() {
+// An arrow's flight through the air: band-limited noise (the rush of air)
+// over a thin whistle and a low flutter (the shaft). `arriving` builds up,
+// sweeps from one ear to the other and drops in pitch as it passes you (the
+// Doppler fall); otherwise it starts close and falls away into the distance.
+// Shots and incoming arrows share it, so they sound like the same arrows.
+function airWhoosh({ arriving, dur, level = 1 }) {
   if (muted) return;
   const c = ac();
   const t = c.currentTime;
-  const dur = 0.62;
   const side = Math.random() < 0.5 ? -1 : 1;
   const pan = c.createStereoPanner ? c.createStereoPanner() : null;
   if (pan) {
-    pan.pan.setValueAtTime(-0.9 * side, t);
-    pan.pan.linearRampToValueAtTime(0.9 * side, t + dur);
+    pan.pan.setValueAtTime(arriving ? -0.9 * side : 0, t);
+    pan.pan.linearRampToValueAtTime(arriving ? 0.9 * side : 0.25 * side, t + dur);
     pan.connect(out());
   }
   const dest = pan || out();
-  // The air: band-limited noise, loudest as it passes.
+  const peakAt = arriving ? dur * 0.45 : dur * 0.08;
   const { src } = noise();
-  src.loop = true; // the stored noise is shorter than the pass
+  src.loop = true; // the stored noise is shorter than the flight
   const bp = c.createBiquadFilter();
   bp.type = 'bandpass';
   bp.Q.value = 2.2;
-  bp.frequency.setValueAtTime(2400, t);
-  bp.frequency.linearRampToValueAtTime(4200, t + dur * 0.45);
+  bp.frequency.setValueAtTime(arriving ? 2400 : 4200, t);
+  bp.frequency.linearRampToValueAtTime(4200, t + peakAt);
   bp.frequency.exponentialRampToValueAtTime(900, t + dur);
   const g = c.createGain();
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.34, t + dur * 0.45);
+  g.gain.exponentialRampToValueAtTime(0.34 * level, t + peakAt);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   src.connect(bp);
   bp.connect(g);
   g.connect(dest);
   src.start(t);
   src.stop(t + dur + 0.05);
-  // The shaft: a thin whistle and a low flutter, both falling as it goes by.
-  for (const [type, from, to, level] of [['sine', 2100, 980, 0.05], ['triangle', 240, 120, 0.07]]) {
+  for (const [type, from, to, amp] of [['sine', 2100, 980, 0.05], ['triangle', 240, 120, 0.07]]) {
     const o = c.createOscillator();
     o.type = type;
     o.frequency.setValueAtTime(from, t);
-    o.frequency.setValueAtTime(from, t + dur * 0.4);
+    o.frequency.setValueAtTime(from, t + peakAt);
     o.frequency.exponentialRampToValueAtTime(to, t + dur);
     const og = c.createGain();
     og.gain.setValueAtTime(0.0001, t);
-    og.gain.exponentialRampToValueAtTime(level, t + dur * 0.45);
+    og.gain.exponentialRampToValueAtTime(amp * level, t + peakAt);
     og.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(og);
     og.connect(dest);
     o.start(t);
     o.stop(t + dur + 0.05);
   }
+}
+
+// A string released: a low pluck, then the arrow whooshing away through the air.
+export function playArrow(volume = 1) {
+  if (muted) return;
+  stopBowStretch();
+  playTone(118, 0.22, 'triangle', 0.16 * volume, 92);
+  playTone(236, 0.12, 'sine', 0.06 * volume, 180);
+  airWhoosh({ arriving: false, dur: 0.55, level: volume });
+}
+
+// An arrow coming at you: the same whoosh, building as it comes and passing your ear.
+export function playArrowIncoming() {
+  airWhoosh({ arriving: true, dur: 0.62 });
+}
+
+// The bowstring being drawn: a creak of the limbs and a fibrous strain of
+// the string, louder the faster you pull and deeper as the bow bends. Call
+// every frame with the current draw (0..1); silent when you hold or let go.
+let stretch = null;
+let lastDraw = 0;
+export function bowStretch(draw, dt) {
+  if (muted || !ctx) {
+    lastDraw = draw;
+    return;
+  }
+  const rate = dt > 0 ? (draw - lastDraw) / dt : 0;
+  lastDraw = draw;
+  const level = rate > 0.05 ? Math.min(1, rate * 0.9) * (0.35 + 0.65 * draw) : 0;
+  if (!stretch && level <= 0) return;
+  const c = ac();
+  if (!stretch) {
+    const { src } = noise();
+    src.loop = true;
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 6;
+    const creak = c.createOscillator();
+    creak.type = 'sawtooth';
+    const creakF = c.createBiquadFilter();
+    creakF.type = 'lowpass';
+    creakF.frequency.value = 700;
+    // A slow wobble makes the creak uneven, like wood under load.
+    const wob = c.createOscillator();
+    wob.frequency.value = 23;
+    const wobG = c.createGain();
+    wobG.gain.value = 0.5;
+    const creakAmp = c.createGain();
+    creakAmp.gain.value = 0.5;
+    wob.connect(wobG);
+    wobG.connect(creakAmp.gain);
+    const g = c.createGain();
+    g.gain.value = 0.0001;
+    src.connect(bp);
+    bp.connect(g);
+    creak.connect(creakF);
+    creakF.connect(creakAmp);
+    creakAmp.connect(g);
+    g.connect(out());
+    src.start();
+    creak.start();
+    wob.start();
+    stretch = { src, creak, wob, bp, g };
+  }
+  const t = c.currentTime;
+  stretch.bp.frequency.setTargetAtTime(500 + draw * 1400, t, 0.03);
+  stretch.creak.frequency.setTargetAtTime(70 + draw * 60, t, 0.03);
+  stretch.g.gain.setTargetAtTime(Math.max(0.0001, level * 0.22), t, 0.05);
+  if (level <= 0) stopBowStretch();
+}
+export function stopBowStretch() {
+  if (!stretch || !ctx) return;
+  const s = stretch;
+  stretch = null;
+  const t = ctx.currentTime;
+  s.g.gain.setTargetAtTime(0.0001, t, 0.04);
+  for (const node of [s.src, s.creak, s.wob]) node.stop(t + 0.25);
 }
 
 // Steel on steel: inharmonic ringing partials struck hard, with a bright
@@ -176,6 +245,15 @@ function ring(partials, dur, gain, delay = 0) {
     o.start(now);
     o.stop(now + dur + 0.05);
   });
+}
+
+// Blades meeting, or an arrow knocked aside: a bright, short metallic clink
+// (lighter and higher than a full clang).
+export function playClink() {
+  if (muted) return;
+  const base = 2300 + Math.random() * 500;
+  ring([base, base * 1.48, base * 2.12, base * 2.9], 0.38, 0.12);
+  bandNoise('highpass', 8000, 4000, 0.04, 0.16, 0.7);
 }
 
 export function playClang() {
