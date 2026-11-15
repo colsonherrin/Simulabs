@@ -54,6 +54,15 @@
           <button id="btn-play" type="button">Play here</button>
           <button id="btn-online" type="button">Play online</button>
         </div>
+        <div class="sim-voice">
+          <p class="note"><strong>Sim</strong> plays Violet against you and teaches you as you go.</p>
+          <div class="online-row">
+            <input id="sim-key" type="password" autocomplete="off" placeholder="OpenAI key (sk-…) for her voice" aria-label="OpenAI key" />
+            <button id="sim-key-save" type="button">Save</button>
+            <button id="btn-sim" type="button">Talk to Sim</button>
+          </div>
+          <p id="sim-status" class="note" aria-live="polite"></p>
+        </div>
         <p id="xr-note" class="note">On a phone, run <code>npm run dev:ar</code> and open the https address so the headset or browser can start AR.</p>
       </section>
 

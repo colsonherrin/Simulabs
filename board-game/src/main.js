@@ -13,6 +13,7 @@ import {
 import { createTabletop, SQ, squareLocal } from './tabletop.js';
 import { createCombat, INLINE_ARENA } from './combat.js';
 import { chooseMove } from './ai.js';
+import { createSim } from './sim.js';
 import { cleanCode, makeCode, openRoom } from './net.js';
 import {
   isMuted,
@@ -288,6 +289,40 @@ const tabletop = createTabletop(scene, {
   show3DEnd: () => renderer.xr.isPresenting,
 });
 const { board, diorama, room, pickables } = tabletop;
+
+// Sim: the Simulacra character standing across the board, playing Violet and coaching, with a
+// live voice when an OpenAI key has been given. She is there whenever you play the computer.
+const sim = createSim({
+  scene,
+  board,
+  getCamera: () => (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera),
+  getGame: () => game,
+  human: 0,
+  say: (text) => toast(text),
+});
+const simPlays = () => vsComputer && !online;
+let simGreeted = -1;
+function simGreet() {
+  if (!simPlays() || simGreeted === epoch || game.phase !== 'play') return;
+  simGreeted = epoch;
+  sim.gameStarted();
+}
+const boardCopy = () => game.board.map((row) => row.slice());
+async function talkToSim() {
+  const status = $('sim-status');
+  if (!sim.hasKey()) {
+    status.textContent = "Paste an OpenAI key above to give Sim her voice. Without one she plays and coaches in text.";
+    return;
+  }
+  status.textContent = 'Connecting Sim’s voice…';
+  const live = await sim.startVoice();
+  status.textContent = live ? 'Sim’s voice is live: just talk to her.' : `Sim’s voice could not start (${sim.voiceProblem() || 'unknown reason'}). She will coach in text.`;
+  $('btn-sim').textContent = live ? 'Sim: voice on' : 'Talk to Sim';
+  if (live) {
+    simGreeted = -1;
+    if (!menu) simGreet();
+  }
+}
 
 const fadeMat = new THREE.MeshBasicMaterial({
   color: 0x07060a,
@@ -681,6 +716,7 @@ function hideGameOver() {
 
 function settle(info) {
   if (info?.skipped != null && !info.draw) toast(`${SIDE_NAME[info.skipped]} has no move`);
+  if (info?.draw && simPlays()) sim.gameOver(null);
   tabletop.refresh(game);
   updateHUD();
   if (game.phase === 'over') showGameOver();
@@ -696,7 +732,7 @@ function scheduleComputer() {
   const token = epoch;
   aiTimer = setTimeout(() => {
     if (token !== epoch || !computersTurn()) return;
-    const action = chooseMove(game);
+    const action = sim.chooseMove(game) || chooseMove(game);
     if (!action) return;
     game.selected = { r: action.from.r, c: action.from.c };
     playTick();
@@ -704,8 +740,12 @@ function scheduleComputer() {
     updateHUD();
     aiTimer = setTimeout(() => {
       if (token !== epoch || !computersTurn()) return;
+      const before = boardCopy();
+      const strike = action.attack && before[action.to.r][action.to.c]?.type === 'X';
       if (action.attack) doAttack(action.to.r, action.to.c);
       else doMove(action.to.r, action.to.c);
+      // A duel is announced by doAttack and a win by the game-over report; a plain move or strike here.
+      if (action.reason && !action.attack && !strike) sim.sheMoved(before, action);
     }, 220);
   }, 380);
 }
@@ -723,16 +763,19 @@ function describe(piece) {
 function doMove(r, c) {
   const from = game.selected;
   const piece = game.board[from.r][from.c];
+  const simNote = simPlays() && piece.side !== COMPUTER_SIDE ? sim.userMoved(game.board, { from: { r: from.r, c: from.c }, to: { r, c }, attack: false }) : null;
   game.board[r][c] = piece;
   game.board[from.r][from.c] = null;
   lastMove = `${describe(piece)} ${squareName(from.r, from.c)} → ${squareName(r, c)}`;
   game.moveNo = (game.moveNo || 1) + 1;
   settle(advanceTurn(game));
+  sim.tell(simNote);
   sendAction('move', { from: { r: from.r, c: from.c }, to: { r, c } });
 }
 
 function finishCombat(result) {
-  const { from, to, defending } = pending || {};
+  const { from, to, defending, duel } = pending || {};
+  if (duel) sim.duelEnded(duel.humanType, duel.foeType, !!result);
   // When you are defending, the clash is fought from your side: your win
   // means the attacker loses.
   const win = defending ? !result : result;
@@ -777,13 +820,16 @@ function doAttack(r, c) {
     playSfx('ping');
     tabletop.refresh(game);
     updateHUD();
+    if (simPlays()) sim.gameOver(attacker.side);
     sendAction('strike', { from: { r: from.r, c: from.c }, to: { r, c } });
     return;
   }
   if (online && !applyingRemote) online.send({ t: 'action', kind: 'fighting', from: { r: from.r, c: from.c }, to: { r, c } });
   const token = ++epoch;
   const defending = vsComputer && attacker.side === COMPUTER_SIDE;
-  pending = { from: { r: from.r, c: from.c }, to: { r, c }, defending };
+  const duel = simPlays() ? (defending ? { humanType: defender.type, foeType: attacker.type } : { humanType: attacker.type, foeType: defender.type }) : null;
+  if (duel) sim.duelStarting(duel.humanType, duel.foeType, defending);
+  pending = { from: { r: from.r, c: from.c }, to: { r, c }, defending, duel };
   game.selected = null;
   game.phase = 'combat';
   tabletop.refresh(game);
@@ -938,6 +984,7 @@ function placeBoard() {
   applyScenery();
   updateHUD();
   toast('The court is set.');
+  simGreet();
 }
 
 function beginPlacement() {
@@ -989,6 +1036,7 @@ async function enterXR(kind) {
       // Table height above the real floor, or below the eyes without one.
       board.position.set(0, floorBased ? 0.96 : -0.64, -0.85);
       board.quaternion.identity();
+      simGreet();
     } else {
       beginPlacement();
     }
@@ -1038,6 +1086,7 @@ function restart() {
   // Tells the board to turn every piece back to face the other side.
   game.reset = true;
   tabletop.refresh(game);
+  if (!menu && !placing) setTimeout(simGreet, 0);
   game.reset = false;
   updateHUD();
   playSfx('start');
@@ -1268,6 +1317,9 @@ function frame(t, xrFrame) {
   dragSpeed = 0;
 
   tabletop.update(dt, fadeSphere.position);
+  // Sim stands on the floor: the headset's own floor when it gives one, otherwise table height below the board.
+  board.getWorldPosition(_simAt);
+  sim.update(dt, { visible: simPlays() && board.visible && !combatView && !placing, floorY: renderer.xr.isPresenting && floorBased ? 0 : _simAt.y - 0.95 });
   updateHands();
   if (combat.isActive()) combat.update(dt, input);
 
@@ -1278,6 +1330,7 @@ function frame(t, xrFrame) {
 }
 
 let last = 0;
+const _simAt = new THREE.Vector3();
 renderer.setAnimationLoop(frame);
 
 function onResize() {
@@ -1366,7 +1419,21 @@ btnPlay.addEventListener('click', () => {
   menu = false;
   controls.enabled = true;
   updateHUD();
+  simGreet();
 });
+// Sim's voice. The key is kept in this browser and sent only to OpenAI.
+$('sim-key-save').addEventListener('click', () => {
+  const key = $('sim-key').value.trim().replace(/^["']|["']$/g, '');
+  if (key) sim.setKey(key);
+  $('sim-key').value = '';
+  unlockAudio();
+  talkToSim();
+});
+$('btn-sim').addEventListener('click', () => {
+  unlockAudio();
+  talkToSim();
+});
+$('sim-status').textContent = sim.hasKey() ? 'A key is saved. Tap "Talk to Sim" before you start so she can hear you.' : 'Optional: paste an OpenAI key so Sim can talk with you in real time.';
 btnAr.addEventListener('click', () => enterXR('ar'));
 btnVr.addEventListener('click', () => enterXR('vr'));
 btnArMini.addEventListener('click', () => enterXR('ar'));
@@ -1611,3 +1678,6 @@ if (import.meta.env.DEV) {
     },
   };
 }
+
+// For automated checks and for poking at the game from the browser console.
+window.crownfall = { THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
