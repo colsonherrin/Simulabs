@@ -414,6 +414,10 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         sinceShot: 9,
         seed: i,
         dying: 0,
+        dodgeT: 0,
+        dodgeX: 0,
+        dodgeZ: 0,
+        nextDodge: 0.4 + Math.random() * 1.4,
       });
     }
   }
@@ -1486,6 +1490,13 @@ export function createCombat({ scene, camera, renderer, hooks }) {
           rig?.drive(dt, { action: 'run', speed: 4, look: _camPos });
           continue;
         }
+        e.nextDodge -= dt;
+        if (e.nextDodge <= 0) {
+          const side = Math.random() < 0.5 ? -1 : 1;
+          dodge(e, side, (Math.random() - 0.5) * 0.35, 0.26 + Math.random() * 0.16, 4);
+          e.nextDodge = 0.8 + Math.random() * 1.7;
+          continue;
+        }
         const draw = e.cooldown < 0.7 ? 1 - Math.max(0, e.cooldown) / 0.7 : 0;
         e.sinceShot += dt;
         rig?.drive(dt, { action: 'archer', draw, sinceShot: e.sinceShot, aim: _aimWorld });
@@ -1532,7 +1543,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         arrow.tried ||= new Set();
         const spd = arrow.vel.length() || 1;
         for (const e of enemies) {
-          if (!e.alive || arrow.tried.has(e) || e.dodgeT > 0) continue;
+          if (!e.alive || e.kind === 'archer' || arrow.tried.has(e) || e.dodgeT > 0) continue;
           const rx = e.mesh.position.x - arrow.mesh.position.x;
           const rz = e.mesh.position.z - arrow.mesh.position.z;
           const vx = arrow.vel.x / spd;
