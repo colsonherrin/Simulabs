@@ -12,6 +12,9 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
+    <script>
+      if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+    </script>
     <div id="overlay">
       <div id="hurt"></div>
       <div id="fade"><p id="fade-text"></p></div>
