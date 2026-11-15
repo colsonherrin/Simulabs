@@ -14,6 +14,7 @@ import { createTabletop, SQ, squareLocal } from './tabletop.js';
 import { createCombat, INLINE_ARENA } from './combat.js';
 import { chooseMove } from './ai.js';
 import { createSim } from './sim.js';
+import { createCastle } from './castle.js';
 import { cleanCode, makeCode, openRoom } from './net.js';
 import { VERSION } from './version.js';
 import {
@@ -398,6 +399,11 @@ let placing = false;
 // In AR Sim is met before any game: she is in the room in everyday clothes, walks and talks, and
 // the board only appears (and she only dresses for court) when the player asks to play.
 let prelude = false;
+// The game itself is played on a castle terrace at sunset, above a kingdom. In AR this world is
+// drawn solid around the player when the game starts, replacing the view of their room.
+const castle = createCastle();
+scene.add(castle.world);
+let inCastle = false;
 let xrKind = null;
 let needSeat = false;
 const _seatQ = new THREE.Quaternion();
@@ -688,6 +694,7 @@ function onCombatView(enter) {
 }
 
 function applyScenery() {
+  castle.world.visible = inCastle && !combatView;
   if (combatView) {
     board.visible = false;
     diorama.visible = false;
@@ -1265,6 +1272,9 @@ function startGameHere() {
   board.position.y = renderer.xr.isPresenting && floorBased ? 0.72 : _cam.y - 0.6;
   board.quaternion.identity();
   faceBoardToward(_cam.x, _cam.z);
+  // Into the castle: the terrace is laid on the player's own floor, its open side the way they face.
+  castle.placeAround(_cam.x, renderer.xr.isPresenting && floorBased ? 0 : board.position.y - 0.72, _cam.z, _fwd.x, _fwd.z);
+  inCastle = true;
   prelude = false;
   applyScenery();
   updateHUD();
@@ -1349,6 +1359,7 @@ function onSessionEnd() {
   xrKind = null;
   placing = false;
   prelude = false;
+  inCastle = false;
   hitTestSource = null;
   hitTestRequested = false;
   if (!wasFighting) {
@@ -1644,6 +1655,7 @@ function frame(t, xrFrame) {
   mouseMag = 0;
   dragSpeed = 0;
 
+  if (inCastle) castle.update(now / 1000);
   tabletop.update(dt, fadeSphere.position);
   // Sim stands on the floor: the headset's own floor when it gives one, otherwise table height below the board.
   board.getWorldPosition(_simAt);
@@ -1990,4 +2002,4 @@ if (import.meta.env.DEV) {
 }
 
 // For automated checks and for poking at the game from the browser console.
-window.crownfall = { startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
+window.crownfall = { beginPrelude, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
