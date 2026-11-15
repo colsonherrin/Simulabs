@@ -1487,7 +1487,8 @@ function frame(t, xrFrame) {
   for (const controller of controllers) {
     const laser = controller.getObjectByName('laser');
     if (!laser) continue;
-    laser.visible = renderer.xr.isPresenting && game.phase !== 'combat';
+    const hand = controller.userData.handedness;
+    laser.visible = renderer.xr.isPresenting && game.phase !== 'combat' && (!clickHand || hand === clickHand);
     if (!laser.visible) continue;
     const line = laser.children[0];
     laser.updateWorldMatrix(true, false);
