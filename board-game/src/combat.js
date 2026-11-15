@@ -8,7 +8,7 @@ import {
   createSoldier,
   setBowString,
 } from './pieces.js';
-import { playArrow, playArrowIncoming, playClang, playDeflect, playHit, playHurt, playShout, playWhoosh } from './audio.js';
+import { bowStretch, playArrow, playArrowIncoming, playClang, playClink, playHit, playHurt, playShout, playWhoosh, stopBowStretch } from './audio.js';
 import { bowGrip, fist, isTracked, pinch, swordGrip, wrist } from './handgrip.js';
 import { createWarZone, makeSkyEnvironment } from './war.js';
 import { startWarAmbience, stopWarAmbience } from './audio.js';
@@ -471,7 +471,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       }
     }
     // Cutting down a swordsman means beating his blade: steel rings on steel.
-    if (usesSword() && e.kind === 'sword') playClang();
+    if (usesSword() && e.kind === 'sword') playClink();
     playHit();
     hooks.haptic?.(0.7);
     // Browsers refuse vibration until the page has been tapped.
@@ -526,10 +526,12 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     return distPointSeg(_shieldP, from, arrow.mesh.position) < 0.36;
   }
 
-  function blockHit(x, y, z) {
+  function blockHit(x, y, z, arrow = false) {
     shieldPosLocal(_shieldP);
     sparks.burst(_shieldP.lengthSq() > 0 ? _shieldP : _local.set(x, y, z), 0xfff0c0, 12, 3);
-    playDeflect();
+    // An arrow knocked aside clinks; a sword blow on the shield clangs.
+    if (arrow) playClink();
+    else playClang();
     hooks.haptic?.(0.7);
     blocks += 1;
   }
@@ -544,7 +546,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     const parried = usesSword() && sword.visible && (scripted ? hot > 0 : distPointSeg(_cut, _base, _tip) < 0.35);
     if (parried) {
       sparks.burst(_cut, 0xfff0c0, 14, 3.2);
-      playClang();
+      playClink();
       hooks.haptic?.(0.8);
       e.windup = -0.5;
       e.mesh.position.x -= (_dir.x / dist) * 0.3;
@@ -635,7 +637,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     arrow.fromPlayer = false;
     arrow.mesh.quaternion.setFromUnitVectors(_forward, _dir);
     sparks.burst(arrow.mesh.position, 0xfff2c8, 6, 2.4);
-    playDeflect();
+    playClink();
     hooks.haptic?.(0.45);
   }
 
@@ -777,6 +779,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   }
 
   function teardown() {
+    stopBowStretch();
     stopWarAmbience();
     setLock(null);
     autoDraw = false;
@@ -1390,6 +1393,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       }
     }
     if (!usesSword()) reload = Math.max(0, reload - dt);
+    // The bowstring creaks and strains while it is being pulled back.
+    bowStretch(usesSword() ? 0 : draw, dt);
 
     const melee = mode === 'sword-melee' || mode === 'bow-melee';
     if (melee) {
@@ -1661,7 +1666,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
               other.alive = false;
               arrow.alive = false;
               sparks.burst(arrow.mesh.position, 0xfff6d2, 8, 3);
-              playDeflect();
+              playClink();
             }
           }
         }
@@ -1684,9 +1689,9 @@ export function createCombat({ scene, camera, renderer, hooks }) {
 
       if (arrow.alive && !arrow.fromPlayer && !arrow.reflected && arrow.age > 0.12 && shieldStops(arrow)) {
         arrow.alive = false;
-        blockHit(arrow.mesh.position.x, arrow.mesh.position.y, arrow.mesh.position.z);
+        blockHit(arrow.mesh.position.x, arrow.mesh.position.y, arrow.mesh.position.z, true);
       }
-      // An enemy arrow coming at you whistles as it closes in.
+      // An enemy arrow coming at you whooshes as it closes in.
       if (arrow.alive && !arrow.fromPlayer && !arrow.reflected && !arrow.whistled && arrow.mesh.position.distanceTo(_chest) < 5) {
         arrow.whistled = true;
         playArrowIncoming();
