@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { SimulacraCore, xrToProtocol, protocolToXr } from '../spectacles/Assets/Scripts/SimulacraCore.ts';
 import { startLocal } from './local-backend.ts';
 import { createAvatar } from './avatar.js';
@@ -35,8 +36,14 @@ const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerH
 camera.position.set(0, 1.6, 1.2);
 camera.rotation.order = 'YXZ';
 scene.add(camera);
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f98, 1.6));
-const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+// Soft light from all round (an indoor studio) plus one gentle key light: skin and cloth read as
+// materials instead of flat colour, which matters more to looking real than polygon count does.
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+scene.environmentIntensity = 0.75;
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f98, 0.15));
+const sun = new THREE.DirectionalLight(0xfff4e6, 0.9);
 sun.position.set(1.5, 3, 2);
 scene.add(sun);
 
@@ -453,7 +460,7 @@ function connect() {
 
 // ---------------------------------------------------------------- avatar
 
-const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase: './avatar/', height: Number(params.get('height')) || 1.7, placeholder: params.get('avatar') === 'placeholder', lite: params.has('lite') ? params.get('lite') !== '0' : /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent) });
+const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase: './avatar/', height: Number(params.get('height')) || 1.7, placeholder: params.get('avatar') === 'placeholder', mocap: params.get('mocap') !== '0', lite: params.has('lite') ? params.get('lite') !== '0' : /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent) });
 const avatarRoot = avatar.root;
 const body = avatar.body;
 const loadAvatar = avatar.load;
