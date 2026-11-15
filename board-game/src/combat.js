@@ -296,7 +296,10 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       _camDir.y = 0;
       if (_camDir.lengthSq() < 1e-4) _camDir.set(0, 0, -1);
       _camDir.normalize();
-      group.position.set(_camPos.x, _camPos.y - 1.6, _camPos.z);
+      // On a floor-based reference space y = 0 is the real floor; otherwise
+      // assume the head is 1.6 m up.
+      const floorY = hooks.floorBased?.() ? 0 : _camPos.y - 1.6;
+      group.position.set(_camPos.x, floorY, _camPos.z);
       group.rotation.y = Math.atan2(-_camDir.x, -_camDir.z);
     } else {
       group.position.set(INLINE_ARENA.x, INLINE_ARENA.y, INLINE_ARENA.z);
