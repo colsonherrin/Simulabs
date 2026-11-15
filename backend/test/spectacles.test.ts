@@ -176,7 +176,7 @@ test('spectacles core: blocked and unknown targets fail with a reason; microphon
   assert.ok(dev.flat(dev.core.avatar.pos, { x: 0, y: 0, z: 2.6 }) < 1.3);
 
   act({ id: 'u3', action: 'scan_surroundings' });
-  assert.match(result('u3').reason, /not available on this device/);
+  assert.match(result('u3').reason, /camera is not available/);
   act({ id: 'u4', action: 'gesture', params: { type: 'backflip' } });
   assert.equal(result('u4').status, 'failed');
   act({ id: 'u5', action: 'gesture', params: { type: 'wave' } });
@@ -258,6 +258,41 @@ test('life between requests: strolls on the floor when idle, turns to the user w
     await dev.run(30, () => a.state === 'walking');
     dev.core.onMessage(JSON.stringify({ type: 'action', id: 'r1', action: 'approach_user' }));
     assert.ok(await dev.run(12, () => /approach_user user ok/.test(dev.core.lastAction)), dev.core.lastAction);
+  } finally {
+    dev.ws.close();
+    await srv.close();
+  }
+});
+
+test('personal space: never walks through the user, and steps back if the user walks into it', async () => {
+  const srv = await startServer({ port: 0, brain: 'mock', realtimeModel: 'x', realtimeVoice: 'v', visionModel: 'x', memoryPath: null, quiet: true });
+  const dev = virtualRoom(srv.port);
+  try {
+    await dev.run(0.5, () => dev.core.brain === 'mock');
+    const a = dev.core.avatar;
+    // The user stands between the character and a lamp: the straight line goes through them.
+    dev.room.head = { x: 1.5, y: 0.2, z: -1.5 };
+    dev.core.placed = true;
+    a.pos = { x: 1.5, y: -1.4, z: -2.7 };
+    dev.core.register('lamp', { x: 1.5, y: -1.0, z: 0.4 }, 'manual');
+    dev.core.onMessage(JSON.stringify({ type: 'action', id: 'w1', action: 'walk_to', target_id: 'lamp_1' }));
+    let closest = 99;
+    for (let i = 0; i < 200 && !/walk_to lamp_1 (ok|FAILED)/.test(dev.core.lastAction); i++) {
+      await dev.run(0.1);
+      closest = Math.min(closest, dev.flat(a.pos, dev.room.head));
+    }
+    assert.match(dev.core.lastAction, /walk_to lamp_1 ok/);
+    assert.ok(closest >= dev.core.personalSpace - 0.05, `went around the user (closest ${closest.toFixed(2)} m)`);
+
+    // Asked to come over, it stops at talking distance, not on top of the user.
+    dev.core.onMessage(JSON.stringify({ type: 'action', id: 'a1', action: 'approach_user' }));
+    assert.ok(await dev.run(12, () => /approach_user user ok/.test(dev.core.lastAction)), dev.core.lastAction);
+    assert.ok(dev.flat(a.pos, dev.room.head) > 1.0);
+
+    // The user walks right up to it: it backs off.
+    dev.room.head = { x: a.pos.x + 0.2, y: 0.2, z: a.pos.z };
+    await dev.run(3);
+    assert.ok(dev.flat(a.pos, dev.room.head) >= dev.core.personalSpace, `stepped back to ${dev.flat(a.pos, dev.room.head).toFixed(2)} m`);
   } finally {
     dev.ws.close();
     await srv.close();

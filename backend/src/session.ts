@@ -199,6 +199,9 @@ export class Session implements DeviceLink {
         p.resolve(msg);
         break;
       }
+      case 'view':
+        this.brain.onView?.(msg.jpeg);
+        break;
       case 'frame':
         void this.onFrame(msg.id, msg.jpeg);
         break;

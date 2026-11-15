@@ -32,6 +32,12 @@ export interface Host {
   /** Drop queued speech. */
   stopAudio(): void;
   log(message: string): void;
+  /**
+   * Optional: a still of what the user sees right now (base64 JPEG), with a way to turn a point
+   * in that image (0..1 from the top-left) into a position in the room, or null where it lands on
+   * nothing known. Null when no camera is available at the moment.
+   */
+  captureView?(): { jpeg: string; locate(x: number, y: number): Vec | null } | null;
   /** Optional: where the floor and obstacle knowledge comes from, and how many obstacles are known. */
   roomInfo?(): { source: string; obstacles: number };
 }
@@ -197,8 +203,66 @@ export class SimulacraCore {
   onOpen(): void {
     this.connected = true;
     this.lastError = '';
-    this.sendJson({ type: 'hello', protocol: 1, device: this.deviceName, capabilities: { vision: false, navmesh: false } });
+    this.announce();
     this.nextWorld = 0;
+  }
+
+  /** Tell the mind what this device can do. Call again when that changes (the camera was switched on). */
+  announce(): void {
+    this.sendJson({ type: 'hello', protocol: 1, device: this.deviceName, capabilities: { vision: this.canSee, navmesh: false } });
+  }
+
+  /** Set by the host while a camera is available. */
+  canSee = false;
+  /** Seconds between looks through the camera while nothing else is going on (0 = only when asked). */
+  autoLook = 0;
+  private lookIn = 3;
+  private lookSeq = 0;
+  private looking: { id: string; locate: (x: number, y: number) => Vec | null; reply: ((ok: boolean, reason: string, data?: object) => void) | null; until: number } | null = null;
+  private lastViewAt = -100;
+
+  /** Take a look: send the camera's view for recognition. `reply` reports the outcome of a requested look. */
+  private look(reply: ((ok: boolean, reason: string, data?: object) => void) | null): boolean {
+    const view = this.canSee && this.host.captureView ? this.host.captureView() : null;
+    if (!view) {
+      if (reply) reply(false, 'the camera is not available right now; ask the user to look at things and name them');
+      return false;
+    }
+    if (this.looking && this.looking.reply) this.looking.reply(false, 'superseded by a newer look');
+    const id = 'look' + ++this.lookSeq;
+    this.looking = { id: id, locate: view.locate, reply: reply, until: this.clock + 25 };
+    this.sendJson({ type: 'frame', id: id, jpeg: view.jpeg });
+    return true;
+  }
+
+  /** What was recognised in the view: place each thing in the room where its image point lands. */
+  private sawThings(m: any): void {
+    const l = this.looking;
+    if (!l || m.frameId !== l.id) return;
+    this.looking = null;
+    if (m.error) {
+      if (l.reply) l.reply(false, 'recognition failed: ' + m.error);
+      return;
+    }
+    const found: string[] = [];
+    let unplaced = 0;
+    const items = m.items || [];
+    for (let i = 0; i < items.length; i++) {
+      const pos = l.locate(Number(items[i].x), Number(items[i].y));
+      if (!pos) {
+        unplaced++;
+        continue;
+      }
+      // Something the room scan or the user already named there is the same thing: keep theirs.
+      let known = false;
+      for (let k = 0; k < this.objects.length; k++) if (this.objects[k].source !== 'detected' && flat(this.objects[k].pos, pos) < 0.6) known = true;
+      if (known) continue;
+      const o = this.register(String(items[i].label), pos, 'detected');
+      o.confidence = Number(items[i].confidence) || 0.5;
+      found.push(o.id);
+    }
+    this.nextWorld = 0;
+    if (l.reply) l.reply(true, '', { seen: found, could_not_place: unplaced, note: 'Positions are estimated from the camera view and are approximate.' });
   }
 
   onClose(): void {
@@ -230,10 +294,23 @@ export class SimulacraCore {
       case 'action':
         this.handleAction(m);
         break;
+      case 'detections':
+        this.sawThings(m);
+        break;
       case 'state':
         // The user started talking: stop strolling and turn to them, like a person would.
-        if (m.status === 'listening') this.attend();
+        // Talking with the user: stop strolling and turn to them, like a person would.
+        if (m.status === 'listening' || m.status === 'speaking') this.attend();
+        // Let the mind see what the user sees as they start to speak.
+        if (m.status === 'listening' && this.canSee && this.host.captureView && this.clock - this.lastViewAt > 4) {
+          const view = this.host.captureView();
+          if (view) {
+            this.lastViewAt = this.clock;
+            this.sendJson({ type: 'view', jpeg: view.jpeg });
+          }
+        }
         if (m.status !== 'idle') this.idleFor = 0;
+        this.status = String(m.status);
         break;
       case 'transcript':
         this.lastTranscript = (m.role === 'user' ? 'You: ' : 'Sim: ') + String(m.text);
@@ -349,7 +426,7 @@ export class SimulacraCore {
       for (let i = 0; i < 9; i++) {
         const a = base + Math.ceil(i / 2) * 0.44 * (i % 2 === 0 ? -1 : 1);
         const p = { x: user.x + Math.sin(a) * dists[d], y: floorY, z: user.z + Math.cos(a) * dists[d] };
-        if (!this.host.isFloor(p) || !this.clearLine(user, p)) continue;
+        if (!this.host.isFloor(p) || !this.clearLine(user, p, true)) continue;
         this.avatar.pos = p;
         this.avatar.yaw = Math.atan2(user.x - p.x, user.z - p.z);
         this.placed = true;
@@ -366,11 +443,28 @@ export class SimulacraCore {
   }
 
   /** Every 25 cm along a straight line must be real floor. */
-  private clearLine(a: Vec, b: Vec): boolean {
+  /** Metres kept clear around the user: the character never stands in, or walks through, this circle. */
+  personalSpace = 0.65;
+  /** What the mind is doing, as last reported: idle | listening | thinking | speaking. */
+  status = 'idle';
+
+  /**
+   * Can the character be here? Real floor, and outside the user's personal space. A step that
+   * moves it further from the user is always allowed, so it can get out if the user walks into it.
+   */
+  private walkable(p: Vec): boolean {
+    if (!this.host.isFloor(p)) return false;
+    const u = this.host.headPosition();
+    const d = flat(p, u);
+    return d > this.personalSpace || d > flat(this.avatar.pos, u) + 0.001;
+  }
+
+  private clearLine(a: Vec, b: Vec, floorOnly?: boolean): boolean {
     const n = Math.max(1, Math.ceil(flat(a, b) / 0.25));
     for (let i = 1; i <= n; i++) {
       const t = i / n;
-      if (!this.host.isFloor({ x: a.x + (b.x - a.x) * t, y: a.y, z: a.z + (b.z - a.z) * t })) return false;
+      const p = { x: a.x + (b.x - a.x) * t, y: a.y, z: a.z + (b.z - a.z) * t };
+      if (floorOnly ? !this.host.isFloor(p) : !this.walkable(p)) return false;
     }
     return true;
   }
@@ -393,7 +487,7 @@ export class SimulacraCore {
     const free = (i: number, j: number): boolean => {
       if (Math.abs(i) > span || Math.abs(j) > span) return false;
       const k = key(i, j);
-      if (walk[k] === undefined) walk[k] = (i === 0 && j === 0) || this.host.isFloor(at(i, j));
+      if (walk[k] === undefined) walk[k] = (i === 0 && j === 0) || this.walkable(at(i, j));
       return walk[k];
     };
     if (!free(gi, gj)) return null;
@@ -469,7 +563,7 @@ export class SimulacraCore {
       for (let i = 0; i < 12; i++) {
         const a = base + Math.ceil(i / 2) * (Math.PI / 6) * (i % 2 === 0 ? -1 : 1);
         const p = { x: target.x + Math.sin(a) * radii[r], y: from.y, z: target.z + Math.cos(a) * radii[r] };
-        if (!this.host.isFloor(p)) continue;
+        if (!this.walkable(p)) continue;
         const path = this.planPath(from, p);
         if (path === null) continue;
         this.planned = path;
@@ -520,7 +614,7 @@ export class SimulacraCore {
         const a = Math.random() * Math.PI * 2;
         const r = 1.5 + Math.random() * 1.3;
         const p = { x: user.x + Math.sin(a) * r, y: from.y, z: user.z + Math.cos(a) * r };
-        if (flat(p, from) < 0.8 || !this.host.isFloor(p)) continue;
+        if (flat(p, from) < 0.8 || !this.walkable(p)) continue;
         const path = this.planPath(from, p);
         if (path) {
           this.planned = path;
@@ -629,7 +723,10 @@ export class SimulacraCore {
       this.nextWorld = 0;
       return reply(true, '', { id: o.id, label: o.label, origin: 'registered by the user, not camera-detected' });
     }
-    if (action === 'scan_surroundings') return reply(false, 'camera object detection is not available on this device; ask the user to look at things and name them');
+    if (action === 'scan_surroundings') {
+      this.look(reply);
+      return;
+    }
     reply(false, "this device does not implement action '" + action + "'");
   }
 
@@ -664,7 +761,7 @@ export class SimulacraCore {
       // Look a body-width ahead as well as at the next step, so the avatar does not graze corners.
       const probe = { x: this.avatar.pos.x + Math.sin(heading) * 0.3, y: this.avatar.pos.y, z: this.avatar.pos.z + Math.cos(heading) * 0.3 };
       const next = { x: this.avatar.pos.x + Math.sin(heading) * maxStep, y: this.avatar.pos.y, z: this.avatar.pos.z + Math.cos(heading) * maxStep };
-      if (!this.host.isFloor(next) || !this.host.isFloor(probe)) continue;
+      if (!this.walkable(next) || !this.walkable(probe)) continue;
       if (offsets[i] !== 0) {
         this.sideBias = offsets[i] > 0 ? 1 : -1;
         this.sideBiasFor = 1.5;
@@ -745,7 +842,40 @@ export class SimulacraCore {
     }
     this.avatar.speed01 = dt > 0 ? Math.min(1, moved / dt / this.walkSpeed) : 0;
 
-    if (this.wander && this.placed && !this.goal && !this.following && this.speakingFor <= 0) {
+    // Looking around through the camera, unprompted, while nothing else is going on.
+    if (this.looking && this.clock > this.looking.until) {
+      if (this.looking.reply) this.looking.reply(false, 'recognition took too long');
+      this.looking = null;
+    }
+    if (this.autoLook > 0 && this.connected && this.canSee && !this.looking) {
+      this.lookIn -= dt;
+      if (this.lookIn <= 0 && this.status === 'idle') {
+        this.lookIn = this.autoLook;
+        this.look(null);
+      }
+    }
+
+    // The user stepped into the character: it takes a step back rather than stand inside them.
+    if (this.placed && !this.goal && !this.following) {
+      const u = this.userFloor();
+      const d = flat(this.avatar.pos, u);
+      if (d < this.personalSpace - 0.1 && d > 0.01) {
+        const k = (this.personalSpace + 0.35) / d;
+        const back = { x: u.x + (this.avatar.pos.x - u.x) * k, y: this.avatar.pos.y, z: u.z + (this.avatar.pos.z - u.z) * k };
+        if (this.host.isFloor(back)) {
+          this.goal = back;
+          this.route = [];
+          this.face = u;
+          this.goalTarget = '';
+          this.stuckFor = 0;
+          this.bestDistance = flat(this.avatar.pos, back);
+          this.sideBias = 1; // step straight back without turning away first
+          this.sideBiasFor = 0.5;
+        }
+      }
+    }
+
+    if (this.wander && this.placed && !this.goal && !this.following && this.speakingFor <= 0 && this.status === 'idle') {
       this.idleFor += dt;
       if (this.idleFor > this.wanderAfter) this.startStroll();
     } else if (this.done || this.following || this.speakingFor > 0) this.idleFor = 0;

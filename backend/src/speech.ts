@@ -125,7 +125,7 @@ export class Ears {
     }
     const rms = Math.sqrt(sum / samples);
     const ms = (samples / AUDIO_RATE) * 1000;
-    const loud = rms > Math.max(0.012, v.noise * 3.5);
+    const loud = rms > Math.max(0.008, v.noise * 3.5);
     if (!loud) v.noise += (rms - v.noise) * 0.05;
 
     if (!v.speaking) {

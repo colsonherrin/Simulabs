@@ -81,6 +81,7 @@ export type DeviceMessage =
   | { type: 'world'; world: WorldSnapshot }
   | ActionResult
   | { type: 'frame'; id: string; jpeg: string } // camera frame answering a scan action
+  | { type: 'view'; jpeg: string } // what the user sees right now, for minds that can look at images
   | { type: 'interrupt' }
   // Known events: action_started {id, plan_ms, path_m} - the body began executing an action.
   | { type: 'event'; name: string; data?: Record<string, unknown> };

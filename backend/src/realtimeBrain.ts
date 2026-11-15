@@ -10,6 +10,11 @@ interface Opts {
   voice: string;
   url?: string; // override for tests / proxies
   silenceMs?: number;
+  /**
+   * Another way to reach the service than a server-side WebSocket: in a browser, a WebRTC call,
+   * where the microphone and the voice travel as live audio tracks and only events come through here.
+   */
+  connect?: (handlers: { onMessage(text: string): void; onClose(): void }) => Promise<{ send(text: string): void; close(): void }>;
 }
 
 // The situation is written into the instructions and refreshed whenever the room changes and the
@@ -27,6 +32,7 @@ When an [action_result] arrives, say a few words at most, once, and do not call 
 export class RealtimeBrain implements Brain {
   readonly name = 'realtime';
   private ws: WebSocket | null = null;
+  private call: { send(text: string): void; close(): void } | null = null;
   private closed = false;
   private responseActive = false;
   private wantResponse = false;
@@ -43,6 +49,7 @@ export class RealtimeBrain implements Brain {
   ) {}
 
   start(): Promise<void> {
+    if (this.opts.connect) return this.startCall();
     return new Promise((resolve, reject) => {
       const url = this.opts.url ?? `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(this.opts.model)}`;
       const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${this.opts.apiKey}` } });
@@ -89,8 +96,47 @@ export class RealtimeBrain implements Brain {
     });
   }
 
+  /** Live audio call (browser). Audio is on the call's own tracks; events arrive as text. */
+  private async startCall(): Promise<void> {
+    const call = await this.opts.connect!({
+      onMessage: (text) => {
+        try {
+          this.handle(JSON.parse(text));
+        } catch (e) {
+          this.ctx.log('error', `realtime message handling failed: ${e}`);
+        }
+      },
+      onClose: () => {
+        if (this.closed || this.call !== call) return;
+        this.call = null;
+        this.ctx.log('warn', 'live voice connection lost; reconnecting');
+        const delay = Math.min(8000, 500 * 2 ** this.reconnects++);
+        setTimeout(() => !this.closed && this.startCall().catch((e) => this.ctx.log('error', `live voice reconnect failed: ${e?.message ?? e}`)), delay);
+      },
+    });
+    this.call = call;
+    this.responseActive = false;
+    this.sendSession();
+    this.ctx.log('info', `live voice connected (${this.opts.model})`);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => this.accepted?.('the service did not confirm the session settings'), 4000);
+      this.accepted = (problem) => {
+        this.accepted = null;
+        clearTimeout(timer);
+        if (!problem) {
+          this.reconnects = 0;
+          return resolve();
+        }
+        this.closed = true;
+        call.close();
+        reject(new Error(problem));
+      };
+    });
+  }
+
   private up(event: Record<string, unknown>) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(event));
+    if (this.call) this.call.send(JSON.stringify(event));
+    else if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(event));
   }
 
   private sendSession() {
@@ -102,11 +148,11 @@ export class RealtimeBrain implements Brain {
         output_modalities: ['audio'],
         audio: {
           input: {
-            format: { type: 'audio/pcm', rate: AUDIO_RATE },
+            ...(this.opts.connect ? {} : { format: { type: 'audio/pcm', rate: AUDIO_RATE } }), // a call negotiates its own audio
             transcription: { model: 'gpt-4o-mini-transcribe' },
             turn_detection: { type: 'server_vad', threshold: 0.6, silence_duration_ms: this.opts.silenceMs ?? 350, prefix_padding_ms: 200, create_response: true, interrupt_response: true },
           },
-          output: { format: { type: 'audio/pcm', rate: AUDIO_RATE }, voice: this.opts.voice },
+          output: { ...(this.opts.connect ? {} : { format: { type: 'audio/pcm', rate: AUDIO_RATE } }), voice: this.opts.voice },
         },
         tools: REALTIME_TOOLS,
         tool_choice: 'auto',
@@ -127,6 +173,7 @@ export class RealtimeBrain implements Brain {
   }
 
   onAudio(pcm16: string) {
+    if (this.opts.connect) return; // the microphone is already on the call
     this.up({ type: 'input_audio_buffer.append', audio: pcm16 });
   }
 
@@ -150,6 +197,26 @@ export class RealtimeBrain implements Brain {
     if (respond) this.requestResponse();
   }
 
+
+  private viewSeq = 0;
+  private lastViewId = '';
+  /** Show the model what the user sees. Only the newest view is kept in the conversation. */
+  onView(jpeg: string) {
+    if (this.lastViewId) this.up({ type: 'conversation.item.delete', item_id: this.lastViewId });
+    this.lastViewId = `view_${Date.now().toString(36)}_${++this.viewSeq}`;
+    this.up({
+      type: 'conversation.item.create',
+      item: {
+        id: this.lastViewId,
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: '[view] This is what the user sees through the headset right now (you may be in the picture). Use it to answer questions about what is in front of them. It is not a request.' },
+          { type: 'input_image', image_url: `data:image/jpeg;base64,${jpeg}` },
+        ],
+      },
+    });
+  }
 
   /** Ask for a model turn, but never on top of an active one or over the user's speech. */
   private requestResponse() {
@@ -191,6 +258,16 @@ export class RealtimeBrain implements Brain {
         }
         break;
 
+      // On a call the voice is a live track, so these mark when it starts and stops being heard.
+      case 'output_audio_buffer.started':
+        this.ctx.timer.mark('first_audio');
+        this.ctx.send({ type: 'state', status: 'speaking' });
+        break;
+      case 'output_audio_buffer.stopped':
+      case 'output_audio_buffer.cleared':
+        if (!this.responseActive) this.ctx.send({ type: 'state', status: 'idle' });
+        break;
+
       case 'input_audio_buffer.speech_started':
         this.userSpeaking = true;
         this.refreshContext(); // where everyone is and what the user is looking at, as of this sentence
@@ -226,6 +303,7 @@ export class RealtimeBrain implements Brain {
 
       case 'error': {
         const msg = ev.error?.message ?? JSON.stringify(ev);
+        if (/item.*(not found|does not exist)/i.test(msg)) break; // an old view that was already gone
         // Cancelling when nothing is running is harmless.
         if (/no active response|cancellation failed/i.test(msg)) break;
         if (/active response/i.test(msg)) {
@@ -260,6 +338,7 @@ export class RealtimeBrain implements Brain {
 
   close() {
     this.closed = true;
+    this.call?.close();
     this.ws?.close();
   }
 }
