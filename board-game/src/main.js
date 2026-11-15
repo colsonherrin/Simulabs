@@ -54,8 +54,6 @@ const fadeText = $('fade-text');
 const hurtEl = $('hurt');
 const crosshair = $('crosshair');
 const corner = $('corner');
-const btnAr = $('btn-ar');
-const btnVr = $('btn-vr');
 const btnPlay = $('btn-play');
 const btnAgain = $('btn-again');
 const btnSound = $('btn-sound');
@@ -342,7 +340,7 @@ async function talkToSim() {
   status.textContent = 'Connecting Sim’s voice…';
   const live = await sim.startVoice();
   status.textContent = live ? 'Sim’s voice is live: just talk to her.' : 'Live voice could not start. She will still speak her coaching, but cannot hear you.';
-  $('btn-sim').textContent = live ? 'Sim: voice on' : 'Talk to Sim';
+  if ($('btn-sim')) $('btn-sim').textContent = live ? 'Sim: voice on' : 'Talk to Sim';
   if (live) {
     simGreeted = -1;
     if (!menu) simGreet();
@@ -1337,7 +1335,7 @@ async function enterXR(kind) {
   } catch (err) {
     console.warn(err);
     // Answering the microphone prompt can use up the tap that starting AR needs.
-    toast(sim.voiceState() === 'live' ? 'Sim can hear you now. Press Enter AR once more.' : 'The XR session was blocked.');
+    toast(sim.voiceState() === 'live' ? 'Sim can hear you now. Press Play once more.' : 'The XR session was blocked.');
     xrKind = null;
     applyScenery();
   }
@@ -1753,29 +1751,7 @@ window.addEventListener('keyup', (event) => {
   keys[event.code] = false;
 });
 
-btnPlay.addEventListener('click', () => voiceThenStart(() => {
-  // ?prelude=1 tries the meet-her-first flow on a flat screen (it is how AR always starts).
-  if (new URLSearchParams(location.search).has('prelude') && simPlays()) {
-    controls.enabled = true;
-    beginPrelude();
-    return;
-  }
-  menu = false;
-  controls.enabled = true;
-  updateHUD();
-  simGreet();
-}));
-$('btn-sim').addEventListener('click', () => {
-  unlockAudio();
-  talkToSim();
-});
-sim.canGoLive().then((can) => {
-  $('sim-status').textContent = can
-    ? 'Sim’s live voice is ready: it starts when you tap Talk to Sim.'
-    : 'Live voice is not available. Sim will coach with the browser’s built-in voice.';
-});
-btnAr.addEventListener('click', () => voiceThenStart(() => enterXR('ar')));
-btnVr.addEventListener('click', () => voiceThenStart(() => enterXR('vr')));
+btnPlay.addEventListener('click', () => voiceThenStart(() => enterXR('ar')));
 btnArMini.addEventListener('click', () => enterXR('ar'));
 btnVrMini.addEventListener('click', () => enterXR('vr'));
 btnAgain.addEventListener('click', () => {
@@ -1852,13 +1828,7 @@ async function goOnline(role, code) {
   }
 }
 
-$('btn-online').addEventListener('click', () => {
-  unlockAudio();
-  setOnlineMsg('');
-  showOnlinePanel(true);
-});
-// Back before anyone has joined closes the room, so local play works again.
-$('btn-online-back').addEventListener('click', () => {
+$('btn-online-back')?.addEventListener('click', () => {
   if (online && !opponentHere) leaveOnline(false);
   showOnlinePanel(false);
 });
@@ -1957,16 +1927,14 @@ btnSound.textContent = isMuted() ? 'Sound off' : 'Sound on';
 
 async function detectXR() {
   if (!navigator.xr) {
-    btnAr.disabled = true;
-    btnVr.disabled = true;
+    btnPlay.disabled = true;
     btnArMini.disabled = true;
     btnVrMini.disabled = true;
     return;
   }
   const ar = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
   const vr = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
-  btnAr.disabled = !ar;
-  btnVr.disabled = !vr;
+  btnPlay.disabled = !ar;
   btnArMini.disabled = !ar;
   btnVrMini.disabled = !vr;
 }
