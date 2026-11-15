@@ -1008,11 +1008,46 @@ function onXRSelect(controller) {
   handlePick(pickWithRay());
 }
 
+// The side this viewer plays. Their pieces go on the edge nearest them and
+// the opponent's (the computer's, or the other player's) on the far edge.
+function viewerSide() {
+  return online && mySide != null ? mySide : vsComputer ? 1 - COMPUTER_SIDE : 0;
+}
+
+// Turn the board about its own centre so the viewer's row faces the point
+// (x, z) in world space. Gold's row is the board's +Z edge.
+const _boardUp = new THREE.Vector3(0, 1, 0);
+function faceBoardToward(x, z) {
+  const dx = x - board.position.x;
+  const dz = z - board.position.z;
+  if (dx * dx + dz * dz < 0.04) return false;
+  board.quaternion.setFromAxisAngle(_boardUp, Math.atan2(dx, dz) + (viewerSide() === 1 ? Math.PI : 0));
+  tabletop.setViewerSide?.(viewerSide());
+  return true;
+}
+
+// After the viewer's side changes (joining or leaving an online game).
+function reseat() {
+  if (!renderer.xr.isPresenting) seatFlat();
+  else if (!placing && !combatView) needSeat = true;
+}
+
+// On screen the camera sits on the +Z side of the table.
+function seatFlat() {
+  board.quaternion.setFromAxisAngle(_boardUp, viewerSide() === 1 ? Math.PI : 0);
+  tabletop.setViewerSide?.(viewerSide());
+}
+
 function placeBoard() {
   if (reticle.visible) {
+    // Take the spot from the hit test but not its spin, which is arbitrary:
+    // the board is turned below so your side faces you.
     reticle.matrix.decompose(board.position, board.quaternion, _scale);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(board.quaternion);
     board.position.addScaledVector(up, 0.004);
+    const cam = renderer.xr.getCamera();
+    cam.getWorldPosition(_cam);
+    if (!faceBoardToward(_cam.x, _cam.z)) board.quaternion.identity();
   } else {
     const camObj = renderer.xr.getCamera();
     camObj.getWorldPosition(_cam);
@@ -1022,8 +1057,7 @@ function placeBoard() {
     _fwd.normalize();
     board.position.copy(_cam).addScaledVector(_fwd, 0.75);
     board.position.y -= 0.35;
-    const face = Math.atan2(-_fwd.x, -_fwd.z);
-    board.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), face);
+    faceBoardToward(_cam.x, _cam.z);
   }
   placing = false;
   menu = false;
@@ -1033,8 +1067,8 @@ function placeBoard() {
   simGreet();
 }
 
-// Once, from the headset pose: table in front of the face, Gold on the near
-// edge. Sim is parented to the far edge and does not move after this.
+// Once, from the headset pose: table in front of the face, your pieces on the
+// near edge. Sim stays on the far edge.
 function seatInFront(xrFrame) {
   if (!needSeat || !xrFrame) return;
   const ref = renderer.xr.getReferenceSpace();
@@ -1048,7 +1082,7 @@ function seatInFront(xrFrame) {
   if (_fwd.lengthSq() < 1e-4) _fwd.set(0, 0, -1);
   _fwd.normalize();
   board.position.set(p.x, floorBased ? 0.96 : p.y - 0.64, p.z).addScaledVector(_fwd, 0.9);
-  board.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-_fwd.x, -_fwd.z));
+  faceBoardToward(p.x, p.z);
   needSeat = false;
 }
 
@@ -1129,7 +1163,7 @@ function onSessionEnd() {
   hitTestRequested = false;
   if (!wasFighting) {
     board.position.set(0, 0, 0);
-    board.quaternion.identity();
+    seatFlat();
   } else {
     camera.position.set(INLINE_ARENA.x, INLINE_ARENA.y + INLINE_ARENA.eye, INLINE_ARENA.z);
     camera.rotation.order = 'YXZ';
@@ -1688,6 +1722,7 @@ async function goOnline(role, code) {
     const room = await openRoom({ role, code, onMessage: onNetMessage, onStatus: onNetStatus });
     online = room;
     mySide = room.side;
+    reseat();
     if (role === 'host') {
       onlineShare.classList.remove('hidden');
       onlineCodeEl.textContent = code;
@@ -1717,6 +1752,7 @@ function leaveOnline(tellOpponent = true) {
   online?.close();
   online = null;
   mySide = null;
+  reseat();
   opponentHere = false;
   remoteFight = null;
   hostDealt = false;

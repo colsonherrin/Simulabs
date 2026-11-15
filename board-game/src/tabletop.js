@@ -554,6 +554,10 @@ export function createTabletop(scene, sfx = {}) {
     again,
     turnSprite,
     TOP,
+    // Keep the floating turn sign beyond the far edge from the viewer.
+    setViewerSide(side) {
+      turnSprite.position.z = (side === 1 ? 1 : -1) * (TOP / 2 + 0.16);
+    },
   };
 }
 
