@@ -107,10 +107,10 @@ export function createCastle() {
   world.add(sky);
 
   // Sunset light: warm and low from the sun, cool fill from the opposite sky.
-  const sun = new THREE.DirectionalLight(0xffb070, 1.5);
+  const sun = new THREE.DirectionalLight(0xffb070, 1.05);
   sun.position.copy(SUN).multiplyScalar(30);
   world.add(sun, sun.target);
-  world.add(new THREE.HemisphereLight(0x8a7ab8, 0x3a2a22, 0.3));
+  world.add(new THREE.HemisphereLight(0x8a7ab8, 0x3a2a22, 0.24));
 
   const stone = new THREE.MeshStandardMaterial({ color: 0xa9a196, roughness: 0.95, map: stoneTexture('#9c958b', 'rgba(40,34,30,0.55)') });
   const darkStone = new THREE.MeshStandardMaterial({ color: 0x7d766e, roughness: 0.95, map: stoneTexture('#8b847b', 'rgba(30,26,24,0.6)') });
@@ -194,7 +194,7 @@ export function createCastle() {
     const fire = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.3, 8), new THREE.MeshBasicMaterial({ color: 0xffa238, toneMapped: false }));
     fire.position.set(side * 2.7, 1.42, -1.6);
     fire.userData.flame = side;
-    const glow = new THREE.PointLight(0xff8a3a, 2.4, 7, 1.6);
+    const glow = new THREE.PointLight(0xff8a3a, 1.6, 7, 1.6);
     glow.position.set(side * 2.7, 1.6, -1.6);
     world.add(stand, bowl, fire, glow);
   }

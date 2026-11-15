@@ -313,8 +313,20 @@ const leather = () => new THREE.MeshStandardMaterial({ color: 0x3a2414, roughnes
  */
 export function dressMedieval(avatar) {
   const model = avatar?.body?.model;
-  if (!model || model.userData.medieval) return;
+  if (!model) return;
+  if (model.userData.medieval) {
+    // Already made once: put it back on.
+    const kit = model.userData.medievalKit;
+    if (kit && !kit.on) {
+      kit.on = true;
+      for (const d of kit.dyed) d.apply();
+      for (const o of kit.parts) o.visible = true;
+    }
+    return;
+  }
   model.userData.medieval = true;
+  const kit = { on: true, dyed: [], parts: [] };
+  model.userData.medievalKit = kit;
 
   // Where the left arm runs in the bind pose (the right mirrors it), from
   // the skeleton's own bind matrices.
@@ -346,24 +358,36 @@ export function dressMedieval(avatar) {
       const name = String(m?.name || '').toLowerCase();
       if (!m || name.includes('head') || name.includes('opacity') || m.userData.medieval) continue;
       m.userData.medieval = true;
-      m.onBeforeCompile = (shader) => {
-        shader.uniforms.uShoulder = { value: arm.shoulder };
-        shader.uniforms.uWrist = { value: arm.wrist };
-        shader.uniforms.uWaist = { value: arm.waist };
-        shader.uniforms.uBust = { value: arm.bust };
-        shader.vertexShader = shader.vertexShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vBindPos;')
-          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBindPos = (bindMatrix * vec4(position, 1.0)).xyz;');
-        shader.fragmentShader = shader.fragmentShader
-          .replace('#include <common>', '#include <common>\n' + RECOLOR_HEAD)
-          .replace('#include <map_fragment>', RECOLOR);
+      const own = { onBeforeCompile: m.onBeforeCompile, customProgramCacheKey: m.customProgramCacheKey, normalMap: m.normalMap, roughness: m.roughness };
+      const apply = () => {
+        m.onBeforeCompile = (shader) => {
+          shader.uniforms.uShoulder = { value: arm.shoulder };
+          shader.uniforms.uWrist = { value: arm.wrist };
+          shader.uniforms.uWaist = { value: arm.waist };
+          shader.uniforms.uBust = { value: arm.bust };
+          shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', '#include <common>\nvarying vec3 vBindPos;')
+            .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBindPos = (bindMatrix * vec4(position, 1.0)).xyz;');
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>', '#include <common>\n' + RECOLOR_HEAD)
+            .replace('#include <map_fragment>', RECOLOR);
+        };
+        m.customProgramCacheKey = () => 'medieval-gown-6';
+        // The modern clothes' folds and seams live in the normal map; the
+        // gown is smooth cloth, so leave them out.
+        m.normalMap = null;
+        m.roughness = 0.85;
+        m.needsUpdate = true;
       };
-      m.customProgramCacheKey = () => 'medieval-gown-6';
-      // The modern clothes' folds and seams live in the normal map; the
-      // gown is smooth cloth, so leave them out.
-      m.normalMap = null;
-      m.roughness = 0.85;
-      m.needsUpdate = true;
+      const restore = () => {
+        m.onBeforeCompile = own.onBeforeCompile;
+        m.customProgramCacheKey = own.customProgramCacheKey;
+        m.normalMap = own.normalMap;
+        m.roughness = own.roughness;
+        m.needsUpdate = true;
+      };
+      kit.dyed.push({ apply, restore });
+      apply();
     }
   });
 
@@ -381,9 +405,12 @@ export function dressMedieval(avatar) {
     root.add(obj);
     obj.updateMatrixWorld(true);
     bone.attach(obj);
+    kit.parts.push(obj);
   };
   // The crown rests on top of her head (see fitCrown).
-  fitCrown(model, circlet());
+  const crown = circlet();
+  fitCrown(model, crown);
+  kit.parts.push(crown);
 
   const b = avatar.body.bones;
   const metal = steel();
@@ -413,6 +440,7 @@ export function dressMedieval(avatar) {
     root.add(puff);
     puff.updateMatrixWorld(true);
     upper.attach(puff);
+    kit.parts.push(puff);
   }
   // Riding boots: a leather shaft up the calf and a foot with a toe cap.
   for (const s of ['l', 'r']) {
@@ -425,6 +453,7 @@ export function dressMedieval(avatar) {
     root.add(shaft);
     shaft.updateMatrixWorld(true);
     calf.attach(shaft);
+    kit.parts.push(shaft);
     const boot = new THREE.Group();
     const sole = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.03, 0.25), new THREE.MeshStandardMaterial({ color: 0x1c120a, roughness: 0.9 }));
     sole.position.set(0, -f.y + 0.015, 0.045);
@@ -439,4 +468,13 @@ export function dressMedieval(avatar) {
     place(boot, f, foot);
   }
 
+}
+
+/** Back into her own clothes: the gown's colours come off and its pieces are put away. */
+export function undressMedieval(avatar) {
+  const kit = avatar?.body?.model?.userData.medievalKit;
+  if (!kit || !kit.on) return;
+  kit.on = false;
+  for (const d of kit.dyed) d.restore();
+  for (const o of kit.parts) o.visible = false;
 }

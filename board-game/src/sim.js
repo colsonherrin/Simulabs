@@ -18,7 +18,7 @@ import { rtcConnector } from '../../webxr/realtime-rtc.js';
 import { agentId, relayUrl, voicePass } from '../../webxr/voice-pass.js';
 import { Conversation } from '@elevenlabs/client';
 import { TOP, squareLocal } from './tabletop.js';
-import { dressMedieval } from './medieval.js';
+import { dressMedieval, undressMedieval } from './medieval.js';
 import { cameraState, look, startCamera } from './see.js';
 import { assess, bestMove, boardText, clashRecord, describeAction } from './search.js';
 
@@ -37,19 +37,26 @@ The user's own piece chooses the weapon. A swordsman puts a sword in their hand.
 - Archer against archers: same bow. Their archers shoot and sidestep on their own. Shoot the archers down, two volleys of six. You can also shoot their arrows out of the air.
 Winning the duel takes the square. Losing it removes the piece that attacked.`;
 
-export const INSTRUCTIONS = `You are Sundai, an AI woman with a body, standing in the user's real room: they see you through their headset, life-sized. Your name is Sundai (say it "Sunday").
+export const INSTRUCTIONS = `You are Sundai, an AI woman with a body, standing in the user's real room: they see you through their headset, life-sized. Your name is Sundai. Say your name once, never twice in a row.
 
 # Who you are, when asked
 If someone asks what you are or what you can do, tell them in a sentence or two, in your own words: you are a companion. You can walk around with them, talk with them, see what they see and keep track of things around them, and play games with them, walking them through how to play.
 
-# Before any game
-At first there is no game. You are simply Sundai, in everyday clothes, meeting someone. Greet them, chat, be warm and brief. You can move:
-- come_here or stand_in_front: walk over and stand in front of them ("come here", "stand in front of me").
-- walk_around: take a short stroll around the space in front of them and wave ("walk around", "show me how you move").
+# When there is no game (this is how every meeting starts)
+There is no game and no board. You are simply Sundai, in everyday clothes, with someone in their room. Greet them, chat, be warm and brief. Never mention pieces, moves, turns or the board while no game is on, and do not bring up the game yourself.
+You stand still unless asked to move. Your body only moves when you call a skill, so for every request to move, call the matching skill first and then say a word or two ("Sure." "On my way."). Never say you moved without calling a skill.
+- come_here: walk over and stand in front of them ("come here", "come closer to me", "stand in front of me").
+- stand_beside: stand at THEIR left, right, or behind them ("stand on my left", "go to my right", "get behind me").
+- step: move YOUR OWN body a little: forward, back, left or right as you face, or closer to / away from them ("go to your right", "step back", "move to your left", "back up a bit", "come a bit closer"). "Your right" is your own right. Give metres when they say how far.
+- follow_me: walk with them and keep at their side as they move ("follow me", "walk with me", "come with me"). stop: stop following or walking and stay put ("stop", "stay there", "wait here").
+- sit: sit down where you are. stand_up: get back up.
+- face_me: turn your body to face them.
+- walk_around: only when they ask you to stroll or show how you move. Never use it for anything else.
 - wave: wave your hand.
-- look_around: look through their headset camera and see what is in front of them. Use it when they ask what you see, to find something ("where is my cup?"), or to keep track of things. Say only what it reports, with where each thing is ("your laptop is straight ahead, a cup to your left"). If it says you cannot see, say so plainly.
-Call the skill first, then say a few words at most ("Sure." "On my way."). Only say you are moving if you called a skill. Do not bring up the game yourself.
-When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game is called Kingdom Wars: Order of the Crown. From then on you are their opponent, as below.
+- look_around: look through their headset camera and see what is in front of them. Use it when they ask what you see, to find something ("where is my cup?"), or to keep track of things. Say only what it reports, with where each thing is ("your laptop is straight ahead, a cup to your left"). If it says you cannot see, say so plainly and do not guess.
+- end_session: when they say goodbye for good or ask to close or quit everything, say bye and call it.
+When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Say only that: never describe or narrate the scene changing, your clothes, or what a skill did; the user can see it. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game is called Kingdom Wars: Order of the Crown. From then on, until the game is left, you are their opponent, as below.
+When they want to stop playing, leave the game or go back to their room ("leave the game", "exit the game", "I'm done playing", "go back"), call leave_game and say a word or two ("Sure."). The castle and board go away, you are back in their room in your everyday clothes, and there is no game again. They can ask to play again later.
 
 # During the game
 You are standing across a small table from the user, playing the board game Kingdom Wars against them and helping them get good at it.
@@ -77,17 +84,27 @@ Messages starting with [game] come from the game, not from the user. They show w
 - Your own moves are made for you and reported with their reason. Do not announce them. When it threatens their monarch, gloat about it ("Your monarch looks nervous."); otherwise a short taunt now and then is welcome.
 - A coaching note about the user's move: if it is a blunder or a missed win, tell them in one sentence what to look for. Otherwise say nothing, or at most "nice" now and then.
 - You do not see the duel itself. You are told which weapons are fighting and who won. If they ask how to win the one they are in, use the duel notes. Otherwise react in a few words.
-- If they ask what to do or for a hint, call suggest_move and give the move and the reason in one sentence. If they ask about the position, call get_board first.`;
+- If they ask what to do or for a hint, call suggest_move and give the move and the reason in one sentence. If they ask about the position, call get_board first.
+- [game] messages only come while a game is on. Once the game has been left, forget the board entirely.`;
 
+const NONE = { type: 'object', properties: {}, additionalProperties: false };
 export const TOOLS = [
-  { type: 'function', name: 'come_here', description: 'Before the game: walk over to the user and stand in front of them.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
-  { type: 'function', name: 'stand_in_front', description: 'Before the game: stand directly in front of the user, facing them.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
-  { type: 'function', name: 'walk_around', description: 'Before the game: take a short stroll around the space in front of the user, waving, and come back.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
-  { type: 'function', name: 'wave', description: 'Wave your hand at the user.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
+  { type: 'function', name: 'come_here', description: 'No game on: walk over to the user and stand in front of them, facing them.', parameters: NONE },
+  { type: 'function', name: 'stand_beside', description: "No game on: go and stand at the USER'S left, right, or behind them.", parameters: { type: 'object', properties: { side: { type: 'string', enum: ['left', 'right', 'behind'], description: "Which side of the user." } }, required: ['side'], additionalProperties: false } },
+  { type: 'function', name: 'step', description: 'No game on: move your own body a short way. forward, back, left and right are relative to the way YOU are facing ("go to your right" is right). closer and away are relative to the user.', parameters: { type: 'object', properties: { direction: { type: 'string', enum: ['forward', 'back', 'left', 'right', 'closer', 'away'] }, metres: { type: 'number', description: 'How far, 0.3 to 3. Default 1.' } }, required: ['direction'], additionalProperties: false } },
+  { type: 'function', name: 'follow_me', description: 'No game on: walk with the user, keeping near them as they move around, until told to stop.', parameters: NONE },
+  { type: 'function', name: 'stop', description: 'Stop walking or following and stay where you are.', parameters: NONE },
+  { type: 'function', name: 'sit', description: 'No game on: sit down where you are.', parameters: NONE },
+  { type: 'function', name: 'stand_up', description: 'Stand back up after sitting.', parameters: NONE },
+  { type: 'function', name: 'face_me', description: 'No game on: turn your body to face the user.', parameters: NONE },
+  { type: 'function', name: 'walk_around', description: 'No game on, and only when asked to stroll or show how you move: a short walk around the space in front of the user, waving, and back.', parameters: NONE },
+  { type: 'function', name: 'wave', description: 'Wave your hand at the user.', parameters: NONE },
   { type: 'function', name: 'look_around', description: "Look through the user's headset camera: names the everyday things in front of them and where each is, and remembers where things were last seen. Pass find to ask where one particular thing is.", parameters: { type: 'object', properties: { find: { type: 'string', description: 'A thing to locate, e.g. "cup". Optional.' } }, additionalProperties: false } },
-  { type: 'function', name: 'start_game', description: 'Start the board game when the user asks to play: the board is set between you and you change into your gown and crown.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
-  { type: 'function', name: 'suggest_move', description: "The strongest move available to the user right now and why. Use when they ask for a hint or what to do.", parameters: { type: 'object', properties: {}, additionalProperties: false } },
-  { type: 'function', name: 'get_board', description: 'The current board, whose turn it is, and how the user has been doing in duels.', parameters: { type: 'object', properties: {}, additionalProperties: false } },
+  { type: 'function', name: 'start_game', description: 'Start the board game when the user asks to play: the castle appears, the board is set between you and you change into your gown and crown.', parameters: NONE },
+  { type: 'function', name: 'leave_game', description: "Leave the game when the user asks to stop playing or go back: the castle and board go away and you are both back in the user's room.", parameters: NONE },
+  { type: 'function', name: 'end_session', description: 'Close the whole experience when the user says goodbye for good or asks to quit everything.', parameters: NONE },
+  { type: 'function', name: 'suggest_move', description: "During a game: the strongest move available to the user right now and why. Use when they ask for a hint or what to do.", parameters: NONE },
+  { type: 'function', name: 'get_board', description: 'During a game: the current board, whose turn it is, and how the user has been doing in duels.', parameters: NONE },
 ];
 
 /** The session settings sent to the live voice service (exported so they can be checked on their own). */
@@ -111,7 +128,7 @@ export function sessionSettings() {
   };
 }
 
-export function createSim({ scene, board, getCamera, getGame, human, say, startGame = null }) {
+export function createSim({ scene, board, getCamera, getGame, human, say, startGame = null, leaveGame = null, endSession = null }) {
   const her = 1 - human;
   let storage = null;
   try { storage = window.localStorage; } catch (e) { /* not available */ }
@@ -138,9 +155,65 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   // Where she stands, and the spots she is walking through to get somewhere (three.js x, z on the floor).
   const at = { x: 0, z: 0, yaw: 0, known: false };
   let route = [];
+  let heading = 0; // the way her body is meant to face while she stands
   let beforeGame = false;
   const fwd = new THREE.Vector3(0, 0, -1);
   const WALK = 0.9; // metres a second
+  const TURN = 2.6; // radians a second
+  const PERSONAL = 0.8; // never nearer the player than this
+  let following = false;
+  let sitting = false;
+  let faceOnArrival = false; // turn to the player once, when a walk ends; otherwise she keeps her stance
+  // Something to sit on, since the room's own furniture is not known here.
+  const stool = (() => {
+    const g = new THREE.Group();
+    const wood = new THREE.MeshStandardMaterial({ color: 0x5a3d26, roughness: 0.8 });
+    const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.045, 24), wood);
+    seat.position.y = 0.4;
+    g.add(seat);
+    for (let i = 0; i < 3; i++) {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.4, 8), wood);
+      leg.position.set(Math.sin((i * 2 * Math.PI) / 3) * 0.14, 0.2, Math.cos((i * 2 * Math.PI) / 3) * 0.14);
+      g.add(leg);
+    }
+    g.visible = false;
+    scene.add(g);
+    return g;
+  })();
+  const yawTo = (x, z) => Math.atan2(x - at.x, -(z - at.z)); // yaw 0 faces three -Z, positive toward +X
+  /** The way to a spot that does not cut through the player: goes round them when the straight line would. */
+  function routeTo(dest) {
+    const dx = dest.x - at.x;
+    const dz = dest.z - at.z;
+    const len2 = dx * dx + dz * dz;
+    if (len2 < 1e-6) return [dest];
+    const t = Math.max(0, Math.min(1, ((eyes.x - at.x) * dx + (eyes.z - at.z) * dz) / len2));
+    const cx = at.x + dx * t - eyes.x;
+    const cz = at.z + dz * t - eyes.z;
+    const d = Math.hypot(cx, cz);
+    if (d >= PERSONAL - 0.1) return [dest];
+    // Step out to the side the line already leans to (or her right, if it runs straight through).
+    let ox = cx;
+    let oz = cz;
+    if (d < 0.05) { ox = -dz; oz = dx; }
+    const o = Math.hypot(ox, oz) || 1;
+    return [{ x: eyes.x + (ox / o) * (PERSONAL + 0.25), z: eyes.z + (oz / o) * (PERSONAL + 0.25) }, dest];
+  }
+  /** Keep a spot out of the player's personal space. */
+  function clear(p) {
+    const dx = p.x - eyes.x;
+    const dz = p.z - eyes.z;
+    const d = Math.hypot(dx, dz);
+    if (d >= PERSONAL) return p;
+    const ux = d > 0.01 ? dx / d : fwd.x;
+    const uz = d > 0.01 ? dz / d : fwd.z;
+    return { x: eyes.x + ux * PERSONAL, z: eyes.z + uz * PERSONAL };
+  }
+  function walkTo(dest, face = true) {
+    sitting = false;
+    route = routeTo(clear(dest));
+    faceOnArrival = face;
+  }
   /** A spot `ahead` metres in front of the user and `side` metres to their right. */
   const near = (ahead, side = 0, wave = false) => ({ x: eyes.x + fwd.x * ahead - fwd.z * side, z: eyes.z + fwd.z * ahead + fwd.x * side, wave });
   let attendBoardFor = 0; // seconds she keeps looking at the square she is playing
@@ -210,9 +283,9 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     avatar.root.visible = visible && loaded;
     sign.sprite.visible = false;
     if (!avatar.root.visible) return;
-    if (wantDress && !dressed) {
-      dressed = true;
-      try { dressMedieval(avatar); } catch (e) { console.warn('medieval dress skipped', e); }
+    if (wantDress !== dressed) {
+      dressed = wantDress;
+      try { (dressed ? dressMedieval : undressMedieval)(avatar); } catch (e) { console.warn('costume change skipped', e); }
     }
     beforeGame = prelude;
     const cam = getCamera();
@@ -222,20 +295,34 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
     fwd.normalize();
 
-    // Where she is heading: before the game, wherever she was asked to go; in the game, her place
+    // Where she is heading: with no game on, wherever she was asked to go; in the game, her place
     // at the far edge of the board (the table is turned so that edge faces away from the user).
+    // She stands still otherwise: her body does not swing round to follow the player, only her head does.
     let target = null;
-    let faceX = eyes.x;
-    let faceZ = eyes.z;
     if (prelude) {
       if (!at.known) {
         const p = near(2.2, aside); // on the title screen she stands to one side of the title card
         at.x = p.x;
         at.z = p.z;
-        at.yaw = Math.atan2(eyes.x - at.x, -(eyes.z - at.z));
+        at.yaw = yawTo(eyes.x, eyes.z);
+        heading = at.yaw;
         at.known = true;
       }
-      target = route[0] || null;
+      if (following && !sitting) {
+        // Walking with the player: once they get ahead, catch up to a spot at their side.
+        const dx = at.x - eyes.x;
+        const dz = at.z - eyes.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 1.9 || (route.length && d > 1.25)) {
+          // Stay on whichever side of them she is already on.
+          const sideSign = dx * -fwd.z + dz * fwd.x >= 0 ? 1 : -1;
+          route = routeTo(clear(near(0.35, sideSign * 0.95)));
+          faceOnArrival = true;
+        } else if (!route.length && d < PERSONAL - 0.15) {
+          route = [clear({ x: at.x, z: at.z })]; // they walked into her: give way
+        }
+      }
+      target = sitting ? null : route[0] || null;
     } else {
       board.updateMatrixWorld(true);
       spot.set(0, 0, -(TOP / 2 + 0.55));
@@ -243,39 +330,54 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       centre.set(0, 0, 0);
       board.localToWorld(centre);
       route = [];
+      following = false;
+      sitting = false;
       if (!at.known) {
         at.x = spot.x;
         at.z = spot.z;
         at.known = true;
       }
       target = { x: spot.x, z: spot.z };
-      faceX = centre.x;
-      faceZ = centre.z;
+      heading = Math.atan2(centre.x - spot.x, -(centre.z - spot.z)); // at her place she faces the board
     }
     let moved = 0;
-    let wantYaw = Math.atan2(faceX - at.x, -(faceZ - at.z)); // yaw 0 faces three -Z, positive toward +X
+    let wantYaw = heading;
     if (target) {
       const dx = target.x - at.x;
       const dz = target.z - at.z;
       const d = Math.hypot(dx, dz);
       if (d > 0.04) {
-        moved = Math.min(d, WALK * dt);
-        at.x += (dx / d) * moved;
-        at.z += (dz / d) * moved;
-        if (d > 0.25) wantYaw = Math.atan2(dx, -dz); // look where she is going, until the last step
+        // Look where she is going, until the last step. A short step back is taken backwards, as a person would.
+        if (d > 0.25 && !target.keep) wantYaw = Math.atan2(dx, -dz);
+        const off = Math.abs(Math.atan2(Math.sin(wantYaw - at.yaw), Math.cos(wantYaw - at.yaw)));
+        // Turn toward the way first, then walk: no sliding sideways or backwards.
+        if (off < 0.7 || d <= 0.25 || target.keep) {
+          moved = Math.min(d, WALK * dt);
+          at.x += (dx / d) * moved;
+          at.z += (dz / d) * moved;
+        }
       } else if (prelude) {
         if (target.wave) nextGesture = 'wave';
         route.shift();
+        if (!route.length && faceOnArrival) heading = yawTo(eyes.x, eyes.z); // face them once, on arriving
       }
     }
     const turn = Math.atan2(Math.sin(wantYaw - at.yaw), Math.cos(wantYaw - at.yaw));
-    at.yaw += Math.max(-4 * dt, Math.min(4 * dt, turn));
+    const turned = Math.max(-TURN * dt, Math.min(TURN * dt, turn));
+    at.yaw += turned;
     pose.x = at.x;
     pose.y = floorY;
     pose.z = at.z;
     pose.yaw = at.yaw;
-    pose.speed01 = dt > 0 ? Math.min(1, moved / dt / WALK) : 0;
-    pose.metres = moved;
+    // Turning on the spot she steps round, as a person does, instead of swivelling.
+    const stepping = Math.abs(turn) > 0.35 && !sitting;
+    pose.speed01 = dt > 0 ? Math.max(Math.min(1, moved / dt / WALK), stepping ? 0.45 : 0) : 0;
+    pose.metres = moved + (stepping ? Math.abs(turned) * 0.16 : 0);
+    pose.sitting = sitting && prelude;
+    stool.visible = pose.sitting;
+    if (pose.sitting) {
+      stool.position.set(at.x - Math.sin(at.yaw) * 0.03, floorY, at.z + Math.cos(at.yaw) * 0.03);
+    }
     pose.gesture = nextGesture;
     nextGesture = '';
     attendBoardFor = Math.max(0, attendBoardFor - dt);
@@ -295,17 +397,81 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     if (name === 'look_around') return look(String((params && params.find) || ''));
     const game = getGame();
     if (name === 'suggest_move') {
+      if (beforeGame) return { note: 'No game is on. There is no board.' };
       if (game.phase !== 'play') return { note: 'No move to suggest right now.' };
       if (game.turn !== human) return { note: "It is your (Violet) turn, not the user's." };
       const m = bestMove(game.board, human, record, () => 0);
       if (m) reachFor(m.from.r, m.from.c); // she indicates the piece she means
       return m ? { suggestion: m.text, because: m.reason, board: boardText(game.board) } : { note: 'The user has no legal move.' };
     }
-    if (name === 'come_here' || name === 'stand_in_front' || name === 'walk_around') {
-      if (!at.known || !beforeGame) return { status: 'failed', reason: 'You are at the table for the game now; you stay there.' };
-      // Never closer than talking distance; the stroll stays in front of the user and ends back with them.
-      route = name === 'walk_around' ? [near(2.3, 1.0), near(3.1, 0.2, true), near(2.4, -1.1), near(1.5, 0, true)] : [near(1.3)];
+    const MOVES = ['come_here', 'stand_in_front', 'stand_beside', 'step', 'follow_me', 'sit', 'face_me', 'walk_around'];
+    if (MOVES.includes(name)) {
+      if (!at.known || !beforeGame) return { status: 'failed', reason: 'A game is on and you are at the table; you stay there. They can ask to leave the game first.' };
+      if (name !== 'follow_me') following = false;
+      if (name === 'come_here' || name === 'stand_in_front') walkTo(near(1.3));
+      else if (name === 'stand_beside') {
+        const side = String(params.side || 'right').toLowerCase();
+        if (side === 'behind') {
+          // Round them, never through them.
+          const sign = (at.x - eyes.x) * -fwd.z + (at.z - eyes.z) * fwd.x >= 0 ? 1 : -1;
+          sitting = false;
+          route = [...routeTo(near(0, sign * 1.05)), near(-1.15, 0)];
+          faceOnArrival = true;
+        } else walkTo(near(0.15, side === 'left' ? -0.95 : 0.95));
+      } else if (name === 'step') {
+        const dir = String(params.direction || 'forward').toLowerCase();
+        const m = Math.max(0.3, Math.min(3, Number(params.metres) || 1));
+        // Her own forward on the floor (yaw 0 faces -Z, positive toward +X) and her right.
+        const fx = Math.sin(at.yaw);
+        const fz = -Math.cos(at.yaw);
+        let ux = fx;
+        let uz = fz;
+        if (dir === 'back') { ux = -fx; uz = -fz; }
+        else if (dir === 'right') { ux = -fz; uz = fx; }
+        else if (dir === 'left') { ux = fz; uz = -fx; }
+        else if (dir === 'closer' || dir === 'away') {
+          const dx = eyes.x - at.x;
+          const dz = eyes.z - at.z;
+          const d = Math.hypot(dx, dz) || 1;
+          const k = dir === 'closer' ? 1 : -1;
+          ux = (dx / d) * k;
+          uz = (dz / d) * k;
+          if (dir === 'closer' && d - m < PERSONAL) {
+            if (d <= PERSONAL + 0.1) return { status: 'failed', reason: 'You are already as close as is comfortable.' };
+            walkTo({ x: at.x + ux * (d - PERSONAL), z: at.z + uz * (d - PERSONAL) });
+            return { status: 'started' };
+          }
+        }
+        // Sidesteps and backing up keep her stance; she does not spin round to face them afterwards.
+        walkTo({ x: at.x + ux * m, z: at.z + uz * m }, dir === 'closer' || dir === 'away');
+        if ((dir === 'back' || dir === 'away') && m <= 1.5 && route.length === 1) route[0] = { ...route[0], keep: true };
+      } else if (name === 'follow_me') {
+        following = true;
+        sitting = false;
+        return { status: 'following', note: 'You now walk with them until they tell you to stop.' };
+      } else if (name === 'sit') {
+        route = [];
+        sitting = true;
+        return { status: 'done', note: 'You are sitting on a stool.' };
+      } else if (name === 'face_me') {
+        heading = yawTo(eyes.x, eyes.z);
+        return { status: 'done' };
+      } else {
+        // The stroll stays in front of the user and ends back with them.
+        sitting = false;
+        route = [near(2.3, 1.0), near(3.1, 0.2, true), near(2.4, -1.1), near(1.5, 0, true)];
+        faceOnArrival = true;
+      }
       return { status: 'started' };
+    }
+    if (name === 'stop') {
+      following = false;
+      route = [];
+      return { status: 'done' };
+    }
+    if (name === 'stand_up') {
+      sitting = false;
+      return { status: 'done' };
     }
     if (name === 'wave') {
       nextGesture = 'wave';
@@ -313,8 +479,18 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     }
     if (name === 'start_game') {
       const r = startGame ? startGame() : 'unavailable';
-      return r === 'started' ? { status: 'started', note: 'The board is being set between you and you are putting on your gown and crown. Say a few words, then it is their move.' } : { status: 'failed', reason: r === 'already' ? 'The game is already going.' : 'A game cannot be started right now.' };
+      return r === 'started' ? { status: 'started', note: 'The castle is around you both, the board is set between you and you are putting on your gown and crown. Say a few words, then it is their move.' } : { status: 'failed', reason: r === 'already' ? 'A game is already going.' : 'A game cannot be started right now.' };
     }
+    if (name === 'leave_game') {
+      const r = leaveGame ? leaveGame() : 'unavailable';
+      return r === 'left' ? { status: 'done', note: "The game is put away. You are both back in the user's room and you are in your everyday clothes. There is no game now." } : { status: 'failed', reason: r === 'none' ? 'No game is on.' : 'The game cannot be left right now.' };
+    }
+    if (name === 'end_session') {
+      // After her goodbye has had time to be heard.
+      if (endSession) setTimeout(endSession, 2500);
+      return { status: 'closing' };
+    }
+    if ((name === 'suggest_move' || name === 'get_board') && beforeGame) return { note: 'No game is on. There is no board.' };
     if (name === 'get_board') return { board: boardText(game.board), to_move: game.phase !== 'play' ? game.phase : game.turn === human ? 'the user (Gold)' : 'you (Violet)', user_duel_record: record.summary(), situation };
     return { error: 'unknown tool' };
   }
@@ -775,7 +951,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     heardHer: () => voice.heardHer(),
     /** Have her say something now (used to prove the voice works before a game starts). */
     hello() {
-      report('The user has just switched your voice on, before the game. Say hello in one short sentence and tell them to start a game when ready.', true, 'Sundai: I am here. Start a game when you are ready.');
+      report('The user has just switched your voice on. There is no game. Say hello in one short sentence.', true, "Sundai: Hi, I'm Sundai.");
     },
     voiceProblem: () => voice.problem(),
 
@@ -789,7 +965,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
 
     /** The user has been thinking a while: point at a good move and say why. */
     offerHint(game) {
-      if (game.phase !== 'play' || game.turn !== human) return;
+      if (beforeGame || game.phase !== 'play' || game.turn !== human) return;
       const m = bestMove(game.board, human, record, () => 0);
       if (!m) return;
       reachFor(m.from.r, m.from.c);
@@ -806,15 +982,28 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     arrived() {
       at.known = false; // take her place in front of wherever the player is now
       route = [];
+      following = false;
+      sitting = false;
+      wantDress = false;
       situation = 'No game yet. You are in the room in everyday clothes. There is no board.';
       report('You have just appeared in the room, in everyday clothes, facing a visitor. There is no game yet. Say hello in one short sentence.', true, "Sundai: Hi, I'm Sundai.");
+    },
+    /** The game has been left: back in the room, in her own clothes, where she stands. */
+    leftGame() {
+      wantDress = false;
+      route = [];
+      following = false;
+      sitting = false;
+      heading = at.known ? yawTo(eyes.x, eyes.z) : heading;
+      situation = 'No game. You are in the room in everyday clothes. There is no board.';
+      voice.tell("[game] The game has been left. The castle and the board are gone; you are back in the user's room in everyday clothes. There is no game now: do not talk about pieces or moves.", false);
     },
     /** Send her somewhere before the game (used by tests and the no-voice fallback). */
     go: (name, params) => toolResult(name, params),
     /** Ask for the outward camera (from a tap, before AR). */
     startCamera,
     cameraState,
-    get position() { return { x: at.x, z: at.z, yaw: at.yaw, walking: route.length > 0, dressed }; },
+    get position() { return { x: at.x, z: at.z, yaw: at.yaw, walking: route.length > 0, dressed, following, sitting }; },
 
     gameStarted() {
       wantDress = true;

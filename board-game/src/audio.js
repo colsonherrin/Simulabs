@@ -6,9 +6,60 @@ let tension = false;
 
 let bus = null;
 function ac() {
-  if (!ctx) ctx = new AudioContext();
+  if (!ctx) {
+    ctx = new AudioContext();
+    loadSamples();
+  }
   if (ctx.state === 'suspended') ctx.resume();
   return ctx;
+}
+
+// Recorded-style effects (public/sfx, made with ElevenLabs sound generation). Each is fetched once
+// when sound is first unlocked. Until one has arrived, or if it cannot be fetched, the synthesized
+// version of that sound below is used instead, so nothing is ever silent.
+const SAMPLE_NAMES = ['hit1', 'hit2', 'clink1', 'clink2', 'clang', 'whoosh', 'arrow', 'whiz1', 'whiz2', 'cry1', 'cry2', 'die1', 'die2', 'hurt', 'boom', 'swipe', 'place', 'start', 'victory', 'defeat', 'capture', 'ambience'];
+const samples = {};
+let samplesAsked = false;
+function loadSamples() {
+  if (samplesAsked || typeof fetch !== 'function' || typeof document === 'undefined') return;
+  samplesAsked = true;
+  for (const name of SAMPLE_NAMES) {
+    fetch(new URL(`sfx/${name}.mp3`, document.baseURI))
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
+      .then((data) => ctx.decodeAudioData(data))
+      .then((buf) => { samples[name] = buf; })
+      .catch(() => { /* the synthesized sound stands in */ });
+  }
+}
+/**
+ * Play one of the named samples (picked at random). Returns the playing source, or null if none
+ * of them is loaded yet (the caller then synthesizes the sound).
+ *   gain   level into the master bus     rate   playback speed, varied a little so repeats differ
+ *   sweep  +1 or -1 to pass from one ear to the other (a fly-by)     loop   keep playing
+ */
+function sample(names, { gain = 0.3, rate = 1, vary = 0.06, sweep = 0, loop = false } = {}) {
+  const ready = (Array.isArray(names) ? names : [names]).filter((n) => samples[n]);
+  if (!ready.length || !ctx) return null;
+  const c = ac();
+  const src = c.createBufferSource();
+  src.buffer = samples[ready[Math.floor(Math.random() * ready.length)]];
+  src.playbackRate.value = rate * (1 + (Math.random() * 2 - 1) * vary);
+  src.loop = loop;
+  const g = c.createGain();
+  g.gain.value = gain;
+  src.connect(g);
+  let tail = g;
+  if (sweep && c.createStereoPanner) {
+    const pan = c.createStereoPanner();
+    const dur = src.buffer.duration / src.playbackRate.value;
+    pan.pan.setValueAtTime(-0.95 * sweep, c.currentTime);
+    pan.pan.linearRampToValueAtTime(0.95 * sweep, c.currentTime + dur * 0.8);
+    g.connect(pan);
+    tail = pan;
+  }
+  tail.connect(out());
+  src.start();
+  return { src, g };
 }
 
 // Every sound goes through one master bus: a gain that lifts the effects
@@ -73,6 +124,7 @@ function noise() {
 
 export function playWhoosh() {
   if (muted) return;
+  if (sample('whoosh', { gain: 0.3, vary: 0.12 })) return;
   const { c, src } = noise();
   const now = c.currentTime;
   const f = c.createBiquadFilter();
@@ -92,6 +144,8 @@ export function playWhoosh() {
 
 // A blow landing on armour: a heavy thud with a short metallic crunch.
 export function playHit() {
+  if (muted) return;
+  if (sample(['hit1', 'hit2'], { gain: 0.42, vary: 0.1 })) return;
   playTone(92, 0.22, 'sine', 0.3, 42);
   bandNoise('bandpass', 1800, 600, 0.12, 0.16, 1.2);
   ring([620, 1490, 2310], 0.25, 0.05);
@@ -153,6 +207,7 @@ function airWhoosh({ arriving, dur, level = 1 }) {
 export function playArrow(volume = 1) {
   if (muted) return;
   stopBowStretch();
+  if (sample('arrow', { gain: 0.34 * volume })) return;
   playTone(118, 0.22, 'triangle', 0.16 * volume, 92);
   playTone(236, 0.12, 'sine', 0.06 * volume, 180);
   airWhoosh({ arriving: false, dur: 0.55, level: volume });
@@ -160,6 +215,9 @@ export function playArrow(volume = 1) {
 
 // An arrow coming at you: the same whoosh, building as it comes and passing your ear.
 export function playArrowIncoming() {
+  if (muted) return;
+  // Past one ear and out the other side.
+  if (sample(['whiz1', 'whiz2'], { gain: 0.5, vary: 0.12, sweep: Math.random() < 0.5 ? 1 : -1 })) return;
   airWhoosh({ arriving: true, dur: 0.62 });
 }
 
@@ -251,6 +309,7 @@ function ring(partials, dur, gain, delay = 0) {
 // (lighter and higher than a full clang).
 export function playClink() {
   if (muted) return;
+  if (sample(['clink1', 'clink2'], { gain: 0.3, vary: 0.14 })) return;
   const base = 2300 + Math.random() * 500;
   ring([base, base * 1.48, base * 2.12, base * 2.9], 0.38, 0.12);
   bandNoise('highpass', 8000, 4000, 0.04, 0.16, 0.7);
@@ -258,6 +317,7 @@ export function playClink() {
 
 export function playClang() {
   if (muted) return;
+  if (sample('clang', { gain: 0.38, vary: 0.1 })) return;
   const base = 900 + Math.random() * 250;
   ring([base, base * 2.32, base * 3.71, base * 5.13, base * 6.8], 0.9, 0.16);
   bandNoise('highpass', 6000, 2500, 0.09, 0.2, 0.7);
@@ -269,6 +329,8 @@ export function playClang() {
 // higher, falling cry when a comrade goes down.
 export function playShout(kind = 'cry') {
   if (muted) return;
+  // Men's voices: a charge roar, or the grunt of one going down. Played a little slow, for weight.
+  if (sample(kind === 'fear' ? ['die1', 'die2'] : ['cry1', 'cry2'], { gain: kind === 'fear' ? 0.26 : 0.3, rate: 0.92, vary: 0.08 })) return;
   const c = ac();
   const now = c.currentTime;
   const fear = kind === 'fear';
@@ -333,6 +395,7 @@ export function playDeflect() {
 // Taking a blow: a man's short grunt over the thud of the hit.
 export function playHurt() {
   if (muted) return;
+  if (sample('hurt', { gain: 0.42, rate: 0.94 })) return;
   playTone(85, 0.26, 'sine', 0.26, 45);
   bandNoise('lowpass', 700, 160, 0.22, 0.18, 0.7);
   const c = ac();
@@ -387,11 +450,15 @@ export function playFanfare() {
 }
 
 export function playDefeat() {
+  if (muted) return;
+  if (sample('defeat', { gain: 0.3, vary: 0 })) return;
   playTone(311, 0.25, 'triangle', 0.05, 180);
   setTimeout(() => playTone(196, 0.4, 'sine', 0.05, 90), 140);
 }
 
 export function playCapture() {
+  if (muted) return;
+  if (sample('capture', { gain: 0.3 })) return;
   playTone(392, 0.1, 'triangle', 0.04);
   setTimeout(() => playTone(523, 0.16, 'triangle', 0.045), 90);
 }
@@ -510,11 +577,15 @@ function knock(freq, gain) {
 }
 
 export function playSwipe() {
+  if (muted) return;
+  if (sample('swipe', { gain: 0.3, vary: 0.1 })) return;
   // A piece sliding across the board: a quick, airy swipe.
   bandNoise('bandpass', 600, 3200, 0.24, 0.22, 0.9);
 }
 
 export function playPlace() {
+  if (muted) return;
+  if (sample('place', { gain: 0.4, vary: 0.1 })) return;
   knock(190, 0.24);
 }
 
@@ -535,6 +606,8 @@ export function playIllegal() {
 }
 
 export function playStart() {
+  if (muted) return;
+  if (sample('start', { gain: 0.22, vary: 0 })) return;
   bell(523.3, 0.4, 0.03);
   bell(784, 0.5, 0.03, 0.12);
 }
@@ -600,6 +673,7 @@ function cymbal(start, gain) {
 // final D-major chord ring out over the board.
 export function playVictory() {
   if (muted) return;
+  if (sample('victory', { gain: 0.34, vary: 0 })) return;
   // Timpani roll, accelerating and growing.
   for (let i = 0; i < 14; i++) {
     const t = 1.6 * (1 - Math.pow(1 - i / 14, 1.6));
@@ -647,6 +721,7 @@ export function playSfx(event, arg) {
 export function playBoom(near = 1) {
   if (muted) return;
   const g = Math.max(0.15, Math.min(1, near));
+  if (sample('boom', { gain: 0.5 * g, vary: 0.1 })) return;
   // Low thump that drops in pitch, plus a crackling noise tail.
   playTone(90, 0.55, 'sine', 0.22 * g, 34);
   playTone(60, 0.8, 'triangle', 0.12 * g, 28);
@@ -655,9 +730,16 @@ export function playBoom(near = 1) {
 
 let warTimer = 0;
 let warBeat = 0;
+let warLoop = null;
 export function startWarAmbience() {
   stopWarAmbience();
   warBeat = 0;
+  // The recorded battlefield (drums, steel, distant shouting) loops under the fight when it is loaded.
+  if (!muted) warLoop = sample('ambience', { gain: 0.0001, vary: 0, loop: true });
+  if (warLoop) {
+    warLoop.g.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + 1.2);
+    return;
+  }
   warTimer = setInterval(() => {
     if (muted) return;
     warBeat += 1;
@@ -680,4 +762,13 @@ export function startWarAmbience() {
 export function stopWarAmbience() {
   clearInterval(warTimer);
   warTimer = 0;
+  if (warLoop) {
+    const { src, g } = warLoop;
+    warLoop = null;
+    try {
+      g.gain.cancelScheduledValues(ctx.currentTime);
+      g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.25);
+      src.stop(ctx.currentTime + 1.2);
+    } catch (e) { /* already stopped */ }
+  }
 }

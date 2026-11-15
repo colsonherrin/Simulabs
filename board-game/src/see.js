@@ -16,16 +16,42 @@ let model = null;
 let loading = null;
 const seen = new Map(); // thing -> { where, at }
 
-/** Ask for the outward camera. Call from a tap, before any AR session hides the permission prompt. */
+const OUTWARD = /passthrough|back|environment|world|rear/i;
+const INWARD = /avatar|selfie|virtual|front|user/i;
+const open = (constraints) => navigator.mediaDevices.getUserMedia({ video: constraints });
+const labelOf = (stream) => (stream.getVideoTracks()[0] && stream.getVideoTracks()[0].label) || 'camera';
+const close = (stream) => stream.getTracks().forEach((t) => t.stop());
+
+/**
+ * Ask for the outward camera. Call from a tap, before any AR session hides the permission prompt.
+ * A headset can list several cameras and hand out the wrong one first (its avatar or selfie
+ * camera), so once permission is given every camera is considered and one that faces outward is
+ * picked. If none does, she says she cannot see rather than describe a picture of the wearer.
+ */
 export async function startCamera() {
   if (video || problem) return !!video;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 } } });
-    label = (stream.getVideoTracks()[0] && stream.getVideoTracks()[0].label) || 'camera';
-    if (/avatar|selfie|virtual|front/i.test(label) && !/passthrough|back|environment|world/i.test(label)) {
-      stream.getTracks().forEach((t) => t.stop());
-      problem = `the only camera offered ("${label}") does not show what the player sees`;
-      return false;
+    let stream = await open({ facingMode: { ideal: 'environment' }, width: { ideal: 640 } });
+    label = labelOf(stream);
+    const offered = [label];
+    if (INWARD.test(label) && !OUTWARD.test(label)) {
+      // Look through the full list, now that labels are readable.
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+      const others = cams.filter((d) => d.label !== label);
+      const pick = others.find((d) => OUTWARD.test(d.label)) || others.find((d) => !INWARD.test(d.label));
+      for (const d of cams) if (!offered.includes(d.label)) offered.push(d.label);
+      close(stream);
+      stream = null;
+      if (pick) {
+        try {
+          stream = await open({ deviceId: { exact: pick.deviceId }, width: { ideal: 640 } });
+          label = labelOf(stream);
+        } catch (e) { stream = null; }
+      }
+      if (!stream) {
+        problem = `this browser offers no camera that shows what the player sees (cameras offered: ${offered.map((l) => '"' + l + '"').join(', ')})`;
+        return false;
+      }
     }
     const v = document.createElement('video');
     v.srcObject = stream;
@@ -33,9 +59,8 @@ export async function startCamera() {
     v.playsInline = true;
     await v.play();
     video = v;
-    // Fetch the recogniser now, in the background, so her first look is quick.
-    loading = loading || Promise.all([import('@tensorflow/tfjs'), import('@tensorflow-models/coco-ssd')]).then(([, coco]) => coco.load({ base: 'lite_mobilenet_v2' }));
-    loading.catch(() => { loading = null; });
+    // The recogniser itself is only fetched the first time she is asked to look, so that starting
+    // the experience does not load a second graphics workload nobody asked for.
     return true;
   } catch (e) {
     problem = 'no camera is available here (' + ((e && e.message) || e) + ')';

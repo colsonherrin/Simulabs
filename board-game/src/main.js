@@ -245,7 +245,7 @@ renderer.xr.setFoveation(1);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 0.95;
 renderer.setClearColor(0x100e0c, 1);
 document.body.prepend(renderer.domElement);
 
@@ -277,8 +277,9 @@ controls.minDistance = 0.28;
 controls.maxDistance = 1.7;
 controls.update();
 
-scene.add(new THREE.HemisphereLight(0xfff1dc, 0x2a2218, 0.9));
-const key = new THREE.DirectionalLight(0xfff4e0, 1.55);
+const ambient = new THREE.HemisphereLight(0xfff1dc, 0x2a2218, 0.72);
+scene.add(ambient);
+const key = new THREE.DirectionalLight(0xfff4e0, 1.2);
 key.position.set(0.7, 1.6, 0.8);
 scene.add(key);
 const rim = new THREE.DirectionalLight(0x9eb0ff, 0.35);
@@ -311,11 +312,13 @@ const sim = createSim({
   human: 0,
   say: (text) => toast(text),
   startGame: () => startGameHere(),
+  leaveGame: () => leaveGameHere(),
+  endSession: () => exitXR(),
 });
 const simPlays = () => vsComputer && !online;
 let simGreeted = -1;
 function simGreet() {
-  if (!simPlays() || simGreeted === epoch || game.phase !== 'play') return;
+  if (!simPlays() || prelude || menu || simGreeted === epoch || game.phase !== 'play') return;
   simGreeted = epoch;
   sim.gameStarted();
 }
@@ -324,7 +327,7 @@ const boardCopy = () => game.board.map((row) => row.slice());
 let thinkingSince = 0;
 let hintedFor = -1;
 setInterval(() => {
-  const yours = simPlays() && !menu && !placing && game.phase === 'play' && game.turn !== COMPUTER_SIDE && !combatView;
+  const yours = simPlays() && !menu && !placing && !prelude && game.phase === 'play' && game.turn !== COMPUTER_SIDE && !combatView;
   const stamp = `${epoch}:${game.moveNo || 1}`;
   if (!yours) {
     thinkingSince = 0;
@@ -336,7 +339,7 @@ setInterval(() => {
     sim.offerHint(game);
   }
 }, 1000);
-async function talkToSim() {
+async function talkToSim(quiet = false) {
   const status = $('sim-status');
   if (!(await sim.canGoLive())) {
     status.textContent = sim.canSpeak() ? 'Live voice is not available. Sim will still talk with the browser’s built-in voice and coach you as you play.' : 'Live voice is not available, and this browser has no built-in voice: Sim will coach in text.';
@@ -349,7 +352,7 @@ async function talkToSim() {
   if (live) {
     simGreeted = -1;
     if (!menu) simGreet();
-    else sim.hello(); // so you hear her before you start
+    else if (!quiet) sim.hello(); // so you hear her before you start
   }
   return live;
 }
@@ -359,7 +362,8 @@ async function voiceThenStart(start) {
   unlockAudio();
   // The camera she looks through, asked for now: in AR its permission prompt would be out of sight.
   await sim.startCamera().catch(() => false);
-  if (sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting' && (await sim.canGoLive())) await talkToSim();
+  // She says hello when she appears in the room, so not here as well.
+  if (sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting' && (await sim.canGoLive())) await talkToSim(true);
   start();
 }
 const fadeMat = new THREE.MeshBasicMaterial({
@@ -580,7 +584,8 @@ const combat = createCombat({
     clickHand: () => clickHand,
     lock: (on) => crosshair.classList.toggle('locked', on),
     floorBased: () => floorBased && renderer.xr.isPresenting,
-    isAR: () => xrKind === 'ar' && renderer.xr.isPresenting,
+    // Duels are always a full battlefield, never mixed with the room (see onCombatView).
+    isAR: () => false,
     trackedHand: (which) => hands.find((h) => h.userData.inputSource?.handedness === which && h.userData.inputSource?.hand) || null,
   },
 });
@@ -679,12 +684,10 @@ function onCombatView(enter) {
       pitch = 0;
       camera.rotation.order = 'YXZ';
       camera.rotation.set(pitch, yaw, 0);
-    } else if (xrKind === 'ar') {
-      returnToAR = true;
-      savedBoardPos.copy(board.position);
-      savedBoardQuat.copy(board.quaternion);
-      swapSession('vr');
     }
+    // In AR the fight is drawn solid (its own sky and ground) inside the same session. Ending the
+    // AR session to open a VR one needs a fresh tap on a headset, and without it the player was
+    // dropped out of the headset view altogether.
     if (!musicOn) {
       startMusic();
       musicOn = true;
@@ -702,9 +705,6 @@ function onCombatView(enter) {
       controls.target.copy(savedTarget);
       controls.enabled = !menu;
       controls.update();
-    } else if (returnToAR) {
-      returnToAR = false;
-      swapSession('ar');
     }
   }
   applyScenery();
@@ -713,6 +713,11 @@ function onCombatView(enter) {
 
 function applyScenery() {
   castle.world.visible = inCastle && !combatView;
+  // The castle brings its own low sun and firelight, so the room lights step back there.
+  const dusk = inCastle && !combatView;
+  ambient.intensity = dusk ? 0.3 : 0.72;
+  key.intensity = dusk ? 0.35 : 1.2;
+  rim.intensity = dusk ? 0.15 : 0.35;
   if (combatView) {
     board.visible = false;
     diorama.visible = false;
@@ -744,7 +749,8 @@ function applyScenery() {
 function updateHUD() {
   const fighting = game.phase === 'combat';
   titleEl.classList.toggle('hidden', !menu);
-  topbar.classList.toggle('hidden', menu || fighting);
+  // No game labels while there is no game.
+  topbar.classList.toggle('hidden', menu || fighting || prelude);
   corner.classList.toggle('hidden', menu);
   placeHint.classList.toggle('hidden', !(placing && xrKind === 'ar'));
   btnMove.classList.toggle('hidden', !(xrKind === 'ar' && !placing && !fighting));
@@ -760,7 +766,8 @@ function updateHUD() {
   topbar.classList.toggle('gold', lead === 0);
   topbar.classList.toggle('violet', lead === 1);
   const who = SIDE_NAME[game.turn];
-  if (placing) hintEl.textContent = 'Point at a table, then tap to place the court.';
+  if (prelude) hintEl.textContent = 'Talk to Sundai. Ask her to play a game when you want one.';
+  else if (placing) hintEl.textContent = 'Point at a table, then tap to place the court.';
   else if (computersTurn()) hintEl.textContent = `${who} (computer) is choosing a move…`;
   else if (online && onlineBlock() && game.phase === 'play') hintEl.textContent = onlineBlock();
   else if (game.phase === 'over') hintEl.textContent = game.draw ? 'Neither side can move.' : `${SIDE_NAME[game.winner]} has taken the monarch.`;
@@ -771,7 +778,7 @@ function updateHUD() {
         ? `${who}: pinch one of your pieces, or point and pull the trigger.`
         : `${who}: click one of your pieces.`;
   } else hintEl.textContent = `${who}: green moves, red strikes. The monarch only steps.`;
-  flashTurn();
+  if (!prelude) flashTurn();
   btnSound.textContent = isMuted() ? 'Sound off' : 'Sound on';
   btnOpponent.classList.toggle('hidden', !!online);
   btnLeave.classList.toggle('hidden', !online);
@@ -1082,7 +1089,8 @@ const playPlaque = (() => {
 })();
 const _playFwd = new THREE.Vector3();
 function placePlayPlaque() {
-  const show = renderer.xr.isPresenting && prelude;
+  // Only a fallback: with her voice live the game is started by asking her.
+  const show = renderer.xr.isPresenting && prelude && sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting';
   if (show && !playPlaque.visible) {
     const cam = renderer.xr.getCamera();
     cam.getWorldPosition(_cam);
@@ -1302,6 +1310,22 @@ function startGameHere() {
   return 'started';
 }
 
+// "Leave the game": the castle and board go away and the player is back in their own room with
+// her, as before the game. A game can be started again afterwards.
+function leaveGameHere() {
+  if (prelude || menu || !simPlays()) return 'none';
+  inCastle = false;
+  prelude = true;
+  restart(true);
+  if (combatView) onCombatView(false);
+  hideGameOver();
+  board.visible = false;
+  applyScenery();
+  updateHUD();
+  sim.leftGame();
+  return 'left';
+}
+
 function beginPlacement() {
   placing = true;
   menu = false;
@@ -1417,7 +1441,7 @@ function onSessionEnd() {
   updateHUD();
 }
 
-function restart() {
+function restart(quiet = false) {
   releaseHeld(false);
   clearTimeout(aiTimer);
   epoch += 1;
@@ -1433,8 +1457,10 @@ function restart() {
   if (!menu && !placing) setTimeout(simGreet, 0);
   game.reset = false;
   updateHUD();
-  playSfx('start');
-  toast('The court is set.');
+  if (!quiet) {
+    playSfx('start');
+    toast('The court is set.');
+  }
   sendAction('restart');
 }
 
@@ -1686,7 +1712,8 @@ function frame(t, xrFrame) {
   }
   tabletop.turnSprite.visible = renderer.xr.isPresenting && !combatView;
   placeExitPlaque();
-  exitPlaque.visible = renderer.xr.isPresenting && !placing;
+  // No Exit plaque in the air: leaving is asked of her by voice (or the headset's own menu button).
+  exitPlaque.visible = renderer.xr.isPresenting && !placing && !prelude && !combatView && !simPlays();
   placePlayPlaque();
 
   updateHitTest(xrFrame);
@@ -2045,4 +2072,4 @@ if (import.meta.env.DEV) {
 applyScenery(); // the title screen starts without the board
 
 // For automated checks and for poking at the game from the browser console.
-window.crownfall = { beginPrelude, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
+window.crownfall = { beginPrelude, leaveGameHere, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
