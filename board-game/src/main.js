@@ -233,7 +233,12 @@ const btnArMini = $('btn-ar-mini');
 const btnVrMini = $('btn-vr-mini');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+// Soft-edged sun shadows in the duels (only the sun casts them).
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+// Render the headset's periphery at lower resolution: free frame time on Quest.
+renderer.xr.setFoveation(1);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -990,6 +995,7 @@ async function enterXR(kind) {
     hitTestSource = null;
     hitTestRequested = false;
     session.addEventListener('end', onSessionEnd);
+    renderer.xr.setFoveation(1);
     await renderer.xr.setSession(session);
     hideGameOver();
     if (kind === 'vr') {
@@ -1255,10 +1261,32 @@ function updateHands() {
   }
 }
 
+// Auto quality: if a headset can't hold its refresh rate in a duel for a few
+// seconds, drop the sun's shadows. Never comes back up
+// mid-session, so it doesn't oscillate.
+let quality = 'high';
+let avgFrame = 1 / 72;
+let slowFor = 0;
+function watchQuality(rawDt) {
+  if (quality === 'low' || !renderer.xr.isPresenting || game.phase !== 'combat') {
+    slowFor = 0;
+    return;
+  }
+  avgFrame += (Math.min(rawDt, 0.1) - avgFrame) * 0.05;
+  slowFor = avgFrame > 0.0175 ? slowFor + rawDt : Math.max(0, slowFor - rawDt);
+  if (slowFor > 3) {
+    quality = 'low';
+    combat.setQuality('low');
+    console.info('Crownfall: lowering quality to hold the frame rate');
+  }
+}
+
 function frame(t, xrFrame) {
   const now = t || performance.now();
-  const dt = Math.min(0.05, last ? (now - last) / 1000 : 0.016);
+  const rawDt = last ? (now - last) / 1000 : 0.016;
+  const dt = Math.min(0.05, rawDt);
   last = now;
+  watchQuality(rawDt);
   if (!renderer.xr.isPresenting && controls.enabled) controls.update();
 
   const camObj = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
