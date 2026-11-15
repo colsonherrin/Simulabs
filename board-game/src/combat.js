@@ -8,7 +8,7 @@ import {
   createSoldier,
   setBowString,
 } from './pieces.js';
-import { playArrow, playDeflect, playHit, playHurt, playWhoosh } from './audio.js';
+import { playArrow, playArrowIncoming, playClang, playDeflect, playHit, playHurt, playWhoosh } from './audio.js';
 import { bowGrip, fist, isTracked, pinch, swordGrip, wrist } from './handgrip.js';
 import { createWarZone, makeSkyEnvironment } from './war.js';
 import { startWarAmbience, stopWarAmbience } from './audio.js';
@@ -419,6 +419,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     e.dying = 0.001;
     kills += 1;
     sparks.burst(point || e.mesh.position.clone().setY(1.2), 0xffe1b0, 10, 3.5);
+    // Cutting down a swordsman means beating his blade: steel rings on steel.
+    if (usesSword() && e.kind === 'sword') playClang();
     playHit();
     hooks.haptic?.(0.7);
     // Browsers refuse vibration until the page has been tapped.
@@ -1326,7 +1328,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
           arrow.owner = e;
           e.cooldown = TUNING.archerInterval * (0.85 + Math.random() * 0.3);
           e.sinceShot = 0;
-          playArrow();
+          // Quieter than your own bow: it is across the field.
+          playArrow(0.55);
         }
       }
     }
@@ -1392,6 +1395,11 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       if (arrow.alive && !arrow.fromPlayer && !arrow.reflected && arrow.age > 0.12 && shieldStops(arrow)) {
         arrow.alive = false;
         blockHit(arrow.mesh.position.x, arrow.mesh.position.y, arrow.mesh.position.z);
+      }
+      // An enemy arrow coming at you whistles as it closes in.
+      if (arrow.alive && !arrow.fromPlayer && !arrow.reflected && !arrow.whistled && arrow.mesh.position.distanceTo(_chest) < 5) {
+        arrow.whistled = true;
+        playArrowIncoming();
       }
       if (arrow.alive && !arrow.fromPlayer && !arrow.reflected && arrow.age > 0.12) {
         if (arrow.mesh.position.distanceTo(_chest) < 0.38) {
