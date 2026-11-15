@@ -1,2 +1,2 @@
 // Shown on the Crownfall page. Add 1 on every change that gets published.
-export const VERSION = 25;
+export const VERSION = 26;

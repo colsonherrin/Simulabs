@@ -24,8 +24,17 @@ import { assess, bestMove, boardText, clashRecord, describeAction } from './sear
 const KEY_NAME = 'simulacra.openaiKey'; // shared with the Simulacra page on the same site
 const MODEL = 'gpt-realtime';
 
-const RULES = `Coronet rules: a five-by-five board. Each side has, left to right on its back rank: archer, swordsman, monarch, swordsman, archer. A turn is one action with one piece. Every piece may step one square in any direction (straight or diagonal) onto an empty square. Archers and swordsmen may instead attack an enemy piece on an adjacent square (also diagonally); the monarch can never attack. Attacking the enemy monarch wins the game at once. Attacking an archer or swordsman starts a duel that the human fights by hand in first person, with a bow if their piece is an archer and a sword if it is a swordsman, and five hearts: if the attacker wins it takes the square, if it loses the attacking piece is removed. So every piece next to an enemy can be attacked by it, and the monarch must never end a turn next to an enemy archer or swordsman.
-Squares are named like chess: files a to e from the user's left, ranks 1 to 5 from the user's side. The user plays Gold (starts on rank 1) and moves first. You play Violet (rank 5).`;
+const RULES = `Coronet, the board:
+A five-by-five board. Each side has, left to right on its back rank: archer, swordsman, monarch, swordsman, archer. A turn is one action with one piece. Every piece may step one square in any direction (straight or diagonal) onto an empty square. Archers and swordsmen may instead attack an enemy piece on an adjacent square (also diagonally). The monarch can never attack, and only moves. Attacking the enemy monarch wins the game at once, with no duel. Attacking an archer or swordsman starts a first-person duel. If the attacker wins the duel, that piece takes the square and the defender is removed. If the attacker loses, the attacking piece is removed and the defender stays. Any piece standing next to an enemy archer or swordsman can be attacked by it, so the monarch must never end a turn beside one.
+Squares are named like chess: files a to e from the user's left, ranks 1 to 5 from the user's side. The user plays Gold (starts on rank 1) and moves first. You play Violet (rank 5).
+
+Duels, when they ask how to fight:
+The user's own piece chooses the weapon. A swordsman puts a sword in their hand. An archer puts a bow in one hand. They have 8 hearts. An enemy hit costs a heart. At 0 hearts they lose the duel. You do not fight; you only watch and can explain it.
+- Swordsman against swordsmen: enemy swordsmen charge in two groups, fifteen in all. Swing the sword into them until they are down.
+- Swordsman against archers: this is the important one. The archers stay back and shoot. You do not close in and slash them. You knock their arrows out of the air with the sword, and a solid hit sends the arrow back into an archer. Two volleys of six. Say it plainly: deflect the arrows with your sword.
+- Archer against swordsmen: the other hand pulls the bowstring (the hand they use to click the board; the other hand holds the bow). Squeezing the grip draws the string. Releasing that grip shoots. A tiny squeeze does not fire. Shoot the charging swordsmen, fifteen of them.
+- Archer against archers: same bow. Their archers shoot and sidestep on their own. Shoot the archers down, two volleys of six. You can also shoot their arrows out of the air.
+Winning the duel takes the square. Losing it removes the piece that attacked.`;
 
 export const INSTRUCTIONS = `You are Sim, an AI person with a body, standing in the user's real room: they see you through their headset, life-sized.
 
@@ -52,7 +61,8 @@ Like a friend across the table, not a commentator or a teacher. This matters mor
 - Never mention messages, tools or that you are an AI model.
 
 # The rules, when they ask how to play
-Say only this much, in your own words, and then let them play: "Move one piece one square, any direction. Archers and swordsmen can attack a piece next to them, which starts a duel you fight yourself. Hit my monarch and you win." Add a detail only when they ask or when it comes up in the game.
+Answer the question they actually asked, in your own words, then stop. For the board, a few sentences is enough: one piece, one square, any direction; archers and swordsmen can attack a neighbour; that starts a duel they fight themselves; hit your monarch and they win.
+When they ask how a duel works, explain that matchup from the duel notes below. If they ask about their swordsman against your archers, tell them they have to deflect the arrows with their sword, and that a good hit sends the arrow back into an archer. Do not skip that. Do not invent different controls or different numbers of enemies.
 
 ${RULES}
 
@@ -61,7 +71,7 @@ Messages starting with [game] come from the game, not from the user. They show w
 - Most [game] messages need no words. If one does not clearly call for a remark, stay silent (call skip_turn).
 - Your own moves are made for you and reported with their reason. Do not announce them. When it threatens their monarch, gloat about it ("Your monarch looks nervous."); otherwise a short taunt now and then is welcome.
 - A coaching note about the user's move: if it is a blunder or a missed win, tell them in one sentence what to look for. Otherwise say nothing, or at most "nice" now and then.
-- You cannot see the duels. You are told who won: react in a few words.
+- You do not see the duel itself. You are told which weapons are fighting and who won. If they ask how to win the one they are in, use the duel notes. Otherwise react in a few words.
 - If they ask what to do or for a hint, call suggest_move and give the move and the reason in one sentence. If they ask about the position, call get_board first.`;
 
 export const TOOLS = [
@@ -118,6 +128,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   // She arrives in everyday clothes. The court gown, cloak and crown go on when a game starts.
   let wantDress = false;
   let dressed = false;
+  let situation = 'No game yet. You are in the room in everyday clothes. There is no board.';
   // Where she stands, and the spots she is walking through to get somewhere (three.js x, z on the floor).
   const at = { x: 0, z: 0, yaw: 0, known: false };
   let route = [];
@@ -297,7 +308,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       const r = startGame ? startGame() : 'unavailable';
       return r === 'started' ? { status: 'started', note: 'The board is being set between you and you are putting on your gown and crown. Say a few words, then it is their move.' } : { status: 'failed', reason: r === 'already' ? 'The game is already going.' : 'A game cannot be started right now.' };
     }
-    if (name === 'get_board') return { board: boardText(game.board), to_move: game.phase !== 'play' ? game.phase : game.turn === human ? 'the user (Gold)' : 'you (Violet)', user_duel_record: record.summary() };
+    if (name === 'get_board') return { board: boardText(game.board), to_move: game.phase !== 'play' ? game.phase : game.turn === human ? 'the user (Gold)' : 'you (Violet)', user_duel_record: record.summary(), situation };
     return { error: 'unknown tool' };
   }
 
@@ -339,6 +350,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       const options = (connectionType) => ({
         agentId: id,
         connectionType,
+        overrides: { agent: { prompt: { prompt: INSTRUCTIONS } } },
         clientTools: Object.fromEntries(TOOLS.map((t) => [t.name, () => JSON.stringify(toolResult(t.name))])),
         onConnect: () => log('connected (' + connectionType + ')'),
         onDisconnect: (d) => {
@@ -369,6 +381,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
           conv = await Conversation.startSession(options('websocket'));
         }
         state = 'live';
+        try { conv.sendContextualUpdate('Game knowledge, keep this for the whole conversation:\n' + INSTRUCTIONS + '\n\nRight now: ' + situation); } catch (e) { log('briefing failed: ' + e.message); }
         for (const [text, speak] of queued.splice(0)) tell(text, speak);
       } catch (e) {
         conv = null;
@@ -779,6 +792,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     },
     /** She is in the room, before any game: say hello. */
     arrived() {
+      situation = 'No game yet. You are in the room in everyday clothes. There is no board.';
       report('You have just appeared in the room, in everyday clothes, facing a visitor. There is no game yet. Say hello in one short sentence.', true, "Sim: Hi, I'm Sim.");
     },
     /** Send her somewhere before the game (used by tests and the no-voice fallback). */
@@ -787,6 +801,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
 
     gameStarted() {
       wantDress = true;
+      situation = 'A game is in progress on the board. The user is Gold and moves first. You are Violet.';
       report(`A new game has started. You are Violet, the user is Gold and moves first. Their record in duels so far: ${record.summary()}. Say hello in a few words and tell them it is their move. Do not explain the rules unless they ask.${boardNow()}`, true, "Sim: Move a piece one square. Archers and swordsmen can attack a neighbour. Hit my monarch to win. You first.");
     },
 
@@ -812,15 +827,27 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
     },
 
     duelStarting(humanType, foeType, sheAttacks) {
-      report(sheAttacks ? `You attacked the user's ${humanType === 'A' ? 'archer' : 'swordsman'} with your ${foeType === 'A' ? 'archer' : 'swordsman'}. They are now fighting the duel to defend it. Taunt them in a few words.` : `The user attacked your ${foeType === 'A' ? 'archer' : 'swordsman'} with their ${humanType === 'A' ? 'archer' : 'swordsman'} and is now fighting the duel. Taunt them in a few words.`, true, pick(sheAttacks ? TAUNTS.attack : TAUNTS.defend).replace('{piece}', humanType === 'A' ? 'archer' : 'swordsman'));
+      const you = humanType === 'A' ? 'archer (bow)' : 'swordsman (sword)';
+      const them = foeType === 'A' ? 'archers' : 'swordsmen';
+      const how = humanType === 'S' && foeType === 'A'
+        ? ' If they ask how, tell them to deflect the arrows with their sword.'
+        : humanType === 'S'
+          ? ' If they ask how, tell them to cut the charging swordsmen down with the sword.'
+          : foeType === 'S'
+            ? ' If they ask how, tell them to draw the bowstring with their click hand and loose into the charge.'
+            : ' If they ask how, tell them to shoot the archers down with the bow.';
+      situation = `A duel is happening now. The user fights as a ${you} against enemy ${them}.` + how;
+      report((sheAttacks ? `You attacked the user's ${humanType === 'A' ? 'archer' : 'swordsman'} with your ${foeType === 'A' ? 'archer' : 'swordsman'}. They are now fighting the duel to defend it.` : `The user attacked your ${foeType === 'A' ? 'archer' : 'swordsman'} with their ${humanType === 'A' ? 'archer' : 'swordsman'} and is now fighting the duel.`) + how + ' Taunt them in a few words unless they asked how to play.', true, pick(sheAttacks ? TAUNTS.attack : TAUNTS.defend).replace('{piece}', humanType === 'A' ? 'archer' : 'swordsman'));
     },
 
     duelEnded(humanType, foeType, humanWon) {
       record.record(humanType, foeType, humanWon);
+      situation = 'The duel is over and play is back on the board.';
       report(`The duel is over: the user ${humanWon ? 'won' : 'lost'} it. Their record: ${record.summary()}. React in a few words, in character${humanWon ? ' (dramatic about losing your men, grudging credit)' : ' (gloat a little; if they have lost this kind of duel more than once, add one short practical tip)'}.${boardNow()}`, true, pick(humanWon ? TAUNTS.lostDuel : TAUNTS.wonDuel));
     },
 
     gameOver(winner) {
+      situation = winner == null ? 'The game is over in a draw.' : winner === human ? 'The game is over. The user won.' : 'The game is over. You won.';
       report(winner == null ? 'The game ended in a draw: nobody can move.' : winner === human ? 'The user struck your monarch and won the game. Be a dramatic but good sport about it in one sentence and demand a rematch.' : 'You struck the user\'s monarch and won the game. Gloat playfully in one sentence and offer another game.', true, winner == null ? '' : pick(winner === human ? TAUNTS.youWin : TAUNTS.iWin));
     },
   };
