@@ -343,6 +343,7 @@ const input = {
   primaryPressed: false,
   primaryReleased: false,
   slash: false,
+  block: false,
 };
 let ptr = null;
 let mouseMag = 0;
@@ -1298,6 +1299,13 @@ function onResize() {
 window.addEventListener('resize', onResize);
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 
+// Right mouse button raises the shield in a sword clash.
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (event.button === 2 && game.phase === 'combat') input.block = true;
+});
+window.addEventListener('pointerup', (event) => {
+  if (event.button === 2) input.block = false;
+});
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) return;
   ptr = { x: event.clientX, y: event.clientY, id: event.pointerId, dragged: false };
@@ -1364,8 +1372,10 @@ window.addEventListener('keydown', (event) => {
   keys[event.code] = true;
   if (event.repeat) return;
   if ((event.code === 'Space' || event.code === 'KeyF') && combatView) input.slash = true;
+  if (event.code === 'KeyQ' && combatView) input.block = true;
 });
 window.addEventListener('keyup', (event) => {
+  if (event.code === 'KeyQ') input.block = false;
   keys[event.code] = false;
 });
 
