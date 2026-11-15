@@ -473,12 +473,16 @@ for (let i = 0; i < 2; i++) {
     controller.userData.connected = false;
   });
   controller.addEventListener('selectstart', () => {
+    // Any press in the headset (re)starts the sound: browsers keep audio
+    // suspended until the player has pressed something.
+    unlockAudio();
     controller.userData.selecting = true;
     if (!triggerHand) triggerHand = controller;
     input.primaryDown = true;
     input.primaryPressed = true;
   });
   controller.addEventListener('squeezestart', () => {
+    unlockAudio();
     controller.userData.squeezing = true;
   });
   controller.addEventListener('squeezeend', () => {
