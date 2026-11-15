@@ -584,7 +584,7 @@ function buildRoom() {
     new THREE.CylinderGeometry(0.55, 0.58, 0.06, 28),
     standard(0x3d2a1c, 0.62),
   );
-  table.position.set(0, 0.93, -0.85);
+  table.position.set(0, 0.63, -0.85);
   room.add(table);
   const pillarGeo = new THREE.CylinderGeometry(0.12, 0.14, 2.4, 8);
   const pillarMat = standard(0x2c2824, 0.8);
