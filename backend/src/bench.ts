@@ -8,6 +8,7 @@
 // milliseconds from input to: first streamed event, action sent to the headset, headset started
 // moving, first sentence ready to speak, and first synthesized audio (only if OPENAI_API_KEY is set).
 // This spends real tokens: roughly 15 short requests per run.
+import './env.js';
 import WebSocket from 'ws';
 import { TurnTimer, type TurnRecord } from './latency.js';
 import type { WorldSnapshot } from './protocol.js';

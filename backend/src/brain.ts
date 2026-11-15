@@ -32,6 +32,8 @@ export interface Brain {
    * the rest (an object was noticed) is only passed along with the next turn. Optional.
    */
   onWorldEvent?(description: string, urgent: boolean): void;
+  /** A still of what the user currently sees (base64 JPEG). Optional: only minds that can look at images use it. */
+  onView?(jpeg: string): void;
   close(): void;
 }
 

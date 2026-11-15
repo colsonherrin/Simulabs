@@ -11,15 +11,29 @@ export class Ears {
   onSpeechStart: () => void = () => {};
   onSpeechEnd: () => void = () => {};
   onTranscript: (text: string) => void = () => {};
+  /** HTTP mode only: enough continuous speech that it is clearly a person talking, not a noise. */
+  onSpeechConfirmed: () => void = () => {};
+  /**
+   * HTTP mode only. If set, each finished utterance is handed over as raw PCM16 and is NOT
+   * transcribed here: the caller sends the audio itself to a model that listens directly.
+   */
+  onUtterance: ((pcm: Buffer) => void) | null = null;
+  /**
+   * HTTP mode only. Fired after a very short pause with the utterance so far, so the caller can
+   * start answering before the pause is long enough to be sure. Followed by either onUtterance
+   * (the pause held: go ahead) or onResumed (the user kept talking: throw the early start away).
+   */
+  onEarly: ((pcm: Buffer) => void) | null = null;
+  onResumed: () => void = () => {};
   private ws: WebSocket | null = null;
   private closed = false;
   private retries = 0;
   /** 'stream' = live socket with server-side speech detection; 'http' = local speech detection + one upload per utterance. */
   mode: 'stream' | 'http' = 'stream';
-  private vad = { noise: 0.004, speaking: false, voicedMs: 0, silentMs: 0, chunks: [] as Buffer[], pre: [] as Buffer[], ms: 0 };
+  private vad = { noise: 0.004, speaking: false, confirmed: false, early: false, voicedMs: 0, silentMs: 0, chunks: [] as Buffer[], pre: [] as Buffer[], ms: 0 };
 
   constructor(
-    private opts: { apiKey: string; model: string; transcribeModel: string; url?: string; mode?: 'stream' | 'http'; httpBaseUrl?: string },
+    private opts: { apiKey: string; model: string; transcribeModel: string; url?: string; mode?: 'stream' | 'http'; httpBaseUrl?: string; silenceMs?: number },
     private log: (level: 'info' | 'warn' | 'error', m: string) => void,
   ) {}
 
@@ -111,7 +125,7 @@ export class Ears {
     }
     const rms = Math.sqrt(sum / samples);
     const ms = (samples / AUDIO_RATE) * 1000;
-    const loud = rms > Math.max(0.012, v.noise * 3.5);
+    const loud = rms > Math.max(0.008, v.noise * 3.5);
     if (!loud) v.noise += (rms - v.noise) * 0.05;
 
     if (!v.speaking) {
@@ -120,6 +134,7 @@ export class Ears {
       v.voicedMs = loud ? v.voicedMs + ms : 0;
       if (v.voicedMs >= 120) {
         v.speaking = true;
+        v.confirmed = false;
         v.chunks = v.pre.splice(0);
         v.silentMs = 0;
         v.ms = v.voicedMs;
@@ -130,19 +145,35 @@ export class Ears {
     v.chunks.push(chunk);
     v.ms += ms;
     if (loud) v.voicedMs += ms;
+    if (!v.confirmed && v.voicedMs >= 300) {
+      v.confirmed = true;
+      this.onSpeechConfirmed();
+    }
     v.silentMs = loud ? 0 : v.silentMs + ms;
-    if (v.silentMs >= 550 || v.ms >= 20_000) {
+    if (loud && v.early) {
+      v.early = false;
+      this.onResumed();
+    } else if (!v.early && this.onEarly && v.silentMs >= 120 && v.voicedMs >= 250) {
+      v.early = true;
+      this.onEarly(Buffer.concat(v.chunks));
+    }
+    if (v.silentMs >= (this.opts.silenceMs ?? 350) || v.ms >= 20_000) {
       const audio = Buffer.concat(v.chunks);
       const voiced = v.voicedMs;
       v.speaking = false;
+      v.early = false;
       v.chunks = [];
       v.voicedMs = 0;
       this.onSpeechEnd();
-      if (voiced >= 250) void this.transcribe(audio);
+      if (voiced >= 250) {
+        if (this.onUtterance) this.onUtterance(audio);
+        else void this.transcribe(audio).then((text) => text && !this.closed && this.onTranscript(text));
+      }
     }
   }
 
-  private async transcribe(pcm: Buffer) {
+  /** PCM16 mono at the protocol rate, wrapped as a WAV file. */
+  static wav(pcm: Buffer): Buffer {
     const header = Buffer.alloc(44);
     header.write('RIFF', 0);
     header.writeUInt32LE(36 + pcm.length, 4);
@@ -156,19 +187,24 @@ export class Ears {
     header.writeUInt16LE(16, 34);
     header.write('data', 36);
     header.writeUInt32LE(pcm.length, 40);
+    return Buffer.concat([header, pcm]);
+  }
+
+  /** One utterance to text over plain HTTPS. Returns '' on failure (logged). */
+  async transcribe(pcm: Buffer): Promise<string> {
     const form = new FormData();
     form.append('model', this.opts.transcribeModel);
-    form.append('file', new Blob([new Uint8Array(Buffer.concat([header, pcm]))], { type: 'audio/wav' }), 'speech.wav');
+    form.append('file', new Blob([new Uint8Array(Ears.wav(pcm))], { type: 'audio/wav' }), 'speech.wav');
     try {
       const res = await fetch(`${this.opts.httpBaseUrl ?? 'https://api.openai.com/v1'}/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${this.opts.apiKey}` }, body: form, signal: AbortSignal.timeout(15_000) });
       if (!res.ok) {
         this.log('error', `speech-to-text failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
-        return;
+        return '';
       }
-      const text = String(((await res.json()) as any).text ?? '').trim();
-      if (text && !this.closed) this.onTranscript(text);
+      return String(((await res.json()) as any).text ?? '').trim();
     } catch (e) {
       this.log('error', `speech-to-text failed: ${(e as any)?.message ?? e}`);
+      return '';
     }
   }
 

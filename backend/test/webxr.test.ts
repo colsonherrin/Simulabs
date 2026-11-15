@@ -17,7 +17,7 @@ test('webxr: the page, the bundled client and the character are served', async (
     const page = await get('/xr/');
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-type') ?? '', /text\/html/);
-    assert.match(await page.text(), /\/xr\/app\.js/);
+    assert.match(await page.text(), /\.\/app\.js/);
 
     const app = await get('/xr/app.js');
     assert.equal(app.status, 200, 'the client bundles without errors');

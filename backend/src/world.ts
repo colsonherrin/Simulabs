@@ -30,6 +30,25 @@ export class WorldModel {
     return this.objects.find((o) => o.id.toLowerCase() === key);
   }
 
+  /**
+   * The id a spoken or loosely written name refers to: an exact id, "user"/"me", or a name that
+   * fits exactly one known object ("the table" when there is one table). Otherwise undefined.
+   */
+  resolveId(name: string | undefined): string | undefined {
+    if (!name) return undefined;
+    const key = name.trim().toLowerCase().replace(/[^a-z0-9_ ]+/g, '').replace(/^(the|that|this|my|a|an) /, '').trim();
+    if (!key) return undefined;
+    if (['user', 'me', 'myself', 'you'].includes(key)) return 'user';
+    const exact = this.find(key);
+    if (exact) return exact.id;
+    const words = key.replace(/_/g, ' ');
+    const hits = this.objects.filter((o) => {
+      const label = o.label.toLowerCase().replace(/_/g, ' ');
+      return label === words || new RegExp(`\\b${label.replace(/[^a-z0-9 ]/g, '')}s?\\b`).test(words);
+    });
+    return hits.length === 1 ? hits[0].id : undefined;
+  }
+
   /** Signature that changes only when the set of things changes, not when poses jitter. */
   signature(): string {
     return this.objects

@@ -78,3 +78,54 @@ a single sample off the floor.
 Not checked: anything on a physical headset. In particular tracking, what Quest Browser actually
 reports for a given room, depth occlusion (the emulator logs a WebGL warning for the occlusion
 draw; use `?depth=0` if the avatar looks wrong), microphone echo, audio level, frame rate.
+
+## Voice, sight and manners (hosted page)
+
+- **Live conversation.** With a key in the page it opens OpenAI's live voice call (WebRTC,
+  `gpt-realtime`): the microphone and her voice are real-time audio, so you talk as with a voice
+  assistant and can interrupt. If the call cannot be set up it falls back by itself to one request
+  per sentence (`gpt-audio-mini`); `?mind=audio` forces that. The status line shows which
+  (`brain: realtime` or `brain: audio`).
+- **Sight.** If the browser offers an outward camera, a still of your view goes to the live model
+  when you start speaking, and every 10 s while idle a still goes to a vision model whose findings
+  are placed in the room (source `detected`, positions approximate) so she can walk to them.
+  `?look=0` stops the idle looks, `?camera=0` the camera, `?camfov=90` sets the assumed lens angle.
+  An avatar or selfie "camera" is refused. In the fallback mind only the placing works: that model
+  cannot look at pictures.
+- **Manners.** She never enters a 0.65 m circle around you, plans paths around you, and steps back
+  if you walk into her. She turns to you when you speak and while she speaks. She strolls only
+  across floor the room scan has confirmed; with no room scan she stays where she is.
+- **Debug.** The Debug button shows mind, microphone level, camera, room, positions, and a running
+  log (heard / said / actions / timings / errors), with a Copy button. Switched on before entering
+  AR, the same information stays visible in the headset.
+
+Checked in a desktop browser against the real service: spoken input through the fallback mind,
+the seeing loop on the rendered preview view (recognised, placed, walked to), personal space,
+strolling, debug panel. **Not checked anywhere: the live call's audio** (the test machine cannot
+carry it; OpenAI did accept the call request), and everything on a headset, including whether
+Quest Browser offers the outward camera.
+
+## Hosted page: no backend needed
+
+`https://<you>.github.io/simulacra/` runs by itself. Paste an OpenAI key into the page and press
+Save; the page then talks to OpenAI directly, using the same session code as the backend (bundled
+into the page). No laptop, no USB. On a Quest: open the address in Meta Quest Browser, paste the
+key, press Enter AR.
+
+- The key is kept in that browser's storage and sent only to OpenAI. Anyone with access to that
+  browser profile could read it, so use a key you can revoke.
+- Learned skills and notes are kept in the same browser.
+- "Use my own backend instead" on the page takes a backend address (`ws://localhost:8787` with the
+  headset on USB, or a `wss://` address).
+
+To rebuild and publish:
+
+```bash
+cd backend && npm run build:webxr -- ../webxr-site
+```
+
+then push that folder as the `gh-pages` branch (Settings → Pages → Deploy from a branch → `gh-pages`, `/`).
+
+Checked in a desktop browser with no backend running, against the real OpenAI service: key
+accepted, spoken replies, "come over here" and "go to the table" move the character. Not checked
+on a headset.

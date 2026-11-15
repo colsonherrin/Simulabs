@@ -29,7 +29,7 @@
   <div class="hint">Get one at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>. Starts with <code>sk-</code>.</div>
   <input id="openai" type="password" autocomplete="off" placeholder="sk-…">
 
-  <label for="anthropic">Anthropic key <span class="hint">— optional. Lets Claude do the thinking.</span></label>
+  <label for="anthropic">Anthropic key <span class="hint">— optional. Only used if you set BRAIN=claude (slower).</span></label>
   <div class="hint">Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com/settings/keys</a>. Starts with <code>sk-ant-</code>.</div>
   <input id="anthropic" type="password" autocomplete="off" placeholder="sk-ant-…">
 
@@ -38,7 +38,7 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const minds = { claude: 'Claude thinks', gpt: 'an OpenAI model thinks', realtime: 'OpenAI speech-to-speech', mock: 'keyword rules only (not AI)' };
+const minds = { audio: 'OpenAI listening model (fast)', claude: 'Claude thinks', gpt: 'an OpenAI model thinks', realtime: 'OpenAI live speech-to-speech (fastest)', mock: 'keyword rules only (not AI)' };
 function show(s) {
   const voice = s.voice ? '<span class="ok">Voice: on</span>' : '<span class="bad">Voice: off — add an OpenAI key</span>';
   const mind = s.brain === 'mock' ? '<span class="bad">Mind: ' + minds.mock + '</span>' : '<span class="ok">Mind: ' + minds[s.brain] + '</span>';

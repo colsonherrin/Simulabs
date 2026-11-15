@@ -1,5 +1,6 @@
 // Pre-demo check: `npm run doctor`. Verifies, without spending tokens, that the keys work, the
 // configured models exist for those keys, and prints the address the headset should use.
+import './env.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { accessSync, constants, mkdirSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
@@ -13,7 +14,7 @@ const ok = (m: string) => console.log(`  ok    ${m}`);
 const bad = (m: string) => { problems++; console.log(`  FAIL  ${m}`); };
 const note = (m: string) => console.log(`  note  ${m}`);
 
-const brain = env.BRAIN ?? (env.ANTHROPIC_API_KEY ? 'claude' : env.OPENAI_API_KEY ? 'gpt' : 'mock');
+const brain = env.BRAIN ?? (env.OPENAI_API_KEY ? 'audio' : env.ANTHROPIC_API_KEY ? 'claude' : 'mock');
 console.log(`Simulacra doctor\n\nMind: ${brain}`);
 if (brain === 'mock') bad('no API keys found in backend/.env: the character would run on keyword rules, not AI');
 

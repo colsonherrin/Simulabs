@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#100e0c" />
+    <title>Crownfall</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%23e6c27a' d='M4 22 L8 10 L12 16 L16 6 L20 16 L24 10 L28 22 Z'/%3E%3Crect fill='%23e6c27a' x='4' y='22' width='24' height='3'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Outfit:wght@380;500;640&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="overlay">
+      <div id="hurt"></div>
+      <div id="fade"><p id="fade-text"></p></div>
+      <div id="crosshair" class="hidden"></div>
+
+      <header id="topbar" class="hidden">
+        <p id="turn" aria-live="polite">Gold's turn</p>
+        <p id="hint" class="hidden">Click one of your pieces.</p>
+      </header>
+      <p id="net-status" class="hidden"></p>
+
+      <section id="combat-hud" class="hidden">
+        <p id="hearts"></p>
+        <p id="objective"></p>
+        <div id="meter" class="hidden"><div id="meter-bar"></div></div>
+        <button id="btn-yield" type="button">Yield</button>
+      </section>
+
+      <p id="toast" class="hidden"></p>
+
+      <section id="title">
+        <p class="eyebrow">WebXR tabletop</p>
+        <h1>Crownfall</h1>
+        <p class="lede">A five-by-five court. Archers on the wings, swords beside the crown. Take the enemy monarch and the court is yours.</p>
+        <ul>
+          <li>Every piece steps one square, diagonally or straight, onto an empty tile.</li>
+          <li>Archers and swordsmen may strike an adjacent foe. The monarch only moves.</li>
+          <li>Win the clash and you take their square. Fall, and your piece is lost.</li>
+          <li>Strike the enemy monarch and the game ends.</li>
+        </ul>
+        <div class="clash">
+          <span>Sword on sword — cut the charge</span>
+          <span>Sword on archer — bat arrows back</span>
+          <span>Archer on sword — loose into the rush</span>
+          <span>Archer on archer — shoot their shafts down</span>
+        </div>
+        <div class="actions">
+          <button id="btn-ar" type="button">Enter AR</button>
+          <button id="btn-vr" type="button">Enter VR</button>
+          <button id="btn-play" type="button">Play here</button>
+          <button id="btn-online" type="button">Play online</button>
+        </div>
+        <div class="sim-voice">
+          <p class="note"><strong>Sim</strong> plays Violet against you and teaches you as you go.</p>
+          <div class="online-row">
+            <input id="sim-key" type="password" autocomplete="off" placeholder="OpenAI key (sk-…) for her voice" aria-label="OpenAI key" />
+            <button id="sim-key-save" type="button">Save</button>
+            <button id="btn-sim" type="button">Talk to Sim</button>
+          </div>
+          <p id="sim-status" class="note" aria-live="polite"></p>
+        </div>
+        <p id="xr-note" class="note">On a phone, run <code>npm run dev:ar</code> and open the https address so the headset or browser can start AR.</p>
+      </section>
+
+      <section id="online" class="hidden">
+        <div class="card">
+          <p class="eyebrow">Play online</p>
+          <h2>Two players, two devices</h2>
+          <p class="note">Create a game and send the code or link to the other player. Whoever creates the game plays Gold; whoever joins plays Violet. Each of you moves only your own pieces.</p>
+          <div class="online-row">
+            <button id="btn-host" type="button" class="primary">Create game</button>
+          </div>
+          <div id="online-share" class="hidden">
+            <p class="code-label">Room code</p>
+            <p id="online-code" class="code"></p>
+            <button id="btn-copy-link" type="button">Copy invite link</button>
+          </div>
+          <p class="or">or join a game</p>
+          <div class="online-row">
+            <input id="join-code" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" maxlength="8" placeholder="Code" aria-label="Room code" />
+            <button id="btn-join" type="button">Join</button>
+          </div>
+          <p id="online-msg" class="note" aria-live="polite"></p>
+          <button id="btn-online-back" type="button">Back</button>
+        </div>
+      </section>
+
+      <section id="gameover" class="hidden">
+        <div class="card">
+          <p class="eyebrow">Crownfall</p>
+          <h2 id="go-title">The monarch is captured</h2>
+          <p id="go-sub">Gold takes the court.</p>
+          <button id="btn-again" type="button">Play again</button>
+        </div>
+      </section>
+
+      <p id="place-hint" class="hidden">Point at your table, then tap to set the court.</p>
+
+      <div id="corner" class="hidden">
+        <button id="btn-opponent" type="button">Vs computer</button>
+        <button id="btn-resign" type="button" class="hidden">Resign</button>
+        <button id="btn-leave" type="button" class="hidden">Leave online</button>
+        <button id="btn-sound" type="button">Sound on</button>
+        <button id="btn-ar-mini" type="button">Enter AR</button>
+        <button id="btn-vr-mini" type="button">Enter VR</button>
+        <button id="btn-move" type="button" class="hidden">Move board</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

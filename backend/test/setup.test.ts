@@ -39,15 +39,15 @@ test('setup: pasted keys are checked, saved, and used without a restart', async 
 
     // The OpenAI key alone gives a talking character.
     r = await post({ openaiKey: '  "sk-good" ' });
-    assert.deepEqual(r, { anthropic: 'skipped', openai: 'ok', brain: 'gpt', voice: true, saved: true });
+    assert.deepEqual(r, { anthropic: 'skipped', openai: 'ok', brain: 'audio', voice: true, saved: true });
     await dropped;
 
-    // Adding the Anthropic key moves the thinking to Claude and keeps the voice.
+    // The listening mind stays the default; Claude is chosen with BRAIN=claude.
     r = await post({ anthropicKey: 'sk-ant-good' });
-    assert.deepEqual(r, { anthropic: 'ok', openai: 'skipped', brain: 'claude', voice: true, saved: true });
+    assert.deepEqual(r, { anthropic: 'ok', openai: 'skipped', brain: 'audio', voice: true, saved: true });
     const env = readFileSync(envPath, 'utf8');
     assert.match(env, /^# mine\nPORT=8787\nOPENAI_API_KEY=sk-good\nANTHROPIC_API_KEY=sk-ant-good\n$/);
-    assert.equal((await (await fetch(base + '/health')).json() as any).brain, 'claude');
+    assert.equal((await (await fetch(base + '/health')).json() as any).brain, 'audio');
   } finally {
     await close();
     provider.close();
