@@ -126,6 +126,7 @@ function playAudio(samples) {
   nextPlay += buffer.duration;
   playing.add(src);
   src.onended = () => playing.delete(src);
+  voiceDbg.rxAudio++;
 }
 
 function stopAudio() {
@@ -168,6 +169,7 @@ const media = {
     voiceSource = null;
     voiceAnalyser = null;
     if (!stream) return;
+    voiceDbg.rxAudio++;
     voiceElement.play().catch(() => {});
     // A second tap on the same stream, only to read loudness for the mouth.
     const ctx = audioContext();
@@ -180,6 +182,7 @@ const media = {
 
 let micOn = false;
 let micLevel = 0; // recent loudness of the microphone, so the user can see it is alive
+const voiceDbg = { sent: 0, sentAt: 0, rxAudio: 0, micError: '' };
 async function startMic() {
   if (micOn) return true;
   try {
@@ -192,6 +195,8 @@ async function startMic() {
       let sum = 0;
       for (let i = 0; i < e.data.length; i++) sum += e.data[i] * e.data[i];
       micLevel = Math.max(Math.sqrt(sum / e.data.length), micLevel * 0.9);
+      voiceDbg.sent++;
+      voiceDbg.sentAt = performance.now();
       core.pushMic(e.data, e.data.length, ctx.sampleRate);
     };
     ctx.createMediaStreamSource(stream).connect(node);
@@ -202,7 +207,8 @@ async function startMic() {
     $('mic').textContent = 'Microphone on';
     return true;
   } catch (e) {
-    note('Microphone unavailable: ' + (e && e.message ? e.message : e));
+    voiceDbg.micError = e && e.message ? e.message : String(e);
+    note('Microphone unavailable: ' + voiceDbg.micError);
     return false;
   }
 }
@@ -709,6 +715,77 @@ const hud = (() => {
   };
 })();
 
+// The voice panel stays in view in the headset: mic, audio leaving, voice coming back.
+const voicePanel = (() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 768;
+  const ctx = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.7, 0.525),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthTest: false }),
+  );
+  mesh.renderOrder = 11;
+  mesh.visible = false;
+  scene.add(mesh);
+  const camP = new THREE.Vector3();
+  const camD = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const want = new THREE.Vector3();
+  let shown = '';
+  return {
+    update(text, dt) {
+      const show = renderer.xr.isPresenting && params.get('log') !== '0';
+      mesh.visible = show;
+      if (!show) return;
+      if (text !== shown) {
+        shown = text;
+        ctx.clearRect(0, 0, 1024, 768);
+        ctx.fillStyle = 'rgba(10, 14, 18, 0.86)';
+        ctx.beginPath();
+        ctx.roundRect(0, 0, 1024, 768, 28);
+        ctx.fill();
+        ctx.font = '30px ui-monospace, monospace';
+        text.split('\n').slice(0, 16).forEach((line, i) => {
+          ctx.fillStyle = i === 0 ? '#f4c06a' : line.startsWith('err') || line.includes('failed') ? '#ff8d7a' : '#e7f0df';
+          ctx.fillText(line.length > 48 ? line.slice(0, 47) + '…' : line, 36, 58 + i * 44);
+        });
+        texture.needsUpdate = true;
+      }
+      const cam = viewCamera();
+      cam.getWorldPosition(camP);
+      cam.getWorldDirection(camD);
+      camD.y = 0;
+      if (camD.lengthSq() < 1e-6) camD.set(0, 0, -1);
+      camD.normalize();
+      right.crossVectors(camD, UP).normalize();
+      want.copy(camP).addScaledVector(camD, 0.9).addScaledVector(right, 0.42).add(new THREE.Vector3(0, -0.08, 0));
+      mesh.position.lerp(want, Math.min(1, dt * 6));
+      mesh.lookAt(camP);
+    },
+  };
+})();
+
+function voiceDebugText() {
+  const sentAge = voiceDbg.sentAt ? (performance.now() - voiceDbg.sentAt) / 1000 : null;
+  const loud = Math.max(0, Math.min(10, Math.round(micLevel * 18)));
+  const meter = '█'.repeat(loud) + '·'.repeat(10 - loud);
+  const mic = !micOn ? 'OFF — press Enter AR' : core.micMuted ? 'muted while she talks  ' + meter : 'LIVE  ' + meter;
+  const hearing = voiceDbg.sent === 0 ? 'nothing sent yet' : voiceDbg.sent + ' frames' + (sentAge === null ? '' : ', last ' + sentAge.toFixed(1) + 's ago');
+  return [
+    'VOICE',
+    'link ' + (core.connected ? 'connected' : 'down') + '   brain ' + core.brain + '   sound ' + (audio ? audio.state : 'off'),
+    'mic  ' + mic,
+    'out  ' + hearing + '   voice back ' + (voiceAnalyser ? 'live call' : voiceDbg.rxAudio + ' packets'),
+    core.lastTranscript || 'you  (nothing heard yet)',
+    core.lastAction ? 'do   ' + core.lastAction : 'do   (no action yet)',
+    voiceDbg.micError ? 'err  ' + voiceDbg.micError : core.lastError ? 'err  ' + core.lastError : '',
+    ...debugLines.slice(-4),
+  ].filter(Boolean).join('\n');
+}
+
 // ---------------------------------------------------------------- frame loop
 
 let debugShownAt = 0;
@@ -784,10 +861,13 @@ function frame(timeMs, xrFrame) {
 
   const text = statusText();
   if ($('status').textContent !== text) $('status').textContent = text;
+  const voiceLog = voiceDebugText();
   hud.update(debugOn ? debugSummary().concat(debugLines.slice(-4)).join('\n') : text, now, dt);
-  if (debugOn && !renderer.xr.isPresenting && now - debugShownAt > 0.3) {
+  voicePanel.update(voiceLog, dt);
+  if (!renderer.xr.isPresenting && now - debugShownAt > 0.3) {
     debugShownAt = now;
-    $('debug').textContent = debugSummary().concat('', debugLines.slice(-60)).join('\n');
+    $('debug').hidden = false;
+    $('debug').textContent = debugOn ? debugSummary().concat('', debugLines.slice(-60)).join('\n') : voiceLog;
   }
   renderer.render(scene, camera);
 }
@@ -797,7 +877,7 @@ function frame(timeMs, xrFrame) {
 async function start() {
   $('mic').onclick = startMic;
   const showDebug = () => {
-    $('debug').hidden = !debugOn;
+    $('debug').hidden = false;
     $('debugCopy').hidden = !debugOn;
     $('debugToggle').textContent = debugOn ? 'Hide debug' : 'Debug';
   };
