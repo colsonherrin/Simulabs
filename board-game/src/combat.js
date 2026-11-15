@@ -749,22 +749,16 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       new THREE.MeshBasicMaterial({ map, transparent: true, depthTest: false }),
     );
     mesh.renderOrder = 50;
-    scene.add(mesh);
+    // Fixed in the arena, along the direction the fight faces. The plane's
+    // +Z looks back toward where the player started.
+    mesh.position.set(0, 1.5, -1.6);
+    group.add(mesh);
     banner = mesh;
-    placeBanner();
-  }
-
-  function placeBanner() {
-    if (!banner) return;
-    const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
-    cam.getWorldPosition(banner.position);
-    cam.getWorldQuaternion(banner.quaternion);
-    banner.translateZ(-1.35);
   }
 
   function hideBanner() {
     if (!banner) return;
-    scene.remove(banner);
+    group.remove(banner);
     banner.geometry.dispose();
     banner.material.map?.dispose();
     banner.material.dispose();
@@ -1294,7 +1288,6 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       const instruct = mode === 'sword-deflect';
       if (instruct) {
         if (!banner && phaseT > 0.4) showBanner('Deflect the arrows with your sword!');
-        placeBanner();
       } else if (phaseT > 0.85 && phaseT < 1.15) hooks.caption?.('Ready');
       else if (phaseT >= 1.15 && phaseT < 1.4) hooks.caption?.('Fight');
       if (phaseT >= (instruct ? 3.6 : 1.4)) {
@@ -1321,7 +1314,6 @@ export function createCombat({ scene, camera, renderer, hooks }) {
         e.mesh.userData.rig?.drive(dt, { action: 'die', t: e.dying });
         if (e.dying < 1.1) falling = true;
       }
-      placeBanner();
       if (phaseT > 2.4 && !falling) {
         const win = resultWin;
         teardown();
