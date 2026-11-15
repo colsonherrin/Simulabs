@@ -18,6 +18,7 @@ import { rtcConnector } from '../../webxr/realtime-rtc.js';
 import { agentId, relayUrl, voicePass } from '../../webxr/voice-pass.js';
 import { Conversation } from '@elevenlabs/client';
 import { TOP, squareLocal } from './tabletop.js';
+import { dressMedieval } from './medieval.js';
 import { assess, bestMove, boardText, clashRecord, describeAction } from './search.js';
 
 const KEY_NAME = 'simulacra.openaiKey'; // shared with the Simulacra page on the same site
@@ -89,7 +90,11 @@ export function createSim({ scene, board, getCamera, getGame, human, say }) {
   const assetBase = new URL('avatar/', document.baseURI).href;
   const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase, lite: /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent) });
   let loaded = false;
-  avatar.load().then(() => { loaded = true; });
+  avatar.load().then(() => {
+    // Crownfall dresses her for the court: a velvet gown, cloak and circlet.
+    try { dressMedieval(avatar); } catch (e) { console.warn('medieval dress skipped', e); }
+    loaded = true;
+  });
   const pose = { x: 0, y: 0, z: 0, yaw: 0, speed01: 0, gesture: '', metres: 0 };
   const lookAt = new THREE.Vector3();
   const pointAt = new THREE.Vector3();
