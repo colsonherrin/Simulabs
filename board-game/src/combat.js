@@ -212,6 +212,8 @@ export function createCombat({ scene, camera, renderer, hooks }) {
   // (weapons posed from tracked hand joints every frame).
   let gripMode = 'screen';
   let stringHeld = false;
+  // Which controller is holding the bow. The other one draws and looses.
+  let bowSide = 'right';
   let drawPeak = 0;
   let releaseWait = 0;
   const _peakNock = new THREE.Vector3();
@@ -916,26 +918,53 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     stringMat.emissiveIntensity = stringHeld ? 1.6 : nearString ? 0.9 : 0;
   }
 
-  // Two controllers, same as the headset build: the bow stays in the right
-  // hand. The left grip catches the string and draws it; letting that grip
-  // go is what looses the arrow. The right grip never fires.
+  function controllerSide(which) {
+    const grip = which === 'right' ? hooks.rightGrip?.() : hooks.leftGrip?.();
+    const ray = which === 'right' ? hooks.rightHand?.() : hooks.leftHand?.();
+    const pull = !!(ray?.userData.squeezing);
+    return { grip, ray, pull };
+  }
+
+  // Either hand can hold the bow. The other hand's grip draws the string,
+  // and letting that grip go looses the arrow. Letting go of the bow hand
+  // does not fire. The choice sticks for the whole draw.
   function poseFromControllers(dt) {
-    const bowGrip = hooks.rightGrip?.();
-    const bowRay = hooks.rightHand?.();
-    if (!bowGrip || !bowRay) return;
-    bowGrip.getWorldPosition(_gripPos);
+    const right = controllerSide('right');
+    const left = controllerSide('left');
+    const ready = (side) => side.grip && side.ray;
+    if (!ready(right) && !ready(left)) return;
+
+    if (!stringHeld) {
+      if (right.pull && !left.pull && ready(right)) bowSide = 'right';
+      else if (left.pull && !right.pull && ready(left)) bowSide = 'left';
+      else if (right.pull && left.pull && ready(right) && ready(left)) {
+        const held = bowSide === 'left' ? left : right;
+        if (ready(held)) {
+          held.grip.getWorldPosition(_gripPos);
+          bow.position.copy(_gripPos);
+          bow.updateMatrixWorld(true);
+          bow.localToWorld(_nockW.set(0, 0, bow.userData.restZ));
+          right.grip.getWorldPosition(_gripPos);
+          left.grip.getWorldPosition(_pullW);
+          // The hand nearer the string is drawing. The other keeps the bow.
+          bowSide = _gripPos.distanceTo(_nockW) < _pullW.distanceTo(_nockW) ? 'left' : 'right';
+        }
+      }
+    }
+
+    const bowHand = bowSide === 'left' ? left : right;
+    const stringHand = bowSide === 'left' ? right : left;
+    if (!ready(bowHand)) return;
+    bowHand.grip.getWorldPosition(_gripPos);
     bow.position.copy(_gripPos);
     bow.visible = true;
+    if (stringHand.grip) stringHand.grip.getWorldPosition(_pullW);
 
-    const stringGrip = hooks.leftGrip?.();
-    const pulling = !!(hooks.leftHand?.()?.userData.squeezing);
-    if (stringGrip) stringGrip.getWorldPosition(_pullW);
-
-    // At rest the bow follows the right controller. While the string is
-    // held it lies on the line between the hands, so the arrow flies from
-    // the string hand out through the bow.
-    bowRay.getWorldQuaternion(_q2);
-    const handsAim = stringHeld && stringGrip;
+    // At rest the bow follows the hand holding it. While the string is held
+    // it lies on the line between the hands, so the arrow flies from the
+    // string hand out through the bow.
+    bowHand.ray.getWorldQuaternion(_q2);
+    const handsAim = stringHeld && stringHand.grip;
     if (handsAim) _fwdW.subVectors(_gripPos, _pullW);
     else _fwdW.copy(_negZ).applyQuaternion(_q2);
     if (_fwdW.lengthSq() < 1e-6) _fwdW.set(0, 0, -1);
@@ -953,7 +982,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     bow.quaternion.setFromRotationMatrix(_basis);
     bow.updateMatrixWorld(true);
 
-    if (stringGrip) pullString(_pullW, pulling, 0.5, dt);
+    if (stringHand.grip) pullString(_pullW, stringHand.pull, 0.5, dt);
     else if (stringHeld) pullString(_pullW, false, 0.5, dt);
     glowString();
   }
