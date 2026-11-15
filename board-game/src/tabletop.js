@@ -553,6 +553,7 @@ export function createTabletop(scene, sfx = {}) {
     room,
     pickables,
     figures,
+    boardTop: top,
     refresh,
     update,
     again,
