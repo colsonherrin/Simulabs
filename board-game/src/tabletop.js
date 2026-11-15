@@ -191,6 +191,7 @@ export function createTabletop(scene, sfx = {}) {
   const pieceShadowTex = shadowTexture();
   const meshes = new Map();
   const pickables = [];
+  const figures = [];
   let markers = [];
   const clock = { t: 0 };
 
@@ -271,6 +272,7 @@ export function createTabletop(scene, sfx = {}) {
           };
           mesh.position.copy(dest);
           mesh.rotation.y = piece.side === GOLD ? Math.PI : 0;
+          mesh.traverse((obj) => { obj.raycast = () => {}; });
           board.add(mesh);
           meshes.set(piece.id, mesh);
         } else if (!mesh.userData.slay) {
@@ -392,8 +394,9 @@ export function createTabletop(scene, sfx = {}) {
 
   function rebuildPickables() {
     pickables.length = 0;
+    figures.length = 0;
     for (const mesh of meshes.values()) {
-      if (!mesh.userData.slay) pickables.push(mesh);
+      if (!mesh.userData.slay) figures.push(mesh);
     }
     for (const m of markers) {
       if (!m.userData.decor) pickables.push(m);
@@ -549,6 +552,7 @@ export function createTabletop(scene, sfx = {}) {
     diorama,
     room,
     pickables,
+    figures,
     refresh,
     update,
     again,

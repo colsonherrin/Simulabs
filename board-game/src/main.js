@@ -1294,7 +1294,7 @@ function pinchPoint(hand) {
 function nearestOwnPiece(point) {
   let best = null;
   let bestD = 0.05;
-  for (const mesh of tabletop.pickables) {
+  for (const mesh of tabletop.figures) {
     if (!mesh.userData?.id || mesh.userData.slay) continue;
     if (mesh.userData.side !== game.turn) continue;
     mesh.getWorldPosition(_piecePos);
