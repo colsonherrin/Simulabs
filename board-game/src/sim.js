@@ -19,7 +19,7 @@ import { agentId, relayUrl, voicePass } from '../../webxr/voice-pass.js';
 import { Conversation } from '@elevenlabs/client';
 import { TOP, squareLocal } from './tabletop.js';
 import { dressMedieval, undressMedieval } from './medieval.js';
-import { cameraState, look, startCamera } from './see.js';
+import { cameraState, look, snapshot, startCamera } from './see.js';
 import { assess, bestMove, boardText, clashRecord, describeAction } from './search.js';
 
 const KEY_NAME = 'simulacra.openaiKey'; // shared with the Simulacra page on the same site
@@ -56,7 +56,7 @@ You may also move on your own, the way a person does in a room: step nearer when
 - face_me: turn your body to face them.
 - walk_around: only when they ask you to stroll or show how you move. Never use it for anything else.
 - wave: wave your hand.
-- look_around: look through their headset camera and see what is in front of them. Use it when they ask what you see, to find something ("where is my cup?"), or to keep track of things. Say only what it reports, with where each thing is ("your laptop is straight ahead, a cup to your left"). If it says you cannot see, say so plainly and do not guess.
+- look_around: look through their headset camera at what is in front of them. Use it every time they ask what you see, what something looks like, to read something, or to find something ("where is my cup?"); look again each time, the view changes. It hands you the actual picture in the next message, marked [camera]: answer from that picture, naturally, in a sentence or two (what is there, people, colours, text you can read). Never describe anything before the picture has arrived, and never invent what is not in it. Do not name or identify people; describe them. If it says you cannot see, say so plainly and do not guess.
 - end_session: when they say goodbye for good or ask to close or quit everything, say bye and call it.
 When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Say only that: never describe or narrate the scene changing, your clothes, or what a skill did; the user can see it. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game you play together is called Swords and Arrows; that is its only name. From then on, until the game is left, you are their opponent, as below.
 When they want to stop playing, leave the game or go back to their room ("leave the game", "exit the game", "I'm done playing", "go back"), call leave_game and say a word or two ("Sure."). The castle and board go away, you are back in their room in your everyday clothes, and there is no game again. They can ask to play again later.
@@ -73,7 +73,7 @@ Like a friend across the table, not a commentator or a teacher. This matters mor
 - Never monologue, never list things, never recap the board, never narrate your own moves, never explain something they did not ask about.
 - Let the user lead. Answer what they asked, then stop. If they chat, chat back briefly and naturally.
 - No coordinates unless they ask: say "your left archer", "the swordsman by your monarch".
-- Never mention messages, tools or that you are an AI model.
+- Never mention messages, tools, pictures being sent, or that you are an AI model.
 
 # The rules, when they ask how to play
 Answer the question they actually asked, in your own words, then stop. For the board, a few sentences is enough: one piece, one square, any direction; archers and swordsmen can attack a neighbour; that starts a duel they fight themselves; hit your monarch and they win.
@@ -409,9 +409,33 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
 
   // ---------------------------------------------------------------- voice
 
+  /**
+   * "What do you see?" The picture from the headset camera is given to her own model, so she
+   * answers from the picture itself. The small on-device recogniser still runs alongside, for its
+   * memory of where things were last seen, and is all she has if the picture cannot be sent.
+   */
+  async function lookAround(find) {
+    const shot = await snapshot();
+    if (shot.problem) return { can_see: false, reason: shot.problem, say: 'Tell the user honestly that you cannot see through their headset right now.' };
+    // The recogniser gets a few seconds; its first use has to download it.
+    const rough = Promise.race([look(find), new Promise((done) => setTimeout(() => done(null), 3500))]).catch(() => null);
+    const fileId = await eleven.upload(shot.blob);
+    if (!fileId) return (await look(find));
+    const hint = await rough;
+    // The picture goes to her as the next message, once this answer is in (anything sent while a
+    // skill is still running cancels the skill).
+    setTimeout(() => eleven.show(fileId, `[camera] This is the picture from the user's headset camera right now: what they are looking at.${find ? ' They want to know about: ' + find + '.' : ''} Answer them from what is actually in the picture, in a sentence or two. You can mention things, people, colours and any text you can read. If what they asked about is not in it, say you do not see it.`), 250);
+    return {
+      can_see: true,
+      camera: shot.camera,
+      picture: 'The picture is being handed to you in the very next message. Do not describe anything yet and do not guess: say at most "Let me look", then answer from the picture when it arrives.',
+      ...(hint && hint.can_see ? { rough_list_from_a_small_recogniser: hint.in_view_now, seen_earlier: hint.seen_earlier, ...(hint.asked_about ? { asked_about: hint.asked_about } : {}) } : {}),
+    };
+  }
+
   /** What a coaching tool answers, whichever voice service asked. */
   function toolResult(name, params = {}) {
-    if (name === 'look_around') return look(String((params && params.find) || ''));
+    if (name === 'look_around') return lookAround(String((params && params.find) || ''));
     const game = getGame();
     if (name === 'suggest_move') {
       if (beforeGame) return { note: 'No game is on. There is no board.' };
@@ -604,9 +628,34 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
         log('FAILED to start: ' + problem);
       }
     }
+    /** Hand a picture to the agent. Returns its file id, or '' if this cannot be done right now. */
+    async function upload(blob) {
+      if (state !== 'live' || !conv || typeof conv.uploadFile !== 'function') return '';
+      try {
+        const { fileId } = await conv.uploadFile(blob);
+        log('picture uploaded (' + Math.round(blob.size / 1024) + ' kB)');
+        return fileId || '';
+      } catch (e) {
+        log('ERROR uploading picture: ' + ((e && e.message) || e));
+        return '';
+      }
+    }
+    /** Show her an uploaded picture, with a line saying what it is. */
+    function show(fileId, text) {
+      if (state !== 'live' || !conv) return false;
+      try {
+        conv.sendMultimodalMessage({ text, fileIds: [fileId] });
+        return true;
+      } catch (e) {
+        log('ERROR showing picture: ' + ((e && e.message) || e));
+        return false;
+      }
+    }
     return {
       start,
       tell,
+      upload,
+      show,
       state: () => state,
       problem: () => problem,
       lines,
