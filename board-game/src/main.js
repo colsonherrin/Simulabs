@@ -1838,6 +1838,23 @@ window.addEventListener('keyup', (event) => {
 });
 
 btnPlay.addEventListener('click', () => voiceThenStart(() => enterXR('ar')));
+// On a laptop or desktop: straight into a game on this screen, no headset
+// and no introduction. Also from a link: …/crownfall/?play
+function playHere() {
+  unlockAudio();
+  menu = false;
+  prelude = false;
+  placing = false;
+  // Look down at the board from the player's side of the table.
+  camera.position.set(0, 1.22, 0.62);
+  controls.target.set(0, 0.04, 0);
+  controls.enabled = true;
+  controls.update();
+  applyScenery();
+  updateHUD();
+  simGreet();
+}
+$('btn-play-here').addEventListener('click', playHere);
 btnArMini.addEventListener('click', () => enterXR('ar'));
 btnVrMini.addEventListener('click', () => enterXR('vr'));
 btnAgain.addEventListener('click', () => {
@@ -2079,3 +2096,6 @@ applyScenery(); // the title screen starts without the board
 
 // For automated checks and for poking at the game from the browser console.
 window.crownfall = { beginPrelude, leaveGameHere, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
+
+// A link with ?play (or #play) skips the start screen and opens the game.
+if (new URLSearchParams(location.search).has('play') || location.hash === '#play') playHere();
