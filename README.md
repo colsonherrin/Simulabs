@@ -5,10 +5,8 @@
 Sundai is an embodied AI companion that sees, speaks, moves, and interacts with your world. Meet
 her in **Swords and Arrows**, an immersive AR/VR strategy game where chess meets medieval combat.
 
-**Play it on a Meta Quest 3 or 3S:** open
-**https://colsonherrin.github.io/simulacra/crownfall/** in the Quest Browser and press
-**Talk to Sundai**. Allow the microphone and camera when asked. There is nothing to install and
-nothing to type.
+It runs in the Meta Quest Browser on a Quest 3 or 3S, with nothing to install and nothing to type.
+Press **Talk to Sundai** and allow the microphone and camera when asked.
 
 ## What she does
 
@@ -105,6 +103,11 @@ The published site is built from `main` into the `gh-pages` branch: the Simulacr
   sword-versus-archer fights with arrow deflection and dodges, and the win/lose banners.
 - **Tanaya** created the chess-piece characters, from low-poly models to detailed figures, and
   built the battlefield with ruins, fires, smoke, catapults, weapons and cinematic lighting.
+
+## License
+
+MIT. See [LICENSE](LICENSE). Third-party assets and libraries keep their own licenses (the avatar
+and its animations come from Microsoft Rocketbox, which is also MIT licensed).
 
 ---
 

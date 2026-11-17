@@ -20,7 +20,7 @@ After that anyone opening the site hears and talks to Sim without typing anythin
 
 - It never leaves the worker. Browsers only ever receive ten-minute passes.
 - Passes are only given to the allowed site (`ALLOWED_ORIGINS`, default
-  `https://colsonherrin.github.io`) and to at most 20 sessions an hour per network.
+  the site's own address) and to at most 20 sessions an hour per network.
 - These stop casual misuse, not a determined one: the site is public, so **set a monthly spending
   limit on the key** at platform.openai.com.
 

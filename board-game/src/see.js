@@ -72,6 +72,29 @@ export async function startCamera() {
   }
 }
 
+/**
+ * The picture the player is looking at, right now, as a JPEG. Returns { blob } or { problem }.
+ * This is what she is actually shown: her own model looks at it, so she can describe anything in
+ * it (colours, text, people), not only the things the small on-device recogniser knows.
+ */
+export async function snapshot() {
+  if (!video && !(await startCamera())) return { problem: problem || 'the camera could not be started' };
+  if (blank()) return { problem: `the camera ("${label}") is giving an empty picture` };
+  try {
+    const w = video.videoWidth || 640;
+    const h = video.videoHeight || 480;
+    const scale = Math.min(1, 768 / Math.max(w, h));
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * scale);
+    c.height = Math.round(h * scale);
+    c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+    const blob = await new Promise((done) => c.toBlob(done, 'image/jpeg', 0.8));
+    return blob ? { blob, camera: label } : { problem: 'the picture could not be taken' };
+  } catch (e) {
+    return { problem: 'the picture could not be taken (' + ((e && e.message) || e) + ')' };
+  }
+}
+
 export const cameraState = () => (video ? 'on: ' + label : problem || 'not started');
 
 const probe = typeof document !== 'undefined' ? document.createElement('canvas') : null;
