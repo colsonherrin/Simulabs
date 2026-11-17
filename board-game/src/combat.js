@@ -448,6 +448,12 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     return arrow;
   }
 
+  function stickArrow(arrow, enemy) {
+    arrow.alive = false;
+    arrow.stuck = true;
+    enemy.mesh.attach(arrow.mesh);
+  }
+
   function killEnemy(e, point) {
     if (!e.alive) return;
     e.alive = false;
@@ -1610,7 +1616,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     for (let i = arrows.length - 1; i >= 0; i--) {
       const arrow = arrows[i];
       if (!arrow.alive) {
-        group.remove(arrow.mesh);
+        if (!arrow.stuck) group.remove(arrow.mesh);
         arrows.splice(i, 1);
         continue;
       }
@@ -1656,7 +1662,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
           const d = distPointSeg(_local, arrow.prev, arrow.mesh.position);
           if (d < hitR) {
             killEnemy(e, arrow.mesh.position.clone());
-            arrow.alive = false;
+            stickArrow(arrow, e);
           }
         }
         if (arrow.alive) {
@@ -1675,7 +1681,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
           if (!e.alive || e.kind !== 'archer') continue;
           if (arrow.mesh.position.distanceTo(_local.set(e.mesh.position.x, 1.25, e.mesh.position.z)) < 0.7) {
             killEnemy(e, arrow.mesh.position.clone());
-            arrow.alive = false;
+            stickArrow(arrow, e);
           }
         }
       } else if (hot > 0 && usesSword()) {
