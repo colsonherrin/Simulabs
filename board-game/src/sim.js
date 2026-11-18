@@ -1142,7 +1142,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
         ['who', `Who are you?`, () => `I'm ${me}, your AI companion. I share your room with you: I can walk with you, sit with you, and play a game with you.`],
         ['can', 'What can you do?', () => 'Ask me to come over, follow you, or sit down. I can change into ' + (who === 'sundai' ? 'Saturdai' : 'Sundai') + ', switch the game to ' + (space ? 'Swords and Arrows' : 'Warstars') + ', and play it against you.'],
         ['about', `Tell me about ${title}`, rules],
-        ['play', "Let's play a game", () => { const r = toolResult('start_game', {}); return r.status === 'started' ? '' : 'I cannot start one right now.'; // her opening line is said by the game starting }],
+        ['play', "Let's play a game", () => { const r = toolResult('start_game', {}); return r.status === 'started' ? '' : 'I cannot start one right now.'; /* her opening line is said by the game starting */ }],
       ];
     }
     if (game.phase === 'over') {
