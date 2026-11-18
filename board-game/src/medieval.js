@@ -130,7 +130,7 @@ function findBone(model, test) {
   return hit;
 }
 
-function circlet() {
+export function circlet() {
   const g = new THREE.Group();
   const gold = new THREE.MeshStandardMaterial({ color: 0xd9a73e, metalness: 1, roughness: 0.25, emissive: 0x4a3008, emissiveIntensity: 0.4, map: steelTex() });
   const gem = new THREE.MeshStandardMaterial({ color: 0x7a0f2a, metalness: 0.2, roughness: 0.1, emissive: 0x5a0818, emissiveIntensity: 0.6 });
@@ -165,7 +165,7 @@ function circlet() {
 // until its band first touches her head or hair, and left resting there, so
 // no part of either passes into the other. Measured on the bind pose and
 // fixed to the head bone, so it stays put however she moves.
-function fitCrown(model, crown) {
+export function fitCrown(model, crown) {
   let mesh = null;
   model.traverse((o) => {
     if (o.isSkinnedMesh && !mesh) mesh = o;

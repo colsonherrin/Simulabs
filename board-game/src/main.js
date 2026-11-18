@@ -350,9 +350,9 @@ async function talkToSim(quiet = false) {
     status.textContent = sim.canSpeak() ? 'Live voice is not available. Sim will still talk with the browser’s built-in voice and coach you as you play.' : 'Live voice is not available, and this browser has no built-in voice: Sim will coach in text.';
     return;
   }
-  status.textContent = 'Connecting Sim’s voice…';
+  status.textContent = 'Connecting Sundai’s voice…';
   const live = await sim.startVoice();
-  status.textContent = live ? 'Sim’s voice is live: just talk to her.' : 'Live voice could not start. She will still speak her coaching, but cannot hear you.';
+  status.textContent = live ? 'Sundai’s voice is live: just talk to her.' : `Her live voice could not start (${sim.voiceProblem() || 'no connection'}). She cannot hear you right now.`;
   if ($('btn-sim')) $('btn-sim').textContent = live ? 'Sim: voice on' : 'Talk to Sim';
   if (live) {
     simGreeted = -1;

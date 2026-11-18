@@ -5,11 +5,16 @@
 //   Saturdai  a pilot: a slate flight jacket with a chest harness and blue piping, dark flight
 //             trousers and boots.
 //
+// The same painter also makes Saturdai's court dress for the medieval game ('noble'): a wine
+// doublet with gold trim and belt over dark hose and boots, with a crown, to stand beside
+// Sundai's gown.
+//
 // Like the court gown (medieval.js), each outfit is painted on the character's own surface in the
 // bind pose, measured from that character's skeleton, so it fits either body and moves with it.
 // Face, neck, hands and hair keep their own colours. Putting it on and taking it off is reversible.
 
 import * as THREE from 'three';
+import { circlet, fitCrown } from './medieval.js';
 
 const HEAD = /* glsl */ `
 varying vec3 vBindPos;
@@ -23,6 +28,7 @@ uniform vec3 uBase;
 uniform vec3 uDark;
 uniform vec3 uAccent;
 uniform float uPilot;
+uniform float uEmit;
 float swGlow = 0.0;
 float swEdge(float v, float at) {
   float w = max(fwidth(v), 0.08);
@@ -102,7 +108,7 @@ const PAINT = /* glsl */ `
       float box = front * swBand(bp.x, 1.5, 5.0) * swBand(bp.y, uBust - 7.0, uBust - 1.5) * step(0.0, p.x);
       col = mix(col, vec3(0.5, 0.52, 0.55), box);
       glow = max(glow, front * swBand(bp.x, 2.2, 4.3) * swBand(bp.y, uBust - 4.2, uBust - 3.2) * step(0.0, p.x));
-    } else {
+    } else if (uEmit > 0.5) {
       // The commander's rank: three short lit bars on the left breast.
       float bars = front * step(0.0, p.x) * swBand(bp.x, 6.0, 11.5) * step(0.5, fract((bp.y - uBust) * 0.42)) * swBand(bp.y, uBust + 0.5, uBust + 7.4);
       glow = max(glow, bars);
@@ -119,6 +125,8 @@ const STYLE = {
   commander: { base: [0.62, 0.65, 0.7], dark: [0.035, 0.05, 0.1], accent: [0.2, 0.62, 1.0], pilot: 0 },
   // Slate over near-black.
   pilot: { base: [0.13, 0.17, 0.22], dark: [0.03, 0.035, 0.045], accent: [0.2, 0.62, 1.0], pilot: 1 },
+  // Court dress for the medieval game: wine doublet, gold trim (not lit), dark hose.
+  noble: { base: [0.15, 0.022, 0.045], dark: [0.035, 0.028, 0.02], accent: [0.55, 0.36, 0.09], pilot: 0, emit: 0, crown: true },
 };
 
 /**
@@ -128,17 +136,19 @@ const STYLE = {
 export function dressSpace(avatar, style = 'commander') {
   const model = avatar?.body?.model;
   if (!model) return;
-  let kit = model.userData.spaceKit;
+  const kits = (model.userData.wearKits = model.userData.wearKits || {});
+  let kit = kits[style];
   if (kit) {
     if (!kit.on) {
       kit.on = true;
+      kit.wear();
       for (const d of kit.dyed) d.apply();
       for (const o of kit.parts) o.visible = true;
     }
     return;
   }
   kit = { on: true, dyed: [], parts: [] };
-  model.userData.spaceKit = kit;
+  kits[style] = kit;
   const s = STYLE[style] || STYLE.commander;
 
   // This character's own measurements, from the skeleton's bind pose (model centimetres).
@@ -158,25 +168,37 @@ export function dressSpace(avatar, style = 'commander') {
   });
   m.shoulder.x = Math.abs(m.shoulder.x);
   m.wrist.x = Math.abs(m.wrist.x);
-  const uniforms = {
+  // One set of values per body, shared by every outfit: putting an outfit on writes its colours
+  // into them. (A material that has already been compiled for an outfit is not asked for its
+  // values again, so they must be the same objects each time.)
+  const uniforms = (model.userData.wearUniforms = model.userData.wearUniforms || {
     uShoulder: { value: m.shoulder },
     uWrist: { value: m.wrist },
     uWaist: { value: m.pelvis + (m.spine - m.pelvis) * 0.29 },
     uBust: { value: m.spine - 2 },
     uKnee: { value: m.knee },
     uAnkle: { value: m.ankle },
-    uBase: { value: new THREE.Vector3(...s.base) },
-    uDark: { value: new THREE.Vector3(...s.dark) },
-    uAccent: { value: new THREE.Vector3(...s.accent) },
-    uPilot: { value: s.pilot },
+    uBase: { value: new THREE.Vector3() },
+    uDark: { value: new THREE.Vector3() },
+    uAccent: { value: new THREE.Vector3() },
+    uPilot: { value: 0 },
+    uEmit: { value: 1 },
+  });
+  const wear = () => {
+    uniforms.uBase.value.set(...s.base);
+    uniforms.uDark.value.set(...s.dark);
+    uniforms.uAccent.value.set(...s.accent);
+    uniforms.uPilot.value = s.pilot;
+    uniforms.uEmit.value = s.emit === 0 ? 0 : 1;
   };
+  kit.wear = wear;
+  wear();
 
   model.traverse((o) => {
-    if (!o.isMesh) return;
+    if (!o.isSkinnedMesh) return; // the body itself, not a crown or anything else worn on it
     for (const mat of Array.isArray(o.material) ? o.material : [o.material]) {
       const name = String(mat?.name || '').toLowerCase();
-      if (!mat || name.includes('head') || name.includes('opacity') || mat.userData.spaceWear) continue;
-      mat.userData.spaceWear = true;
+      if (!mat || name.includes('head') || name.includes('opacity')) continue;
       const own = { onBeforeCompile: mat.onBeforeCompile, customProgramCacheKey: mat.customProgramCacheKey, normalMap: mat.normalMap, roughness: mat.roughness };
       const apply = () => {
         mat.onBeforeCompile = (shader) => {
@@ -188,9 +210,9 @@ export function dressSpace(avatar, style = 'commander') {
             .replace('#include <common>', '#include <common>\n' + HEAD)
             .replace('#include <map_fragment>', PAINT)
             // The trim is lit from within.
-            .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += uAccent * swGlow * 1.6;');
+            .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += uAccent * swGlow * 1.6 * uEmit;');
         };
-        mat.customProgramCacheKey = () => 'space-wear-1-' + style;
+        mat.customProgramCacheKey = () => 'wear-2';
         mat.normalMap = null; // the everyday clothes' folds and seams
         mat.roughness = 0.7;
         mat.needsUpdate = true;
@@ -207,13 +229,23 @@ export function dressSpace(avatar, style = 'commander') {
     }
   });
 
+  if (s.crown) {
+    try {
+      const crown = circlet();
+      fitCrown(model, crown);
+      kit.parts.push(crown);
+    } catch (e) { console.warn('crown skipped', e); }
+  }
 }
 
-/** Back into their own clothes. */
+/** Back into their own clothes (whichever of these outfits is on). */
 export function undressSpace(avatar) {
-  const kit = avatar?.body?.model?.userData.spaceKit;
-  if (!kit || !kit.on) return;
-  kit.on = false;
-  for (const d of kit.dyed) d.restore();
-  for (const o of kit.parts) o.visible = false;
+  const kits = avatar?.body?.model?.userData.wearKits || {};
+  for (const style in kits) {
+    const kit = kits[style];
+    if (!kit.on) continue;
+    kit.on = false;
+    for (const d of kit.dyed) d.restore();
+    for (const o of kit.parts) o.visible = false;
+  }
 }

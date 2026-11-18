@@ -323,16 +323,16 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     sign.sprite.visible = false;
     if (!avatar.root.visible) return;
     // What they wear: in Warstars, their starship outfits (she a commander, he a pilot) for as
-    // long as that mode is on; otherwise her court gown during a game (it was cut for her; he
-    // keeps his own clothes at the table); otherwise their everyday clothes.
-    const outfit = isSpace() ? 'space' : wantDress && who === 'sundai' ? 'court' : '';
+    // long as that mode is on; otherwise court dress during a game (her gown and crown, his
+    // doublet, hose and crown); otherwise their everyday clothes.
+    const outfit = isSpace() ? 'space' : wantDress ? 'court' : '';
     dressed = wantDress;
     if (outfit !== (me.outfit || '')) {
       try {
         // One comes fully off before the other goes on, so each restores the clothes it found.
-        if (me.outfit === 'court') undressMedieval(avatar);
+        if (me.outfit === 'court') (who === 'sundai' ? undressMedieval : undressSpace)(avatar);
         if (me.outfit === 'space') undressSpace(avatar);
-        if (outfit === 'court') dressMedieval(avatar);
+        if (outfit === 'court') (who === 'sundai' ? dressMedieval(avatar) : dressSpace(avatar, 'noble'));
         if (outfit === 'space') dressSpace(avatar, who === 'sundai' ? 'commander' : 'pilot');
       } catch (e) { console.warn('costume change skipped', e); }
       me.outfit = outfit;
@@ -617,6 +617,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     let conv = null;
     let state = 'off';
     let problem = '';
+    let denied = ''; // set when the service itself refuses the call
     let heard = false;
     const lines = [];
     const queued = [];
@@ -644,6 +645,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       if (state === 'connecting' || state === 'live') return;
       state = 'connecting';
       problem = '';
+      denied = '';
       log('connecting to the voice agent');
       const options = (connectionType) => ({
         agentId: id,
@@ -652,10 +654,13 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
         clientTools: Object.fromEntries(TOOLS.map((t) => [t.name, async (params) => JSON.stringify(await toolResult(t.name, params))])),
         onConnect: () => log('connected (' + connectionType + ')'),
         onDisconnect: (d) => {
-          log('disconnected' + (d && d.reason ? ': ' + d.reason + (d.message ? ' ' + d.message : '') : ''));
+          const why = ((d && d.reason) || '') + ' ' + ((d && d.message) || '');
+          log('disconnected' + (why.trim() ? ': ' + why.trim() : ''));
+          // The service turns calls away with this wording when its account has no credits left.
+          if (/not available|quota|credit/i.test(why)) denied = 'voice service is out of credits';
           if (state === 'live') {
             state = 'failed';
-            problem = 'the voice connection ended';
+            problem = denied || 'the voice connection ended';
             conv = null;
             say('Sundai lost her voice connection. Leave and press Play again to reconnect.');
           }
@@ -678,6 +683,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
           log('live-audio route failed (' + (e && e.message ? e.message : e) + '); trying the socket route');
           conv = await Conversation.startSession(options('websocket'));
         }
+        if (denied) throw new Error(denied);
         state = 'live';
         try { conv.sendContextualUpdate('Game knowledge, keep this for the whole conversation:\n' + INSTRUCTIONS + '\n\nRight now: ' + situation); } catch (e) { log('briefing failed: ' + e.message); }
         for (const [text, speak] of queued.splice(0)) tell(text, speak);
@@ -686,6 +692,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
         state = 'failed';
         problem = (e && e.message) || String(e);
         if (/permission|notallowed|denied/i.test((e && e.name) + ' ' + problem)) problem = 'microphone not allowed';
+        if (denied || /not available|quota|credit/i.test(problem)) problem = 'voice service is out of credits';
         queued.length = 0;
         log('FAILED to start: ' + problem);
       }
@@ -1075,7 +1082,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       if (agent) {
         await eleven.start(agent);
         // A failed start is retried a few times by itself: networks and permissions are often slow the first time.
-        if (eleven.state() !== 'live' && retries < 3) {
+        if (eleven.state() !== 'live' && retries < 3 && !/credits/.test(eleven.problem())) {
           retries += 1;
           setTimeout(() => { if (eleven.state() === 'failed') this.startVoice(); }, 6000);
         } else if (eleven.state() === 'live') retries = 0;
