@@ -16,6 +16,7 @@ import { chooseMove } from './ai.js';
 import { createSim } from './sim.js';
 import { createCastle } from './castle.js';
 import { createBridge } from './starship.js';
+import { createListener } from './listen.js';
 import { getTheme, isSpace, setTheme } from './theme.js';
 import { cleanCode, makeCode, openRoom } from './net.js';
 import { VERSION } from './version.js';
@@ -363,12 +364,31 @@ async function talkToSim(quiet = false) {
 }
 // Starting a game switches her voice on if there is a key and it is not on yet: nobody should have
 // to remember a separate button. The microphone prompt comes before any AR session, where it would be hidden.
+// Plain spoken commands, heard by the browser itself, for when the voice agent is not live.
+const listener = createListener(
+  (text) => {
+    if (sim.voiceState() === 'live') return;
+    const done = sim.command(text);
+    if (!done) sim.showNote('Heard: "' + text.slice(0, 40) + '"', 2.5);
+  },
+  (state) => {
+    if (state === 'listening') sim.showNote('Listening: say "play a game", "Warstars mode"…', 5);
+  },
+);
 async function voiceThenStart(start) {
   unlockAudio();
   // The camera she looks through, asked for now: in AR its permission prompt would be out of sight.
   await sim.startCamera().catch(() => false);
   // She says hello when she appears in the room, so not here as well.
   if (sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting' && (await sim.canGoLive())) await talkToSim(true);
+  // No live voice: the buttons in the headset run everything, and plain commands are listened for
+  // where this browser can.
+  if (sim.voiceState() !== 'live') {
+    sim.setQuiet(true);
+    listener.start();
+    const status = $('sim-status');
+    if (status) status.textContent = `Her live voice is not available (${sim.voiceProblem() || 'no connection'}). Use the buttons in the headset${listener.available ? ', or say a command such as “play a game”' : ''}.`;
+  } else listener.stop();
   start();
 }
 const fadeMat = new THREE.MeshBasicMaterial({
@@ -988,6 +1008,10 @@ function handlePick(data) {
     startGameHere();
     return;
   }
+  if (data?.action === 'cmd') {
+    commandPanel.press(data.cmd);
+    return;
+  }
   if (menu || placing || prelude) return;
   if (game.phase === 'over') {
     if (data?.action === 'again') pressAgain();
@@ -1103,10 +1127,115 @@ const playPlaque = (() => {
   scene.add(mesh);
   return mesh;
 })();
+// The command panel: a column of buttons at the player's lower left, shown in the headset whenever
+// the voice agent is not live, so that everything she can be asked for by voice can be done by
+// pointing and pulling the trigger (or pinching). Each button runs the same skill the voice would.
+const commandPanel = (() => {
+  const group = new THREE.Group();
+  group.visible = false;
+  scene.add(group);
+  const W = 0.24;
+  const H = 0.052;
+  const defs = [
+    { id: 'play', label: () => 'Play a game', show: () => prelude, run: () => sim.command('play a game') },
+    { id: 'leave', label: () => 'Leave the game', show: () => !prelude, run: () => sim.command('leave the game') },
+    { id: 'hint', label: () => 'Give me a hint', show: () => !prelude && game.phase === 'play', run: () => sim.offerHint(game) },
+    { id: 'theme', label: () => (isSpace() ? 'Swords and Arrows' : 'Warstars mode'), show: () => true, run: () => sim.command(isSpace() ? 'classic mode' : 'warstars mode') },
+    { id: 'who', label: () => (sim.companion === 'sundai' ? 'Switch to Saturdai' : 'Switch to Sundai'), show: () => true, run: () => sim.command(sim.companion === 'sundai' ? 'change to saturdai' : 'change to sundai') },
+    { id: 'come', label: () => 'Come here', show: () => prelude, run: () => sim.command('come here') },
+    { id: 'follow', label: () => (sim.position.following ? 'Stop following' : 'Follow me'), show: () => prelude, run: () => sim.command(sim.position.following ? 'stop' : 'follow me') },
+    { id: 'sit', label: () => (sim.position.sitting ? 'Stand up' : 'Sit down'), show: () => prelude, run: () => sim.command(sim.position.sitting ? 'stand up' : 'sit down') },
+    { id: 'exit', label: () => 'Exit', show: () => true, run: () => exitXR() },
+  ];
+  const buttons = defs.map((def) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 112;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, toneMapped: false }));
+    mesh.renderOrder = 30;
+    group.add(mesh);
+    return { def, mesh, canvas, texture, text: '', space: null, lit: 0 };
+  });
+  function paint(b, text, lit) {
+    const g = b.canvas.getContext('2d');
+    const space = isSpace();
+    g.clearRect(0, 0, 512, 112);
+    g.fillStyle = lit ? (space ? '#2f7fc4' : '#b88a2e') : b.def.id === 'exit' ? 'rgba(110,26,26,0.92)' : space ? 'rgba(10,22,38,0.92)' : 'rgba(26,20,14,0.92)';
+    g.beginPath();
+    g.roundRect(4, 4, 504, 104, 26);
+    g.fill();
+    g.lineWidth = 5;
+    g.strokeStyle = space ? '#5ac8ff' : '#f0d48a';
+    g.stroke();
+    g.fillStyle = '#fff6e2';
+    g.font = '600 46px Cinzel, Palatino, Georgia, serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(text, 256, 60);
+    b.texture.needsUpdate = true;
+  }
+  let shownKey = '';
+  const fwd = new THREE.Vector3();
+  const at = new THREE.Vector3();
+  return {
+    group,
+    buttons,
+    /** Run a button by its id (used by picking and by tests). */
+    press(id) {
+      const b = buttons.find((x) => x.def.id === id && x.def.show());
+      if (!b) return false;
+      b.lit = performance.now() + 350;
+      playTick();
+      b.def.run();
+      return true;
+    },
+    update(show) {
+      group.visible = show;
+      if (!show) {
+        shownKey = '';
+        return;
+      }
+      const now = performance.now();
+      const visible = buttons.filter((b) => b.def.show());
+      let row = 0;
+      for (const b of buttons) {
+        b.mesh.visible = visible.includes(b);
+        if (!b.mesh.visible) continue;
+        b.mesh.position.set(0, -row * (H + 0.012), 0);
+        row += 1;
+        const text = b.def.label();
+        const lit = now < b.lit ? 1 : 0;
+        if (text !== b.text || isSpace() !== b.space || lit !== b.shownLit) {
+          b.text = text;
+          b.space = isSpace();
+          b.shownLit = lit;
+          paint(b, text, lit);
+        }
+      }
+      // Set down beside the player when it first appears and whenever the set of buttons changes
+      // (a game starting or ending); it then stays where it is, like a thing in the room.
+      const key = visible.map((b) => b.def.id).join(',');
+      const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+      cam.getWorldPosition(at);
+      if (key !== shownKey || group.position.distanceTo(at) > 1.6) {
+        shownKey = key;
+        cam.getWorldDirection(fwd);
+        fwd.y = 0;
+        if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+        fwd.normalize();
+        group.position.copy(at).addScaledVector(fwd, 0.62).add(new THREE.Vector3(fwd.z, 0, -fwd.x).multiplyScalar(0.5));
+        group.position.y = at.y - 0.18;
+        group.lookAt(at.x, at.y - 0.3, at.z);
+      }
+    },
+  };
+})();
 const _playFwd = new THREE.Vector3();
 function placePlayPlaque() {
   // Only a fallback: with her voice live the game is started by asking her.
-  const show = renderer.xr.isPresenting && prelude && sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting';
+  const show = false; // the command panel has a Play button now
   if (show && !playPlaque.visible) {
     const cam = renderer.xr.getCamera();
     cam.getWorldPosition(_cam);
@@ -1167,7 +1296,13 @@ $('btn-exit').addEventListener('click', () => {
   updateHUD();
 });
 
+let showPanelOnScreen = false; // tests turn this on to see the panel without a headset
 function pickWithRay() {
+  if (commandPanel.group.visible) {
+    for (const b of commandPanel.buttons) {
+      if (b.mesh.visible && raycaster.intersectObject(b.mesh, false).length) return { action: 'cmd', cmd: b.def.id };
+    }
+  }
   if (exitPlaque.visible && raycaster.intersectObject(exitPlaque, false).length) return { action: 'exit' };
   if (playPlaque.visible && raycaster.intersectObject(playPlaque, false).length) return { action: 'play' };
   if (prelude) return null;
@@ -1753,6 +1888,8 @@ function frame(t, xrFrame) {
   // No Exit plaque in the air: leaving is asked of her by voice (or the headset's own menu button).
   exitPlaque.visible = renderer.xr.isPresenting && !placing && !prelude && !combatView && !simPlays();
   placePlayPlaque();
+  // Buttons for everything, whenever her voice is not live (not during a battle or while placing).
+  commandPanel.update(simPlays() && !menu && !placing && !combatView && sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting' && (renderer.xr.isPresenting || showPanelOnScreen));
 
   updateHitTest(xrFrame);
   if (renderer.xr.isPresenting && xrKind === 'vr') seatInFront(xrFrame);
@@ -2110,4 +2247,4 @@ if (import.meta.env.DEV) {
 applyScenery(); // the title screen starts without the board
 
 // For automated checks and for poking at the game from the browser console.
-window.crownfall = { beginPrelude, setWorldTheme, getTheme, bridge, leaveGameHere, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
+window.crownfall = { beginPrelude, commandPanel, set panelOnScreen(v) { showPanelOnScreen = !!v; }, setWorldTheme, getTheme, bridge, leaveGameHere, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };

@@ -289,18 +289,27 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     };
   })();
   let liveSince = 0;
+  let note = '';
+  let noteUntil = 0;
+  /** Show a short line over the companion's head for a few seconds (replies when there is no live voice). */
+  function showNote(text, seconds = 4) {
+    note = String(text).slice(0, 70);
+    noteUntil = performance.now() + seconds * 1000;
+  }
   function voiceSign(now) {
+    if (note && now < noteUntil) return note;
     const st = voice.state();
     if (st === 'connecting') return 'Connecting my voice…';
-    if (st === 'failed') return 'No voice: ' + (voice.problem() || 'could not connect').slice(0, 60);
+    if (st === 'failed') return quiet ? '' : 'No voice: ' + (voice.problem() || 'could not connect').slice(0, 60);
     if (st === 'live') {
       if (!liveSince) liveSince = now;
       if (!voice.heardHer()) return now - liveSince < 12000 ? 'Voice connected. Say hello!' : 'Connected, but no sound yet. Is the volume up?';
       return '';
     }
     liveSince = 0;
-    return wantsVoice ? 'Voice not started' : '';
+    return wantsVoice && !quiet ? 'Voice not started' : '';
   }
+  let quiet = false; // the player is using buttons or plain commands: no standing complaint about the voice
   let wantsVoice = false;
 
   /** Look at a square and reach toward it: she is making a move there. */
@@ -1149,6 +1158,57 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       situation = 'No game. You are in the room in everyday clothes. There is no board.';
       voice.tell("[game] The game has been left. The castle and the board are gone; you are back in the user's room in everyday clothes. There is no game now: do not talk about pieces or moves.", false);
     },
+    /**
+     * Carry out a plain spoken or typed command without any voice service: "play a game", "exit
+     * game", "switch to Warstars", "change to Saturdai", "come here", "follow me", "sit down".
+     * The same skills run as when the voice agent calls them. Returns what was done, or null if
+     * the phrase was not a command.
+     */
+    command(text) {
+      const t = ' ' + String(text || '').toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ') + ' ';
+      const side = / left /.test(t) ? 'left' : 'right';
+      const INTENTS = [
+        [/ war ?stars? | star ?wars? | sci ?fi | space (mode|battle|game) | laser/, 'set_theme', { theme: 'warstars' }, 'Warstars mode.'],
+        [/ (normal|classic|medieval|regular|original) | swords and arrows mode /, 'set_theme', { theme: 'classic' }, 'Back to swords and arrows.'],
+        [/ saturd| saturday | a guy | a man | the guy | a boy /, 'switch_companion', { to: 'saturdai' }, 'Saturdai here.'],
+        [/ sundai | sunday | sundae | a girl | a woman | the girl /, 'switch_companion', { to: 'sundai' }, 'Sundai here.'],
+        [/ (leave|exit|quit|end|close|stop) (the |this )?(game|match|playing)| done playing | back to (my|the) room /, 'leave_game', {}, 'Game put away.'],
+        [/ (goodbye|good bye) | (close|quit|exit|end) (everything|the app|session) | exit ar | exit vr /, 'end_session', {}, 'Goodbye.'],
+        [/ (play|start|begin)( a| the| another)? (game|match)| let'?s play | new game /, 'start_game', {}, "Let's play."],
+        [/ (hint|what should i do|what do i do|help me|suggest) /, 'suggest_move', {}, ''],
+        [/ follow me | walk with me | come with me /, 'follow_me', {}, 'Right behind you.'],
+        [/ (walk|wander|roam|explore|go) (around )?(on your own|by yourself|around)| do your own thing /, 'roam', {}, 'Off for a wander.'],
+        [/ stand up | get up /, 'stand_up', {}, 'Up.'],
+        [/ sit( down)? | take a seat /, 'sit', {}, 'Sitting.'],
+        [/ behind me /, 'stand_beside', { side: 'behind' }, 'Behind you.'],
+        [/ (my|on my) (left|right) /, 'stand_beside', { side }, 'On your ' + side + '.'],
+        [/ your (left|right) | step (left|right) | move (left|right) /, 'step', { direction: side }, 'Moving.'],
+        [/ (back up|step back|move back|go back|further away|farther away) /, 'step', { direction: 'back' }, 'Backing up.'],
+        [/ (come|step|move) (a bit |a little )?(closer|forward) /, 'step', { direction: 'closer' }, 'Closer.'],
+        [/ come (here|over)| over here | stand in front /, 'come_here', {}, 'On my way.'],
+        [/ (face|look at|turn to) me | turn around /, 'face_me', {}, ''],
+        [/ wave /, 'wave', {}, 'Hi!'],
+        [/ (stop|stay|wait|hold on|freeze) /, 'stop', {}, 'Staying here.'],
+      ];
+      for (const [re, name, params, reply] of INTENTS) {
+        if (!re.test(t)) continue;
+        quiet = true;
+        const r = toolResult(name, params);
+        const failed = r && (r.status === 'failed' || r.note === 'No game is on. There is no board.');
+        let line = failed ? (r.reason || r.note || 'I cannot do that right now.') : reply;
+        if (name === 'suggest_move' && r && r.suggestion) line = `Try your ${r.suggestion}.`;
+        if (r && r.status === 'already') line = '';
+        if (line) {
+          showNote(line);
+          if (voice.state() !== 'live') builtIn.speak(line);
+        }
+        return { did: name, params, result: r };
+      }
+      return null;
+    },
+    /** Use the buttons and plain commands in place of the voice agent (no complaint over the head about it). */
+    setQuiet(on) { quiet = !!on; },
+    showNote,
     /** Send her somewhere before the game (used by tests and the no-voice fallback). */
     go: (name, params) => toolResult(name, params),
     /** Ask for the outward camera (from a tap, before AR). */
