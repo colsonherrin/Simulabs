@@ -57,6 +57,8 @@ You may also move on your own, the way a person does in a room: step nearer when
 - walk_around: only when they ask you to stroll or show how you move. Never use it for anything else.
 - wave: wave your hand.
 - look_around: look through their headset camera at what is in front of them. Use it every time they ask what you see, what something looks like, to read something, or to find something ("where is my cup?"); look again each time, the view changes. It hands you the actual picture in the next message, marked [camera]: answer from that picture, naturally, in a sentence or two (what is there, people, colours, text you can read). Never describe anything before the picture has arrived, and never invent what is not in it. Do not name or identify people; describe them. If it says you cannot see, say so plainly and do not guess.
+- switch_companion: you have two bodies, and the user can ask for either at any time, in or out of a game. Sundai is the woman (your usual form). SaturdAI (say it "Saturday") is a young man. When they ask for the other one ("change to SaturdAI", "switch to Saturday", "bring out SaturdAI", "let me talk to the guy", "change to a guy", or back with "change to Sundai", "switch back to Sunday", "change to a girl"), call it with to set to saturdai or sundai. You are the same mind either way, with the same memory of this conversation, the same skills and the same game; only your body, your voice and the name you go by change. While you are SaturdAI, introduce yourself as SaturdAI and wrap every single reply in <Saturday>...</Saturday> so you speak with his voice; as Sundai, never use that tag.
+- set_theme: the game has two looks. "warstars" turns it into a space battle on a starship: the Light Side with blue energy swords against the Dark Side with red ones, blaster troopers firing red laser bolts where the archers were, commanders where the monarchs were. "classic" is the medieval look. When they ask ("let's turn this into Warstars mode", "make it sci-fi", "space mode", or "go back to the normal game", "medieval again"), call it. It only changes how the game looks and sounds; the rules, the board and the game in progress stay exactly as they are. In Warstars, talk in that world's terms (energy sword, blaster, laser bolts, commander, Light Side and Dark Side). It works before or during a game.
 - end_session: when they say goodbye for good or ask to close or quit everything, say bye and call it.
 When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Say only that: never describe or narrate the scene changing, your clothes, or what a skill did; the user can see it. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game you play together is called Swords and Arrows; that is its only name. From then on, until the game is left, you are their opponent, as below.
 When they want to stop playing, leave the game or go back to their room ("leave the game", "exit the game", "I'm done playing", "go back"), call leave_game and say a word or two ("Sure."). The castle and board go away, you are back in their room in your everyday clothes, and there is no game again. They can ask to play again later.
@@ -107,6 +109,8 @@ export const TOOLS = [
   { type: 'function', name: 'look_around', description: "Look through the user's headset camera: names the everyday things in front of them and where each is, and remembers where things were last seen. Pass find to ask where one particular thing is.", parameters: { type: 'object', properties: { find: { type: 'string', description: 'A thing to locate, e.g. "cup". Optional.' } }, additionalProperties: false } },
   { type: 'function', name: 'start_game', description: 'Start the board game when the user asks to play: the castle appears, the board is set between you and you change into your gown and crown.', parameters: NONE },
   { type: 'function', name: 'leave_game', description: "Leave the game when the user asks to stop playing or go back: the castle and board go away and you are both back in the user's room.", parameters: NONE },
+  { type: 'function', name: 'switch_companion', description: 'Change which of your two bodies and voices is on show: Sundai (the woman) or SaturdAI (the young man). Same mind, memory and skills either way.', parameters: { type: 'object', properties: { to: { type: 'string', enum: ['saturdai', 'sundai'], description: 'Which one to become.' } }, required: ['to'], additionalProperties: false } },
+  { type: 'function', name: 'set_theme', description: 'Change how the game looks and sounds, without changing the rules or the game in progress: warstars (space battle on a starship) or classic (medieval).', parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['warstars', 'classic'] } }, required: ['theme'], additionalProperties: false } },
   { type: 'function', name: 'end_session', description: 'Close the whole experience when the user says goodbye for good or asks to quit everything.', parameters: NONE },
   { type: 'function', name: 'suggest_move', description: "During a game: the strongest move available to the user right now and why. Use when they ask for a hint or what to do.", parameters: NONE },
   { type: 'function', name: 'get_board', description: 'During a game: the current board, whose turn it is, and how the user has been doing in duels.', parameters: NONE },
@@ -133,7 +137,8 @@ export function sessionSettings() {
   };
 }
 
-export function createSim({ scene, board, getCamera, getGame, human, say, startGame = null, leaveGame = null, endSession = null }) {
+export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw, startGame = null, leaveGame = null, endSession = null, setTheme = null }) {
+  const say = (text) => sayRaw(named(text));
   const her = 1 - human;
   let storage = null;
   try { storage = window.localStorage; } catch (e) { /* not available */ }
@@ -142,11 +147,29 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   // ---------------------------------------------------------------- body
 
   const assetBase = new URL('avatar/', document.baseURI).href;
-  const avatar = createAvatar({ THREE, FBXLoader, scene, assetBase, lite: /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent) });
-  let loaded = false;
-  avatar.load().then(() => {
-    loaded = true;
-  });
+  // Two bodies for one companion. Sundai (a woman) and SaturdAI (a man) are the same mind: the same
+  // voice agent, conversation, skills and permissions. Switching changes only the body that is
+  // shown and the voice it speaks with. His body is fetched the first time he is asked for.
+  const lite = /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent);
+  const CAST = {
+    sundai: { name: 'Sundai', fbx: 'RocketboxAdult.fbx', tex: 'f006', height: 1.7 },
+    saturdai: { name: 'SaturdAI', fbx: 'RocketboxMale.fbx', tex: 'male', height: 1.8 },
+  };
+  const bodies = {};
+  function bodyOf(name) {
+    if (!bodies[name]) {
+      const c = CAST[name];
+      const b = { avatar: createAvatar({ THREE, FBXLoader, scene, assetBase, lite, fbx: c.fbx, tex: c.tex, height: c.height }), loaded: false, dressed: false };
+      b.avatar.load().then(() => { b.loaded = true; });
+      bodies[name] = b;
+    }
+    return bodies[name];
+  }
+  let who = 'sundai'; // the body on show
+  let wantWho = 'sundai'; // the body asked for (shown once it has loaded)
+  let avatar = bodyOf('sundai').avatar;
+  /** Her lines are written as "Sundai: ..."; shown under his name while he is the one standing there. */
+  const named = (text) => (who === 'saturdai' ? String(text).replace(/^Sundai:/, 'SaturdAI:') : text);
   const pose = { x: 0, y: 0, z: 0, yaw: 0, speed01: 0, gesture: '', metres: 0 };
   const lookAt = new THREE.Vector3();
   const pointAt = new THREE.Vector3();
@@ -287,12 +310,22 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   }
 
   function update(dt, { visible, floorY, prelude = false, aside = 0 }) {
-    avatar.root.visible = visible && loaded;
+    // The other body takes over as soon as it is ready; until then the current one stays.
+    if (wantWho !== who && bodyOf(wantWho).loaded) {
+      avatar.root.visible = false;
+      who = wantWho;
+      avatar = bodies[who].avatar;
+    }
+    const me = bodies[who];
+    avatar.root.visible = visible && me.loaded;
     sign.sprite.visible = false;
     if (!avatar.root.visible) return;
-    if (wantDress !== dressed) {
-      dressed = wantDress;
-      try { (dressed ? dressMedieval : undressMedieval)(avatar); } catch (e) { console.warn('costume change skipped', e); }
+    // The court gown was cut for her; he keeps his own clothes at the table.
+    const wear = wantDress && who === 'sundai';
+    dressed = wantDress;
+    if (wear !== me.dressed) {
+      me.dressed = wear;
+      try { (wear ? dressMedieval : undressMedieval)(avatar); } catch (e) { console.warn('costume change skipped', e); }
     }
     beforeGame = prelude;
     const cam = getCamera();
@@ -538,6 +571,23 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
       const r = leaveGame ? leaveGame() : 'unavailable';
       return r === 'left' ? { status: 'done', note: "The game is put away. You are both back in the user's room and you are in your everyday clothes. There is no game now." } : { status: 'failed', reason: r === 'none' ? 'No game is on.' : 'The game cannot be left right now.' };
     }
+    if (name === 'switch_companion') {
+      const to = /sat|guy|man|male|boy|him/i.test(String(params.to || '')) ? 'saturdai' : 'sundai';
+      if (to === wantWho) return { status: 'already', you_are: CAST[to].name };
+      wantWho = to;
+      bodyOf(to); // start fetching his body if this is the first time
+      return to === 'saturdai'
+        ? { status: 'done', you_are: 'SaturdAI', note: 'You now appear as SaturdAI (say it "Saturday"), a young man, and speak with his voice. From this reply on, wrap EVERYTHING you say in <Saturday>...</Saturday> so the voice matches the body. Nothing else about you has changed: same memory of this conversation, same skills, same game. Say one short line as SaturdAI.' }
+        : { status: 'done', you_are: 'Sundai', note: 'You appear as Sundai again and speak with her voice. Stop using the <Saturday> tag. Nothing else about you has changed. Say one short line as Sundai.' };
+    }
+    if (name === 'set_theme') {
+      const theme = /war|star|space|sci|laser|future/i.test(String(params.theme || '')) ? 'warstars' : 'classic';
+      const r = setTheme ? setTheme(theme) : 'unavailable';
+      if (r === 'unavailable') return { status: 'failed', reason: 'The look of the game cannot be changed right now.' };
+      return theme === 'warstars'
+        ? { status: r, theme: 'warstars', note: 'The game now looks and sounds like a space battle aboard a starship: the Light Side (the user, blue energy swords) against the Dark Side (you, red energy swords). Swordsmen carry energy swords, archers are blaster troopers who fire red laser bolts, monarchs are commanders. The rules, the board and the state of the game are exactly the same. Say one short line about it.' }
+        : { status: r, theme: 'classic', note: 'The game is back to its medieval look: castle, swords and arrows. The rules and the state of the game are exactly the same. Say one short line about it.' };
+    }
     if (name === 'end_session') {
       // After her goodbye has had time to be heard.
       if (endSession) setTimeout(endSession, 2500);
@@ -570,6 +620,8 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
         return false;
       }
       try {
+        // While he is the one on show, every message carries the reminder that keeps his voice on.
+        if (who === 'saturdai' || wantWho === 'saturdai') text += '\n(You are SaturdAI right now: wrap your whole reply in <Saturday>...</Saturday>.)';
         if (speak) conv.sendUserMessage(text);
         else conv.sendContextualUpdate(text);
         return true;
@@ -989,7 +1041,9 @@ export function createSim({ scene, board, getCamera, getGame, human, say, startG
   return {
     update,
     record,
-    root: avatar.root,
+    get root() { return avatar.root; },
+    /** Which body is on show: 'sundai' or 'saturdai'. */
+    get companion() { return who; },
     hasKey: () => { try { return !!storage.getItem(KEY_NAME); } catch (e) { return false; } },
     /** True if her live voice can be started here: a key was given, or the site has a voice relay. */
     async canGoLive() {

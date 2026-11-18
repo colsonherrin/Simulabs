@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildRanger, RANGER_PALETTES } from './ranger.js';
 import { createRig } from './rig.js';
+import { beam, ENERGY, isSpace, laserBolt, onTheme, tint, variant } from './theme.js';
 import { leatherTex, steelRough, steelTex, woodTex } from './textures.js';
 
 const MINI_SCALE = 0.045;
@@ -59,6 +60,14 @@ function wm() {
     feather: new THREE.MeshStandardMaterial({ color: 0x8e8880, roughness: 0.9, side: THREE.DoubleSide }),
     featherDark: new THREE.MeshStandardMaterial({ color: 0x2a2624, roughness: 0.9, side: THREE.DoubleSide }),
   };
+  // Warstars: the player is the Light Side. A blue energy sword and an energy bow in dark alloy.
+  const m = weaponMats;
+  tint(m.blade, { color: 0xffffff, emissive: ENERGY[0], emissiveIntensity: 2.6, metalness: 0, roughness: 1, map: null, roughnessMap: null });
+  tint(m.steelDark, { color: 0x20252d, metalness: 0.85, roughness: 0.35 });
+  tint(m.brass, { color: ENERGY[0], emissive: ENERGY[0], emissiveIntensity: 1.2, metalness: 0.2, map: null });
+  tint(m.grip, { color: 0x14171c, map: null });
+  tint(m.wood, { color: 0x2a3038, metalness: 0.8, roughness: 0.35, map: null });
+  tint(m.string, { color: 0x9fd8ff, emissive: ENERGY[0], emissiveIntensity: 2.2 });
   return weaponMats;
 }
 
@@ -109,7 +118,14 @@ export function createBattleSword() {
   for (const sy of [-1, 1]) {
     const fuller = add(group, new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.002, 0.5), m.steelDark));
     fuller.position.set(0, sy * 0.0055, -0.42);
+    variant([fuller], []);
   }
+  // Warstars: the same blade lit blue from within, in a halo. Same size, tip and reach.
+  const halo = beam(0.15, 0.9, 0.034, ENERGY[0]);
+  halo.children[0].visible = false;
+  halo.rotation.x = -Math.PI / 2;
+  group.add(halo);
+  variant([], [halo]);
   // Faint edge lines; combat brightens them while a swing leads with the edge.
   const edgeMat = new THREE.MeshStandardMaterial({ color: 0xe8ecf2, emissive: 0xbfd4ff, emissiveIntensity: 0.15, metalness: 0.9, roughness: 0.15 });
   for (const side of [-1, 1]) {
@@ -142,9 +158,21 @@ export function createBattleShield() {
   for (let i = 0; i < pos.count; i++) uv.setXY(i, 1 - (pos.getX(i) + 0.28) / 0.56, (pos.getY(i) + 0.43) / 0.78);
   uv.needsUpdate = true;
   const face = new THREE.MeshStandardMaterial({ map: shieldHeraldry(0), roughness: 0.68, metalness: 0.05 });
-  group.userData.setCourt = (side) => {
-    face.map = shieldHeraldry(side);
+  // Warstars: a plain alloy shield edged in the side's light, in place of the painted arms.
+  let court = 0;
+  const paint = () => {
+    face.map = isSpace() ? null : shieldHeraldry(court);
+    face.color.set(isSpace() ? 0xcfd8e4 : 0xffffff);
+    face.emissive.set(isSpace() ? ENERGY[court] : 0x000000);
+    face.emissiveIntensity = isSpace() ? 0.3 : 1;
+    face.metalness = isSpace() ? 0.6 : 0.05;
+    face.needsUpdate = true;
   };
+  group.userData.setCourt = (side) => {
+    court = side;
+    paint();
+  };
+  onTheme(paint);
   add(group, new THREE.Mesh(geo, [face, m.wood]));
   const rimPts = outline.getPoints(20).map((p) => new THREE.Vector3(p.x, p.y, -0.025));
   add(group, new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rimPts, true), 70, 0.013, 6, true), m.steelDark));
@@ -278,6 +306,13 @@ export function createArrowMesh(hex = 0xe8d2a0) {
   // Points down -Z with the nock at +0.36: ash shaft, steel bodkin, fletching.
   const group = new THREE.Group();
   const m = wm();
+  // Warstars: the same projectile drawn as a red laser bolt of the same length, on the same
+  // path. Only what is drawn differs; whatever moves and tests this mesh is unchanged.
+  const bolt = laserBolt(0.78);
+  bolt.rotation.x = -Math.PI / 2;
+  bolt.position.z = -0.03;
+  group.add(bolt);
+  queueMicrotask(() => variant(group.children.filter((o) => o !== bolt), [bolt]));
   const shaft = add(group, new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.72, 6), m.woodPale));
   shaft.rotation.x = Math.PI / 2;
   const head = add(group, new THREE.Mesh(new THREE.ConeGeometry(0.014, 0.09, 4), m.steelDark));

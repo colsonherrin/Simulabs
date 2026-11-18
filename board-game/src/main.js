@@ -15,6 +15,8 @@ import { createCombat, INLINE_ARENA } from './combat.js';
 import { chooseMove } from './ai.js';
 import { createSim } from './sim.js';
 import { createCastle } from './castle.js';
+import { createBridge } from './starship.js';
+import { getTheme, isSpace, setTheme } from './theme.js';
 import { cleanCode, makeCode, openRoom } from './net.js';
 import { VERSION } from './version.js';
 import {
@@ -23,7 +25,9 @@ import {
   playSfx,
   playTick,
   resumeAudio,
+  setAudioTheme,
   setMusicTension,
+  setShipAmbience,
   startMusic,
   toggleMute,
 } from './audio.js';
@@ -313,6 +317,7 @@ const sim = createSim({
   say: (text) => toast(text),
   startGame: () => startGameHere(),
   leaveGame: () => leaveGameHere(),
+  setTheme: (theme) => setWorldTheme(theme),
   endSession: () => exitXR(),
 });
 const simPlays = () => vsComputer && !online;
@@ -413,6 +418,9 @@ let prelude = false;
 // drawn solid around the player when the game starts, replacing the view of their room.
 const castle = createCastle();
 scene.add(castle.world);
+// In Warstars the same place is a starship's bridge, with windows onto space.
+const bridge = createBridge();
+scene.add(bridge.world);
 let inCastle = false;
 let xrKind = null;
 let needSeat = false;
@@ -675,7 +683,7 @@ function onCombatView(enter) {
     savedFov = camera.fov;
     controls.enabled = false;
     // Warm battlefield haze. An AR board session is about to become a VR fight.
-    scene.fog = new THREE.FogExp2(0x5e4635, 0.024);
+    scene.fog = isSpace() ? new THREE.FogExp2(0x0b1322, 0.012) : new THREE.FogExp2(0x5e4635, 0.024);
     if (!renderer.xr.isPresenting) {
       camera.fov = 72;
       camera.updateProjectionMatrix();
@@ -712,7 +720,9 @@ function onCombatView(enter) {
 }
 
 function applyScenery() {
-  castle.world.visible = inCastle && !combatView;
+  castle.world.visible = inCastle && !combatView && !isSpace();
+  bridge.world.visible = inCastle && !combatView && isSpace();
+  setShipAmbience(bridge.world.visible);
   // The castle brings its own low sun and firelight, so the room lights step back there.
   const dusk = inCastle && !combatView;
   ambient.intensity = dusk ? 0.3 : 0.72;
@@ -1307,6 +1317,7 @@ function startGameHere() {
   faceBoardToward(_cam.x, _cam.z);
   // Into the castle: the terrace is laid on the player's own floor, its open side the way they face.
   castle.placeAround(_cam.x, renderer.xr.isPresenting && floorBased ? 0 : board.position.y - 0.72, _cam.z, _fwd.x, _fwd.z);
+  bridge.placeAround(_cam.x, renderer.xr.isPresenting && floorBased ? 0 : board.position.y - 0.72, _cam.z, _fwd.x, _fwd.z);
   inCastle = true;
   prelude = false;
   applyScenery();
@@ -1330,6 +1341,27 @@ function leaveGameHere() {
   updateHUD();
   sim.leftGame();
   return 'left';
+}
+
+// "Turn this into Warstars mode" (and back): the look and sound of everything changes where it
+// stands. The game in progress, whose turn it is and any battle under way are not touched.
+const CLASSIC_NAMES = { sides: SIDE_NAME.slice(), types: { ...TYPE_NAME } };
+function setWorldTheme(theme) {
+  const changed = setTheme(theme);
+  const space = isSpace();
+  SIDE_NAME[0] = space ? 'Light Side' : CLASSIC_NAMES.sides[0];
+  SIDE_NAME[1] = space ? 'Dark Side' : CLASSIC_NAMES.sides[1];
+  TYPE_NAME.A = space ? 'Blaster Trooper' : CLASSIC_NAMES.types.A;
+  TYPE_NAME.S = space ? 'Energy Swordsman' : CLASSIC_NAMES.types.S;
+  TYPE_NAME.X = space ? 'Commander' : CLASSIC_NAMES.types.X;
+  setAudioTheme(space ? 'warstars' : 'classic');
+  if (combatView && scene.fog) scene.fog = space ? new THREE.FogExp2(0x0b1322, 0.012) : new THREE.FogExp2(0x5e4635, 0.024);
+  turnShown = null;
+  tabletop.refresh(game);
+  applyScenery();
+  updateHUD();
+  if (changed) playSfx('start');
+  return changed ? 'done' : 'already';
 }
 
 function beginPlacement() {
@@ -1729,7 +1761,7 @@ function frame(t, xrFrame) {
   mouseMag = 0;
   dragSpeed = 0;
 
-  if (inCastle) castle.update(now / 1000);
+  if (inCastle) (isSpace() ? bridge : castle).update(now / 1000);
   tabletop.update(dt, fadeSphere.position);
   // Sim stands on the floor: the headset's own floor when it gives one, otherwise table height below the board.
   board.getWorldPosition(_simAt);
@@ -2078,4 +2110,4 @@ if (import.meta.env.DEV) {
 applyScenery(); // the title screen starts without the board
 
 // For automated checks and for poking at the game from the browser console.
-window.crownfall = { beginPrelude, leaveGameHere, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
+window.crownfall = { beginPrelude, setWorldTheme, getTheme, bridge, leaveGameHere, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };

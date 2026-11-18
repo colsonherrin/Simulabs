@@ -7,7 +7,9 @@
 //   await avatar.load();
 //   avatar.animate(dt, { x, y, z, yaw, speed01, gesture, metres }, voiceLevel, lookAtVec3);
 
-export function createAvatar({ THREE, FBXLoader, scene, assetBase = './avatar/', height: wantedHeight = 1.7, placeholder = false, lite = false, mocap = true }) {
+// `fbx` and `tex` choose the character: the model file and the prefix of its texture files
+// (f006 is the woman, male the man; both are Rocketbox adults on the same skeleton).
+export function createAvatar({ THREE, FBXLoader, scene, assetBase = './avatar/', height: wantedHeight = 1.7, placeholder = false, lite = false, mocap = true, fbx = 'RocketboxAdult.fbx', tex: texPrefix = 'f006' }) {
 const q1 = new THREE.Quaternion();
 const q2 = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0);
@@ -201,7 +203,7 @@ function loadAvatar() {
     const quiet = new THREE.LoadingManager();
     quiet.setURLModifier((url) => (/\.fbx$/i.test(url) ? url : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'));
     new FBXLoader(quiet).load(
-      assetBase + 'RocketboxAdult.fbx',
+      assetBase + fbx,
       (model) => {
         try {
           // The FBX refers to textures by the artist's file paths; bind the bundled ones by material name.
@@ -210,9 +212,9 @@ function loadAvatar() {
             const name = String(old.name || '').toLowerCase();
             if (made[name]) return made[name];
             let m;
-            if (name.includes('opacity')) m = new THREE.MeshStandardMaterial({ map: map('f006_opacity_color.png', true), transparent: true, alphaTest: 0.35, side: THREE.DoubleSide, roughness: 0.75 });
-            else if (name.includes('head')) m = new THREE.MeshStandardMaterial({ map: map('f006_head_color.png', true, 2048), normalMap: map('f006_head_normal.png', false, 1024), roughness: 0.62 });
-            else m = new THREE.MeshStandardMaterial({ map: map('f006_body_color.png', true), ...(lite ? {} : { normalMap: map('f006_body_normal.png', false) }), roughness: 0.8 });
+            if (name.includes('opacity')) m = new THREE.MeshStandardMaterial({ map: map(texPrefix + '_opacity_color.png', true), transparent: true, alphaTest: 0.35, side: THREE.DoubleSide, roughness: 0.75 });
+            else if (name.includes('head')) m = new THREE.MeshStandardMaterial({ map: map(texPrefix + '_head_color.png', true, 2048), normalMap: map(texPrefix + '_head_normal.png', false, 1024), roughness: 0.62 });
+            else m = new THREE.MeshStandardMaterial({ map: map(texPrefix + '_body_color.png', true), ...(lite ? {} : { normalMap: map(texPrefix + '_body_normal.png', false) }), roughness: 0.8 });
             m.name = old.name;
             made[name] = m;
             return m;
@@ -251,6 +253,17 @@ async function loadMocap(model) {
     fetch(assetBase + 'animations.bin').then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('animations.bin ' + r.status)))),
   ]);
   const mixer = new THREE.AnimationMixer(model);
+  let rootScale = 1;
+  if (fbx !== 'RocketboxAdult.fbx') {
+    const rootBone = model.getObjectByName('Bip01');
+    const idle = meta.clips.find((c) => c.role === 'idle');
+    if (rootBone && idle) {
+      const first = new Float32Array(bin.slice(idle.root, idle.root + 12));
+      const recorded = Math.hypot(first[0], first[1], first[2]);
+      const own = rootBone.position.length();
+      if (recorded > 1 && own > 1 && own / recorded > 0.8 && own / recorded < 1.25) rootScale = own / recorded;
+    }
+  }
   const byRole = {};
   const all = [];
   const nb = meta.bones.length;
@@ -264,7 +277,11 @@ async function loadMocap(model) {
       for (let f = 0; f < c.frames; f++) for (let k = 0; k < 4; k++) values[f * 4 + k] = packed[(f * nb + b) * 4 + k] / 32767;
       tracks.push(new THREE.QuaternionKeyframeTrack(meta.bones[b] + '.quaternion', times, values));
     }
-    tracks.push(new THREE.VectorKeyframeTrack('Bip01.position', times, new Float32Array(bin.slice(c.root, c.root + c.frames * 12))));
+    // The recorded hip positions belong to the woman the clips were made for; a taller or shorter
+    // character on the same skeleton has them scaled to its own hip height, so its feet stay on the floor.
+    const rootTrack = new Float32Array(bin.slice(c.root, c.root + c.frames * 12));
+    if (rootScale !== 1) for (let k = 0; k < rootTrack.length; k++) rootTrack[k] *= rootScale;
+    tracks.push(new THREE.VectorKeyframeTrack('Bip01.position', times, rootTrack));
     const clip = new THREE.AnimationClip(c.name, (c.frames - 1) / meta.fps, tracks);
     const action = mixer.clipAction(clip);
     action.setLoop(THREE.LoopRepeat, Infinity);

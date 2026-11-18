@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { beam, ENERGY, laserBolt, tint, variant } from './theme.js';
 import { asBump, clothTex, leatherTex, mailTex, steelRough, steelTex, stoneTex, woodTex } from './textures.js';
 
 // Battle-worn medieval soldiers, shared by the board miniatures and the
@@ -53,6 +54,14 @@ export const RANGER_PALETTES = [
 ];
 
 // ------------------------------------------------------------- helpers ---
+/** A group whose parts stay their own meshes (never fused into the figure), so a theme can show or hide it. */
+function themedGroup(parent) {
+  const g = new THREE.Group();
+  g.userData.themed = true;
+  parent.add(g);
+  return g;
+}
+
 function part(parent, geo, mat, p = [0, 0, 0], r = [0, 0, 0], s = [1, 1, 1]) {
   const m = new THREE.Mesh(geo, mat);
   m.position.set(p[0], p[1], p[2]);
@@ -140,6 +149,31 @@ function materialsFor(palette) {
     string: std({ color: 0x2c2620, roughness: 0.9 }),
     slit: new THREE.MeshBasicMaterial({ color: 0x050404, side: THREE.DoubleSide }),
   };
+  // Warstars: the same figures as starship troops. The Light Side in white armour with blue
+  // trim, the Dark Side in black with red; blades glow in the side's colour.
+  const side = Math.max(0, RANGER_PALETTES.indexOf(palette));
+  m.side = side;
+  const light = side === 0;
+  const glow = ENERGY[side];
+  tint(m.steel, { color: light ? 0xe4eaf2 : 0x2a2c34, metalness: 0.5, roughness: 0.32 });
+  tint(m.steelDouble, { color: light ? 0xe4eaf2 : 0x2a2c34, metalness: 0.5, roughness: 0.32 });
+  tint(m.steelDark, { color: light ? 0x66727f : 0x101116, metalness: 0.7, roughness: 0.4 });
+  tint(m.mail, { color: light ? 0x8f9aa8 : 0x1c1d24, bumpScale: 0.3 });
+  tint(m.cloth, { color: light ? 0x21508c : 0x4a0d12 });
+  tint(m.clothDouble, { color: light ? 0x21508c : 0x4a0d12 });
+  tint(m.clothDark, { color: light ? 0x12294a : 0x1d0608 });
+  tint(m.gambeson, { color: light ? 0xc3ccd8 : 0x17171c });
+  tint(m.trim, { color: glow, emissive: glow, emissiveIntensity: 1.1, metalness: 0.2, roughness: 0.4 });
+  tint(m.leather, { color: light ? 0x7f8b9c : 0x121216 });
+  tint(m.leatherDark, { color: 0x0e1014 });
+  tint(m.wood, { color: 0x262b33, metalness: 0.75, roughness: 0.38, map: null });
+  tint(m.feather, { color: glow });
+  tint(m.shield, { map: null, color: light ? 0xcfd8e4 : 0x1a1b21, emissive: glow, emissiveIntensity: 0.25, metalness: 0.6, roughness: 0.35 });
+  tint(m.stone, { color: 0x10141c, metalness: 0.85, roughness: 0.3, map: null, emissive: glow, emissiveIntensity: 0.12 });
+  // Energy blades: the same blade, lit from within in the side's colour.
+  tint(m.blade, { color: 0xffffff, emissive: glow, emissiveIntensity: 2.6, metalness: 0, roughness: 1, map: null });
+  // No bowstrings on a blaster.
+  tint(m.string, { transparent: true, opacity: 0 });
   matCache.set(palette, m);
   return m;
 }
@@ -261,6 +295,12 @@ function regalia(palette) {
     spot: new THREE.MeshBasicMaterial({ color: 0x111111 }),
     glow: new THREE.MeshBasicMaterial({ color: palette.field === '#5c1513' ? 0xffc35a : 0xa98bff, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   };
+  // Warstars: a commander's insignia, lit in the side's colour, in place of gold and ermine.
+  const lit = ENERGY[palette.field === '#5c1513' ? 0 : 1];
+  tint(r.gold, { color: lit, emissive: lit, emissiveIntensity: 1.0, metalness: 0.3, map: null });
+  tint(r.gem, { color: 0xffffff, emissive: lit, emissiveIntensity: 1.6 });
+  tint(r.ermine, { color: palette.field === '#5c1513' ? 0xdfe6ee : 0x1a1b21, map: null });
+  tint(r.glow, { color: lit });
   regaliaCache.set(palette, r);
   return r;
 }
@@ -327,8 +367,17 @@ function buildSword(m, S) {
   const bladeGeo = new THREE.ExtrudeGeometry(blade, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.002, bevelSize: 0.0025, bevelSegments: 1 });
   bladeGeo.translate(0, 0, -0.003);
   part(s, bladeGeo, m.blade, [0, 0.11, 0]);
-  part(s, new THREE.BoxGeometry(0.008, 0.5, 0.0105), m.steelDark, [0, 0.38, 0]);
-  part(s, new THREE.CylinderGeometry(0.011, 0.011, 0.22, S), m.steelDark, [0, 0.095, 0], [0, 0, Math.PI / 2]);
+  const steelParts = themedGroup(s);
+  part(steelParts, new THREE.BoxGeometry(0.008, 0.5, 0.0105), m.steelDark, [0, 0.38, 0]);
+  part(steelParts, new THREE.CylinderGeometry(0.011, 0.011, 0.22, S), m.steelDark, [0, 0.095, 0], [0, 0, Math.PI / 2]);
+  // Warstars: an energy sword. The blade glows (see materialsFor) inside a halo of its colour,
+  // and the cross-guard gives way to an emitter ring. Same length and reach as the steel one.
+  const energyParts = themedGroup(s);
+  const halo = beam(0.12, 0.85, 0.03, ENERGY[m.side || 0]);
+  halo.remove(halo.children[0]); // the lit blade itself is the core
+  energyParts.add(halo);
+  part(energyParts, new THREE.CylinderGeometry(0.026, 0.02, 0.05, S), m.steelDark, [0, 0.1, 0]);
+  variant([steelParts], [energyParts]);
   part(s, new THREE.CylinderGeometry(0.016, 0.018, 0.16, S), m.leatherDark, [0, 0, 0]);
   part(s, new THREE.SphereGeometry(0.028, S, Math.max(6, S * 0.6)), m.steelDark, [0, -0.1, 0], [0, 0, 0], [1, 0.8, 0.55]);
   return s;
@@ -371,8 +420,18 @@ function buildBow(m, scale = 1) {
   for (let i = half.length - 1; i > 0; i--) pts.push(new THREE.Vector3(half[i][0], -half[i][1], 0));
   for (const [u, v] of half) pts.push(new THREE.Vector3(u, v, 0));
   const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.4);
-  part(bow, new THREE.TubeGeometry(curve, 40, 0.024, 7, false), m.wood, [0, 0, 0], [0, 0, 0], [1, 1, 0.7]);
-  part(bow, new THREE.CylinderGeometry(0.036, 0.036, 0.16, 8), m.leatherDark, [0.004, 0, 0]);
+  const woodParts = themedGroup(bow);
+  part(woodParts, new THREE.TubeGeometry(curve, 40, 0.024, 7, false), m.wood, [0, 0, 0], [0, 0, 0], [1, 1, 0.7]);
+  part(woodParts, new THREE.CylinderGeometry(0.036, 0.036, 0.16, 8), m.leatherDark, [0.004, 0, 0]);
+  // Warstars: a blaster rifle held the same way (it points along +x, where the arrow would fly).
+  const blaster = themedGroup(bow);
+  part(blaster, new THREE.BoxGeometry(0.46, 0.085, 0.06), m.steelDark, [0.08, 0, 0]);
+  part(blaster, new THREE.CylinderGeometry(0.02, 0.024, 0.34, 8), m.steel, [0.44, 0.012, 0], [0, 0, Math.PI / 2]);
+  part(blaster, new THREE.BoxGeometry(0.07, 0.15, 0.05), m.leatherDark, [-0.02, -0.1, 0], [0, 0, 0.25]);
+  part(blaster, new THREE.BoxGeometry(0.2, 0.05, 0.065), m.steel, [-0.2, -0.02, 0]);
+  part(blaster, new THREE.BoxGeometry(0.16, 0.035, 0.03), m.trim, [0.1, 0.06, 0]);
+  part(blaster, new THREE.CylinderGeometry(0.03, 0.03, 0.03, 8), m.trim, [0.61, 0.012, 0], [0, 0, Math.PI / 2]);
+  variant([woodParts], [blaster]);
   const string = part(bow, new THREE.CylinderGeometry(0.004, 0.004, 1.48, 4), m.string, [-0.045, 0, 0]);
   bow.userData.string = string;
   bow.scale.setScalar(scale);
@@ -381,13 +440,16 @@ function buildBow(m, scale = 1) {
 
 function buildArrow(m, length = 0.42) {
   // Along +y, head at +y.
-  const a = new THREE.Group();
+  const outer = new THREE.Group();
+  // Its parts are hidden in Warstars: a blaster trooper holds no arrow.
+  const a = themedGroup(outer);
+  variant([a], []);
   part(a, new THREE.CylinderGeometry(0.0065, 0.0065, length, 6), m.wood, [0, 0, 0]);
   part(a, new THREE.ConeGeometry(0.02, 0.075, 4), m.steelDark, [0, length / 2 + 0.035, 0], [0, Math.PI / 4, 0], [1, 1, 0.35]);
   for (let k = 0; k < 3; k++) {
     part(a, new THREE.BoxGeometry(0.0015, 0.09, 0.028), m.feather, [0, -length / 2 + 0.06, 0], [0, (k / 3) * Math.PI * 2, 0]).translateZ(0.016);
   }
-  return a;
+  return outer;
 }
 
 function buildQuiver(m, S) {
@@ -574,6 +636,7 @@ const _rel = new THREE.Matrix4();
 // ancestor (a joint, a weapon, the root), one mesh per material there.
 function mergeStatic(root, keep) {
   keep.add(root);
+  root.traverse((o) => { if (o.userData.themed) keep.add(o); });
   root.updateMatrixWorld(true);
   const buckets = new Map();
   root.traverse((o) => {

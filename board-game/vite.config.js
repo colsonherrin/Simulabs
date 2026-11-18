@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 // Sim's body lives with the shared Unity package; serve it at ./avatar/ and copy it into builds.
 const AVATAR = join(here, '..', 'packages', 'com.simulacra.core', 'Avatar', 'Rocketbox');
-const AVATAR_FILES = ['RocketboxAdult.fbx', 'f006_body_color.png', 'f006_body_normal.png', 'f006_head_color.png', 'f006_head_normal.png', 'f006_opacity_color.png', 'animations.json', 'animations.bin', 'LICENSE.md'];
+const AVATAR_FILES = ['RocketboxAdult.fbx', 'f006_body_color.png', 'f006_body_normal.png', 'f006_head_color.png', 'f006_head_normal.png', 'f006_opacity_color.png', 'RocketboxMale.fbx', 'male_body_color.png', 'male_body_normal.png', 'male_head_color.png', 'male_head_normal.png', 'animations.json', 'animations.bin', 'LICENSE.md'];
 const simAvatar = () => ({
   name: 'sim-avatar',
   configureServer(server) {

@@ -762,6 +762,10 @@ export function createWarZone(group) {
       if (fieldLoaded) fn();
     },
     sunDir: SUN_DIR,
+    /** Warstars: the whole battlefield (ground, fires, banners, sky) steps aside for the hangar. */
+    setHidden(on) {
+      root.visible = !on;
+    },
     setAR(on) {
       isAR = on;
       far.visible = !on;

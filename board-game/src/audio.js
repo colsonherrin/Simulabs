@@ -17,13 +17,20 @@ function ac() {
 // Recorded-style effects (public/sfx, made with ElevenLabs sound generation). Each is fetched once
 // when sound is first unlocked. Until one has arrived, or if it cannot be fetched, the synthesized
 // version of that sound below is used instead, so nothing is ever silent.
+// Warstars has its own set, played in place of the medieval ones at the very same moments.
+const SPACE_NAMES = ['s_pew1', 's_pew2', 's_bolt1', 's_bolt2', 's_hit', 's_clash1', 's_clash2', 's_deflect', 's_swing', 's_ignite', 's_hum', 's_ambience', 's_bridge', 's_ui', 's_boom', 's_start'];
+const SPACE_FOR = {
+  hit1: ['s_hit'], hit2: ['s_hit'], clink1: ['s_clash1', 's_clash2'], clink2: ['s_clash1', 's_clash2'], clang: ['s_deflect'], whoosh: ['s_swing'],
+  arrow: ['s_pew1', 's_pew2'], whiz1: ['s_bolt1', 's_bolt2'], whiz2: ['s_bolt1', 's_bolt2'], boom: ['s_boom'], swipe: ['s_ui'], place: ['s_ui'], start: ['s_start'], capture: ['s_hit'], ambience: ['s_ambience'],
+};
+let audioTheme = 'classic';
 const SAMPLE_NAMES = ['hit1', 'hit2', 'clink1', 'clink2', 'clang', 'whoosh', 'arrow', 'whiz1', 'whiz2', 'cry1', 'cry2', 'die1', 'die2', 'hurt', 'boom', 'swipe', 'place', 'start', 'victory', 'defeat', 'capture', 'ambience'];
 const samples = {};
 let samplesAsked = false;
 function loadSamples() {
   if (samplesAsked || typeof fetch !== 'function' || typeof document === 'undefined') return;
   samplesAsked = true;
-  for (const name of SAMPLE_NAMES) {
+  for (const name of [...SAMPLE_NAMES, ...SPACE_NAMES]) {
     fetch(new URL(`sfx/${name}.mp3`, document.baseURI))
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
       .then((data) => ctx.decodeAudioData(data))
@@ -38,7 +45,12 @@ function loadSamples() {
  *   sweep  +1 or -1 to pass from one ear to the other (a fly-by)     loop   keep playing
  */
 function sample(names, { gain = 0.3, rate = 1, vary = 0.06, sweep = 0, loop = false } = {}) {
-  const ready = (Array.isArray(names) ? names : [names]).filter((n) => samples[n]);
+  let wanted = Array.isArray(names) ? names : [names];
+  if (audioTheme === 'warstars') {
+    const space = [...new Set(wanted.flatMap((n) => SPACE_FOR[n] || []))].filter((n) => samples[n]);
+    if (space.length) wanted = space;
+  }
+  const ready = wanted.filter((n) => samples[n]);
   if (!ready.length || !ctx) return null;
   const c = ac();
   const src = c.createBufferSource();
@@ -731,15 +743,69 @@ export function playBoom(near = 1) {
 let warTimer = 0;
 let warBeat = 0;
 let warLoop = null;
+let humLoop = null;
+let shipLoop = null;
+
+/** Which set of sounds plays: 'classic' or 'warstars'. Timing and triggers are the same either way. */
+export function setAudioTheme(theme) {
+  audioTheme = theme === 'warstars' ? 'warstars' : 'classic';
+  // A battle already under way changes its backing at once.
+  if (warLoop || warTimer) startWarAmbience();
+}
+
+/** The quiet hum of the starship's bridge, while the board is on it. */
+export function setShipAmbience(on) {
+  const want = on && audioTheme === 'warstars' && !muted;
+  if (want && !shipLoop && ctx && samples.s_bridge) {
+    const c = ac();
+    const src = c.createBufferSource();
+    src.buffer = samples.s_bridge;
+    src.loop = true;
+    const g = c.createGain();
+    g.gain.value = 0.0001;
+    g.gain.exponentialRampToValueAtTime(0.11, c.currentTime + 1.5);
+    src.connect(g);
+    g.connect(out());
+    src.start();
+    shipLoop = { src, g };
+  } else if (!want && shipLoop) {
+    const { src, g } = shipLoop;
+    shipLoop = null;
+    try {
+      g.gain.cancelScheduledValues(ctx.currentTime);
+      g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.3);
+      src.stop(ctx.currentTime + 1.5);
+    } catch (e) { /* already stopped */ }
+  }
+}
+function loopOf(name, gain) {
+  if (!ctx || !samples[name] || muted) return null;
+  const c = ac();
+  const src = c.createBufferSource();
+  src.buffer = samples[name];
+  src.loop = true;
+  const g = c.createGain();
+  g.gain.value = gain;
+  src.connect(g);
+  g.connect(out());
+  src.start();
+  return { src, g };
+}
 export function startWarAmbience() {
   stopWarAmbience();
   warBeat = 0;
   // The recorded battlefield (drums, steel, distant shouting) loops under the fight when it is loaded.
   if (!muted) warLoop = sample('ambience', { gain: 0.0001, vary: 0, loop: true });
+  if (audioTheme === 'warstars' && !muted) {
+    // Energy swords come alive, and hum under the fight.
+    sample('s_ignite', { gain: 0.3, vary: 0 });
+    humLoop = loopOf('s_hum', 0.05);
+  }
   if (warLoop) {
     warLoop.g.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + 1.2);
     return;
   }
+  if (audioTheme === 'warstars') return; // no war drums aboard a starship
   warTimer = setInterval(() => {
     if (muted) return;
     warBeat += 1;
@@ -762,6 +828,10 @@ export function startWarAmbience() {
 export function stopWarAmbience() {
   clearInterval(warTimer);
   warTimer = 0;
+  if (humLoop) {
+    try { humLoop.src.stop(); } catch (e) { /* already stopped */ }
+    humLoop = null;
+  }
   if (warLoop) {
     const { src, g } = warLoop;
     warLoop = null;

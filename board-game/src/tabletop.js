@@ -3,6 +3,7 @@ import { GOLD, SIDE_NAME, options } from './rules.js';
 import { createMiniature, metal, standard } from './pieces.js';
 import { steelTex, woodTex } from './textures.js';
 import { makeTextSprite, paintText, setSpriteText } from './text.js';
+import { onTheme, tint } from './theme.js';
 
 export const TOP = 0.4;
 export const SQ = TOP / 5;
@@ -83,6 +84,41 @@ const SIDE_GLOW = [0xffc94a, 0xa98bff];
  *   arrives (kind is 'place' or 'ping' for a takeover), onFall(piece) when a
  *   monarch hits the board.
  */
+/** Warstars: the same five-by-five board as a lit holo-table. */
+function spaceBoardTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 1024;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#05080e';
+  g.fillRect(0, 0, 1024, 1024);
+  const cell = 1024 / 5;
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 5; c++) {
+      const x = c * cell;
+      const y = r * cell;
+      g.fillStyle = (r + c) % 2 === 0 ? '#12202f' : '#0a121c';
+      g.fillRect(x + 8, y + 8, cell - 16, cell - 16);
+      g.strokeStyle = 'rgba(90, 200, 255, 0.85)';
+      g.lineWidth = 4;
+      g.strokeRect(x + 10, y + 10, cell - 20, cell - 20);
+      g.fillStyle = 'rgba(90, 200, 255, 0.5)';
+      for (const [dx, dy] of [[18, 18], [cell - 30, 18], [18, cell - 30], [cell - 30, cell - 30]]) g.fillRect(x + dx, y + dy, 12, 3);
+      if (r === 2 && c === 2) {
+        g.strokeStyle = 'rgba(160, 230, 255, 0.95)';
+        g.lineWidth = 3;
+        g.beginPath();
+        g.arc(x + cell / 2, y + cell / 2, cell * 0.22, 0, Math.PI * 2);
+        g.stroke();
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
 export function createTabletop(scene, sfx = {}) {
   const board = new THREE.Group();
   scene.add(board);
@@ -104,8 +140,11 @@ export function createTabletop(scene, sfx = {}) {
   top.rotation.x = -Math.PI / 2;
   top.position.y = 0.0245;
   board.add(top);
+  tint(bodyMat, { color: 0x161b24, metalness: 0.85, roughness: 0.35, map: null });
+  tint(top.material, { map: spaceBoardTexture(), emissive: 0x16425e, emissiveIntensity: 0.5, metalness: 0.3, roughness: 0.4 });
 
   const brass = new THREE.MeshStandardMaterial({ color: 0x8a6c3c, metalness: 0.75, roughness: 0.42, map: steelTex() });
+  tint(brass, { color: 0x3fb7ff, emissive: 0x3fb7ff, emissiveIntensity: 1.2, metalness: 0.3, map: null });
   const rimH = 0.012;
   const rimY = 0.028;
   const outer = TOP / 2 + 0.02;
@@ -133,6 +172,10 @@ export function createTabletop(scene, sfx = {}) {
   goldLabel.position.set(0, 0.05, TOP / 2 + 0.055);
   const violetLabel = makeTextSprite('VIOLET', '#c9b6ff', [0.14, 0.035]);
   violetLabel.position.set(0, 0.05, -(TOP / 2 + 0.055));
+  onTheme((t) => {
+    setSpriteText(goldLabel, t === 'warstars' ? 'LIGHT SIDE' : 'GOLD', t === 'warstars' ? '#8fd0ff' : '#f0d48a');
+    setSpriteText(violetLabel, t === 'warstars' ? 'DARK SIDE' : 'VIOLET', t === 'warstars' ? '#ff7a6a' : '#c9b6ff');
+  });
   goldLabel.raycast = () => {};
   violetLabel.raycast = () => {};
   board.add(goldLabel, violetLabel);

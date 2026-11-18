@@ -12,6 +12,11 @@ import { bowStretch, playArrow, playArrowIncoming, playClang, playClink, playHit
 import { bowGrip, fist, isTracked, pinch, swordGrip, wrist } from './handgrip.js';
 import { createWarZone, makeSkyEnvironment } from './war.js';
 import { startWarAmbience, stopWarAmbience } from './audio.js';
+import { createHangar } from './starship.js';
+import { isSpace, onTheme, variant } from './theme.js';
+
+/** The same hints in Warstars words. */
+const inWords = (text) => (isSpace() ? String(text).replace(/arrows/g, 'laser bolts').replace(/archers/g, 'blaster troopers').replace(/your sword/g, 'your energy sword').replace('Loose into', 'Fire into') : text);
 
 export const INLINE_ARENA = { x: 0, y: -40, z: 0, eye: 1.62 };
 
@@ -159,9 +164,23 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     // Shadows are the first thing to go if the headset is struggling.
     if (arenaBackdrop.sun) arenaBackdrop.sun.castShadow = quality !== 'low';
     // The plain night arena only shows if the battlefield failed to load.
-    for (const obj of arenaBackdrop) obj.visible = !ar && !war.hasField();
+    for (const obj of arenaBackdrop) obj.visible = !ar && !war.hasField() && !isSpace();
     war.setAR(ar);
+    // Warstars: the same fight on a starship's hangar deck, under cool ship light. Only the
+    // surroundings and the light's colour change; the ground is as flat and the lane as clear.
+    const space = isSpace();
+    war.setHidden(space);
+    hangar.world.visible = space;
+    if (space) shadowCatcher.visible = true;
+    const [hemi, sun, fill] = arenaBackdrop.lights;
+    hemi.color.set(space ? 0xb4d0ff : 0xd0a57c);
+    hemi.groundColor.set(space ? 0x1c2230 : 0x3a2a1c);
+    sun.color.set(space ? 0xdbe8ff : 0xffb878);
+    fill.color.set(space ? 0x9fc4ff : 0xffd2a6);
   }
+  const hangar = createHangar();
+  group.add(hangar.world);
+  onTheme(() => applyArenaMode());
   war.onFieldLoaded(() => applyArenaMode());
 
   const sword = createBattleSword(0xf0d090);
@@ -649,10 +668,10 @@ export function createCombat({ scene, camera, renderer, hooks }) {
 
   function objectiveText() {
     if (mode === 'sword-melee') return `Cut down the charge  ${kills}/${quota}`;
-    if (mode === 'bow-melee') return `Loose into the rush  ${kills}/${quota}`;
+    if (mode === 'bow-melee') return inWords(`Loose into the rush  ${kills}/${quota}`);
     const total = TUNING.archerCount * TUNING.archerWaves;
-    if (mode === 'sword-deflect') return `Deflect arrows into the archers  ${kills}/${total}`;
-    return `Shoot the archers down  ${kills}/${total}`;
+    if (mode === 'sword-deflect') return inWords(`Deflect arrows into the archers  ${kills}/${total}`);
+    return inWords(`Shoot the archers down  ${kills}/${total}`);
   }
 
   function checkEnd() {
@@ -1287,6 +1306,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
     }
     phaseT += dt;
     war.update(dt);
+    if (hangar.world.visible) hangar.update(performance.now() / 1000);
     sparks.update(dt);
     if (hurtFlash > 0) hurtFlash -= dt;
 
@@ -1296,7 +1316,7 @@ export function createCombat({ scene, camera, renderer, hooks }) {
       else hooks.fade?.(0, '#000');
       const instruct = mode === 'sword-deflect';
       if (instruct) {
-        if (!banner && phaseT > 0.4) showBanner('Deflect the arrows with your sword!');
+        if (!banner && phaseT > 0.4) showBanner(inWords('Deflect the arrows with your sword!'));
       } else if (phaseT > 0.85 && phaseT < 1.15) hooks.caption?.('Ready');
       else if (phaseT >= 1.15 && phaseT < 1.4) hooks.caption?.('Fight');
       if (phaseT >= (instruct ? 3.6 : 1.4)) {
@@ -1824,6 +1844,7 @@ function buildArena(group) {
     );
     flame.position.set(x, 1.55, z);
     group.add(pole, flame);
+    variant([pole, flame], []); // torches belong to the medieval field
   }
 
   for (let i = 0; i < 6; i++) {
@@ -1843,6 +1864,7 @@ function buildArena(group) {
   fill.position.set(2.5, 3, 6);
   group.add(fill);
   backdrop.sun = moonLight;
+  backdrop.lights = [hemi, moonLight, fill];
   return backdrop;
 }
 
