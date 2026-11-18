@@ -1009,7 +1009,7 @@ function handlePick(data) {
     return;
   }
   if (data?.action === 'cmd') {
-    commandPanel.press(data.cmd);
+    if (!commandPanel.press(data.cmd)) dialogPanel.press(data.cmd);
     return;
   }
   if (menu || placing || prelude) return;
@@ -1130,26 +1130,17 @@ const playPlaque = (() => {
 // The command panel: a column of buttons at the player's lower left, shown in the headset whenever
 // the voice agent is not live, so that everything she can be asked for by voice can be done by
 // pointing and pulling the trigger (or pinching). Each button runs the same skill the voice would.
-const commandPanel = (() => {
+function createPanel(defs, { side = 1, width = 0.24 } = {}) {
   const group = new THREE.Group();
   group.visible = false;
   scene.add(group);
-  const W = 0.24;
+  const W = width;
   const H = 0.052;
-  const defs = [
-    { id: 'play', label: () => 'Play a game', show: () => prelude, run: () => sim.command('play a game') },
-    { id: 'leave', label: () => 'Leave the game', show: () => !prelude, run: () => sim.command('leave the game') },
-    { id: 'hint', label: () => 'Give me a hint', show: () => !prelude && game.phase === 'play', run: () => sim.offerHint(game) },
-    { id: 'theme', label: () => (isSpace() ? 'Swords and Arrows' : 'Warstars mode'), show: () => true, run: () => sim.command(isSpace() ? 'classic mode' : 'warstars mode') },
-    { id: 'who', label: () => (sim.companion === 'sundai' ? 'Switch to Saturdai' : 'Switch to Sundai'), show: () => true, run: () => sim.command(sim.companion === 'sundai' ? 'change to saturdai' : 'change to sundai') },
-    { id: 'come', label: () => 'Come here', show: () => prelude, run: () => sim.command('come here') },
-    { id: 'follow', label: () => (sim.position.following ? 'Stop following' : 'Follow me'), show: () => prelude, run: () => sim.command(sim.position.following ? 'stop' : 'follow me') },
-    { id: 'sit', label: () => (sim.position.sitting ? 'Stand up' : 'Sit down'), show: () => prelude, run: () => sim.command(sim.position.sitting ? 'stand up' : 'sit down') },
-    { id: 'exit', label: () => 'Exit', show: () => true, run: () => exitXR() },
-  ];
+  return build();
+  function build() {
   const buttons = defs.map((def) => {
     const canvas = document.createElement('canvas');
-    canvas.width = 512;
+    canvas.width = Math.round(512 * (W / 0.24));
     canvas.height = 112;
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -1161,19 +1152,21 @@ const commandPanel = (() => {
   function paint(b, text, lit) {
     const g = b.canvas.getContext('2d');
     const space = isSpace();
-    g.clearRect(0, 0, 512, 112);
+    const cw = b.canvas.width;
+    g.clearRect(0, 0, cw, 112);
     g.fillStyle = lit ? (space ? '#2f7fc4' : '#b88a2e') : b.def.id === 'exit' ? 'rgba(110,26,26,0.92)' : space ? 'rgba(10,22,38,0.92)' : 'rgba(26,20,14,0.92)';
     g.beginPath();
-    g.roundRect(4, 4, 504, 104, 26);
+    g.roundRect(4, 4, cw - 8, 104, 26);
     g.fill();
     g.lineWidth = 5;
     g.strokeStyle = space ? '#5ac8ff' : '#f0d48a';
     g.stroke();
     g.fillStyle = '#fff6e2';
-    g.font = '600 46px Cinzel, Palatino, Georgia, serif';
+    let size = 46;
+    do { g.font = `600 ${size}px Cinzel, Palatino, Georgia, serif`; size -= 3; } while (g.measureText(text).width > cw - 40 && size > 22);
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillText(text, 256, 60);
+    g.fillText(text, cw / 2, 60);
     b.texture.needsUpdate = true;
   }
   let shownKey = '';
@@ -1225,13 +1218,34 @@ const commandPanel = (() => {
         fwd.y = 0;
         if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
         fwd.normalize();
-        group.position.copy(at).addScaledVector(fwd, 0.62).add(new THREE.Vector3(fwd.z, 0, -fwd.x).multiplyScalar(0.5));
+        group.position.copy(at).addScaledVector(fwd, 0.62).add(new THREE.Vector3(fwd.z, 0, -fwd.x).multiplyScalar(0.5 * side));
         group.position.y = at.y - 0.18;
         group.lookAt(at.x, at.y - 0.3, at.z);
       }
     },
   };
-})();
+  }
+}
+const commandPanel = createPanel([
+    { id: 'play', label: () => 'Play a game', show: () => prelude, run: () => sim.command('play a game') },
+    { id: 'leave', label: () => 'Leave the game', show: () => !prelude, run: () => sim.command('leave the game') },
+    { id: 'hint', label: () => 'Give me a hint', show: () => !prelude && game.phase === 'play', run: () => sim.offerHint(game) },
+    { id: 'theme', label: () => (isSpace() ? 'Swords and Arrows' : 'Warstars mode'), show: () => true, run: () => sim.command(isSpace() ? 'classic mode' : 'warstars mode') },
+    { id: 'who', label: () => (sim.companion === 'sundai' ? 'Switch to Saturdai' : 'Switch to Sundai'), show: () => true, run: () => sim.command(sim.companion === 'sundai' ? 'change to saturdai' : 'change to sundai') },
+    { id: 'come', label: () => 'Come here', show: () => prelude, run: () => sim.command('come here') },
+    { id: 'follow', label: () => (sim.position.following ? 'Stop following' : 'Follow me'), show: () => prelude, run: () => sim.command(sim.position.following ? 'stop' : 'follow me') },
+    { id: 'sit', label: () => (sim.position.sitting ? 'Stand up' : 'Sit down'), show: () => prelude, run: () => sim.command(sim.position.sitting ? 'stand up' : 'sit down') },
+    { id: 'exit', label: () => 'Exit', show: () => true, run: () => exitXR() },
+  ]);
+// Things to say, on the other side: up to five lines made from the moment (see sim.dialogOptions).
+// Choosing one says it: to the real companion when the live voice is on, otherwise the companion
+// answers in a speech bubble from what the game knows.
+const dialogPanel = createPanel([0, 1, 2, 3, 4].map((i) => ({
+  id: 'say' + i,
+  label: () => '“' + sim.dialogOptions()[i].label + '”',
+  show: () => !!sim.dialogOptions()[i],
+  run: () => sim.choose(sim.dialogOptions()[i].id),
+})), { side: -1, width: 0.36 });
 const _playFwd = new THREE.Vector3();
 function placePlayPlaque() {
   // Only a fallback: with her voice live the game is started by asking her.
@@ -1298,8 +1312,9 @@ $('btn-exit').addEventListener('click', () => {
 
 let showPanelOnScreen = false; // tests turn this on to see the panel without a headset
 function pickWithRay() {
-  if (commandPanel.group.visible) {
-    for (const b of commandPanel.buttons) {
+  for (const panel of [commandPanel, dialogPanel]) {
+    if (!panel.group.visible) continue;
+    for (const b of panel.buttons) {
       if (b.mesh.visible && raycaster.intersectObject(b.mesh, false).length) return { action: 'cmd', cmd: b.def.id };
     }
   }
@@ -1890,6 +1905,7 @@ function frame(t, xrFrame) {
   placePlayPlaque();
   // Buttons for everything, whenever her voice is not live (not during a battle or while placing).
   commandPanel.update(simPlays() && !menu && !placing && !combatView && sim.voiceState() !== 'live' && sim.voiceState() !== 'connecting' && (renderer.xr.isPresenting || showPanelOnScreen));
+  dialogPanel.update(commandPanel.group.visible);
 
   updateHitTest(xrFrame);
   if (renderer.xr.isPresenting && xrKind === 'vr') seatInFront(xrFrame);
@@ -2247,4 +2263,4 @@ if (import.meta.env.DEV) {
 applyScenery(); // the title screen starts without the board
 
 // For automated checks and for poking at the game from the browser console.
-window.crownfall = { beginPrelude, commandPanel, set panelOnScreen(v) { showPanelOnScreen = !!v; }, setWorldTheme, getTheme, bridge, leaveGameHere, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };
+window.crownfall = { beginPrelude, commandPanel, dialogPanel, set panelOnScreen(v) { showPanelOnScreen = !!v; }, setWorldTheme, getTheme, bridge, leaveGameHere, castle, get inCastle() { return inCastle; }, startGameHere, get prelude() { return prelude; }, board, THREE, get game() { return game; }, sim, camera, controls, pick: (data) => handlePick(data), get toast() { return toastEl.textContent; } };

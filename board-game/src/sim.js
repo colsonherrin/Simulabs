@@ -288,6 +288,59 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       },
     };
   })();
+  // A speech bubble over the companion's head, for what they say when there is no live voice:
+  // several lines of wrapped text, turned to face the player.
+  const bubble = (() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 400;
+    const g = canvas.getContext('2d');
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.45), new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthTest: false, toneMapped: false }));
+    mesh.renderOrder = 21;
+    mesh.visible = false;
+    scene.add(mesh);
+    return {
+      mesh,
+      until: 0,
+      set(text) {
+        g.clearRect(0, 0, 1024, 400);
+        g.font = '500 44px system-ui, sans-serif';
+        const words = String(text).split(/\s+/);
+        const lines = [];
+        let line = '';
+        for (const w of words) {
+          if (g.measureText(line + ' ' + w).width > 930 && line) {
+            lines.push(line);
+            line = w;
+          } else line = line ? line + ' ' + w : w;
+        }
+        if (line) lines.push(line);
+        const shown = lines.slice(0, 6);
+        const h = 56 + shown.length * 54;
+        const top = (400 - h) / 2;
+        g.fillStyle = 'rgba(14,12,10,0.86)';
+        g.beginPath();
+        g.roundRect(8, top, 1008, h, 34);
+        g.fill();
+        g.lineWidth = 4;
+        g.strokeStyle = isSpace() ? '#5ac8ff' : '#f0d48a';
+        g.stroke();
+        g.fillStyle = '#fff6e2';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        shown.forEach((l, i) => g.fillText(l, 512, top + 28 + 27 + i * 54));
+        texture.needsUpdate = true;
+      },
+    };
+  })();
+  /** Say a line with no voice service: in the bubble, and aloud with the browser's own voice if it has one. */
+  function speakLocal(text, seconds = 0) {
+    bubble.set(text);
+    bubble.until = performance.now() + (seconds || Math.max(3.5, Math.min(13, 2.5 + String(text).length * 0.055))) * 1000;
+    builtIn.speak(text);
+  }
   let liveSince = 0;
   let note = '';
   let noteUntil = 0;
@@ -457,6 +510,12 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     sign.set(text);
     sign.sprite.visible = !!text;
     sign.sprite.position.set(pose.x, pose.y + 1.9, pose.z);
+    bubble.mesh.visible = performance.now() < bubble.until;
+    if (bubble.mesh.visible) {
+      sign.sprite.visible = false;
+      bubble.mesh.position.set(pose.x, pose.y + 2.12, pose.z);
+      bubble.mesh.lookAt(eyes.x, eyes.y, eyes.z);
+    }
   }
 
   // ---------------------------------------------------------------- voice
@@ -1062,6 +1121,54 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     iWin: ["Sundai: Checkmate-ish. Told you you're going down. Again?", 'Sundai: Your monarch is on the floor. Again?'],
   };
 
+  // What can be said to the companion at this moment, and what they answer when there is no
+  // voice service: [id, what the player says, () => what the companion says].
+  function dialog() {
+    const game = getGame();
+    const space = isSpace();
+    const me = CAST[who].name;
+    const title = space ? 'Warstars' : 'Swords and Arrows';
+    const sword = space ? 'energy swordsman' : 'swordsman';
+    const archer = space ? 'blaster trooper' : 'archer';
+    const monarch = space ? 'commander' : 'monarch';
+    const inWords = (t) => (space ? String(t).replace(/archers?/g, (m) => (m.endsWith('s') ? 'blaster troopers' : 'blaster trooper')).replace(/swordsm[ae]n/g, (m) => (m.endsWith('en') ? 'energy swordsmen' : 'energy swordsman')).replace(/monarch/g, 'commander').replace(/arrows/g, 'laser bolts') : t);
+    const count = (side) => game.board.flat().filter((x) => x && x.side === side).length;
+    const rules = () => `${title} is played on a five by five board. Each turn you move one piece one square, any direction. ${space ? 'An' : 'A'} ${sword} or ${archer} can attack a piece next to it, and then you fight for that square yourself. Strike my ${monarch} and you win.`;
+    const fights = () => (space
+      ? 'Your own piece chooses your weapon. With an energy sword you cut down the charge, or knock laser bolts back at the troopers. With a blaster bow, one hand holds it and the other draws and lets go. You have eight hearts.'
+      : 'Your own piece chooses your weapon. With a sword you cut down the charge, or knock arrows back at the archers. With a bow, one hand holds it and the other draws the string and lets go. You have eight hearts.');
+    if (beforeGame) {
+      return [
+        ['who', `Who are you?`, () => `I'm ${me}, your AI companion. I share your room with you: I can walk with you, sit with you, and play a game with you.`],
+        ['can', 'What can you do?', () => 'Ask me to come over, follow you, or sit down. I can change into ' + (who === 'sundai' ? 'Saturdai' : 'Sundai') + ', switch the game to ' + (space ? 'Swords and Arrows' : 'Warstars') + ', and play it against you.'],
+        ['about', `Tell me about ${title}`, rules],
+        ['play', "Let's play a game", () => { const r = toolResult('start_game', {}); return r.status === 'started' ? '' : 'I cannot start one right now.'; // her opening line is said by the game starting }],
+      ];
+    }
+    if (game.phase === 'over') {
+      const iWon = game.winner === her;
+      return [
+        ['gg', 'Good game', () => (game.draw ? 'A draw. Nobody could move.' : iWon ? 'Good game. Told you.' : 'Good game. You earned that one.')],
+        ['how', 'How did I do in the fights?', () => 'Your fights so far: ' + inWords(record.summary()) + '.'],
+        ['rules', 'Remind me of the rules', rules],
+      ];
+    }
+    if (game.phase !== 'play') return [['fight', 'How do I win this fight?', fights]];
+    const mine = count(human);
+    const hers = count(her);
+    const standing = mine > hers ? `You're ahead, ${mine} pieces to my ${hers}. Don't get comfortable.` : mine < hers ? `I'm ahead, ${hers} pieces to your ${mine}.` : `We're level, ${mine} pieces each.`;
+    const yours = game.turn === human;
+    return [
+      yours
+        ? ['move', "What's my best move?", () => { const m = bestMove(game.board, human, record, () => 0); if (!m) return 'You have no move.'; reachFor(m.from.r, m.from.c); return inWords(`Try your ${m.text}, because ${String(m.reason).replace(/\btheir\b/g, 'my')}.`); }]
+        : ['plan', 'What are you planning?', () => 'You will see in a moment.'],
+      ['score', 'How am I doing?', () => standing + ' Your fights: ' + inWords(record.summary()) + '.'],
+      ['fights', 'How do fights work?', fights],
+      ['rules', 'How do I play?', rules],
+      ['taunt', "You're going down.", () => pick(TAUNTS.move).replace(/^Sundai: /, '')],
+    ];
+  }
+
   let retries = 0;
   let movesUntilRemark = 3; // her first remark comes a few moves in
   return {
@@ -1199,12 +1306,31 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
         if (name === 'suggest_move' && r && r.suggestion) line = `Try your ${r.suggestion}.`;
         if (r && r.status === 'already') line = '';
         if (line) {
-          showNote(line);
-          if (voice.state() !== 'live') builtIn.speak(line);
+          if (voice.state() !== 'live') speakLocal(line, 3.5);
+          else showNote(line);
         }
         return { did: name, params, result: r };
       }
       return null;
+    },
+    /**
+     * Things the player could say right now, made from the moment: who is standing there, whether
+     * a game is on, whose turn it is, how the game stands, which look is on. Each is { id, label }.
+     * With the live voice they are said to the real companion as the player's own words; without
+     * it, the companion answers from what the game itself knows.
+     */
+    dialogOptions() {
+      return dialog().map(([id, label]) => ({ id, label }));
+    },
+    /** Choose one of dialogOptions(). */
+    choose(id) {
+      const pick = dialog().find((o) => o[0] === id);
+      if (!pick) return false;
+      if (voice.state() === 'live') return voice.tell(pick[1], true);
+      quiet = true;
+      const reply = pick[2]();
+      if (reply) speakLocal(reply);
+      return true;
     },
     /** Use the buttons and plain commands in place of the voice agent (no complaint over the head about it). */
     setQuiet(on) { quiet = !!on; },
