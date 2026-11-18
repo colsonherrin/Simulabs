@@ -44,7 +44,8 @@ and gives a hint when you want one.
   ones, blaster troopers firing red laser bolts where the archers were, a hangar deck where the
   battlefield was, and its own set of sounds. Only the look and sound change; the rules, the game
   in progress and every speed, path and hit test are the same code. "Go back to the normal game"
-  restores the medieval look.
+  restores the medieval look. While it is on, Sundai wears a starship commander's tunic and
+  Saturdai a pilot's flight jacket (original designs, painted on their own bodies).
 - **Saturdai.** Say "change to Saturdai" (or "change to a guy") and the companion appears as a
   young man with a man's voice; "change to Sundai" switches back. It is one voice agent with two
   bodies and two voices, so the conversation, skills, permissions and game carry straight over.

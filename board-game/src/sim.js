@@ -19,6 +19,8 @@ import { agentId, relayUrl, voicePass } from '../../webxr/voice-pass.js';
 import { Conversation } from '@elevenlabs/client';
 import { TOP, squareLocal } from './tabletop.js';
 import { dressMedieval, undressMedieval } from './medieval.js';
+import { dressSpace, undressSpace } from './spacewear.js';
+import { isSpace } from './theme.js';
 import { cameraState, look, snapshot, startCamera } from './see.js';
 import { assess, bestMove, boardText, clashRecord, describeAction } from './search.js';
 
@@ -320,12 +322,20 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     avatar.root.visible = visible && me.loaded;
     sign.sprite.visible = false;
     if (!avatar.root.visible) return;
-    // The court gown was cut for her; he keeps his own clothes at the table.
-    const wear = wantDress && who === 'sundai';
+    // What they wear: in Warstars, their starship outfits (she a commander, he a pilot) for as
+    // long as that mode is on; otherwise her court gown during a game (it was cut for her; he
+    // keeps his own clothes at the table); otherwise their everyday clothes.
+    const outfit = isSpace() ? 'space' : wantDress && who === 'sundai' ? 'court' : '';
     dressed = wantDress;
-    if (wear !== me.dressed) {
-      me.dressed = wear;
-      try { (wear ? dressMedieval : undressMedieval)(avatar); } catch (e) { console.warn('costume change skipped', e); }
+    if (outfit !== (me.outfit || '')) {
+      try {
+        // One comes fully off before the other goes on, so each restores the clothes it found.
+        if (me.outfit === 'court') undressMedieval(avatar);
+        if (me.outfit === 'space') undressSpace(avatar);
+        if (outfit === 'court') dressMedieval(avatar);
+        if (outfit === 'space') dressSpace(avatar, who === 'sundai' ? 'commander' : 'pilot');
+      } catch (e) { console.warn('costume change skipped', e); }
+      me.outfit = outfit;
     }
     beforeGame = prelude;
     const cam = getCamera();
@@ -585,7 +595,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       const r = setTheme ? setTheme(theme) : 'unavailable';
       if (r === 'unavailable') return { status: 'failed', reason: 'The look of the game cannot be changed right now.' };
       return theme === 'warstars'
-        ? { status: r, theme: 'warstars', note: 'The game now looks and sounds like a space battle aboard a starship: the Light Side (the user, blue energy swords) against the Dark Side (you, red energy swords). Swordsmen carry energy swords, archers are blaster troopers who fire red laser bolts, monarchs are commanders. The rules, the board and the state of the game are exactly the same. Say one short line about it.' }
+        ? { status: r, theme: 'warstars', note: 'The game now looks and sounds like a space battle aboard a starship: the Light Side (the user, blue energy swords) against the Dark Side (you, red energy swords). Swordsmen carry energy swords, archers are blaster troopers who fire red laser bolts, monarchs are commanders. You yourself now wear a starship outfit. The rules, the board and the state of the game are exactly the same. Say one short line about it.' }
         : { status: r, theme: 'classic', note: 'The game is back to its medieval look: castle, swords and arrows. The rules and the state of the game are exactly the same. Say one short line about it.' };
     }
     if (name === 'end_session') {
