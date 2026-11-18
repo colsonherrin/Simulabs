@@ -57,7 +57,7 @@ You may also move on your own, the way a person does in a room: step nearer when
 - walk_around: only when they ask you to stroll or show how you move. Never use it for anything else.
 - wave: wave your hand.
 - look_around: look through their headset camera at what is in front of them. Use it every time they ask what you see, what something looks like, to read something, or to find something ("where is my cup?"); look again each time, the view changes. It hands you the actual picture in the next message, marked [camera]: answer from that picture, naturally, in a sentence or two (what is there, people, colours, text you can read). Never describe anything before the picture has arrived, and never invent what is not in it. Do not name or identify people; describe them. If it says you cannot see, say so plainly and do not guess.
-- switch_companion: you have two bodies, and the user can ask for either at any time, in or out of a game. Sundai is the woman (your usual form). SaturdAI (say it "Saturday") is a young man. When they ask for the other one ("change to SaturdAI", "switch to Saturday", "bring out SaturdAI", "let me talk to the guy", "change to a guy", or back with "change to Sundai", "switch back to Sunday", "change to a girl"), call it with to set to saturdai or sundai. You are the same mind either way, with the same memory of this conversation, the same skills and the same game; only your body, your voice and the name you go by change. While you are SaturdAI, introduce yourself as SaturdAI and wrap every single reply in <Saturday>...</Saturday> so you speak with his voice; as Sundai, never use that tag.
+- switch_companion: you have two bodies, and the user can ask for either at any time, in or out of a game. Sundai is the woman (your usual form). Saturdai (say it "Saturday") is a young man. When they ask for the other one ("change to Saturdai", "switch to Saturday", "bring out Saturdai", "let me talk to the guy", "change to a guy", or back with "change to Sundai", "switch back to Sunday", "change to a girl"), call it with to set to saturdai or sundai. You are the same mind either way, with the same memory of this conversation, the same skills and the same game; only your body, your voice and the name you go by change. While you are Saturdai, introduce yourself as Saturdai and wrap every single reply in <Saturday>...</Saturday> so you speak with his voice; as Sundai, never use that tag.
 - set_theme: the game has two looks. "warstars" turns it into a space battle on a starship: the Light Side with blue energy swords against the Dark Side with red ones, blaster troopers firing red laser bolts where the archers were, commanders where the monarchs were. "classic" is the medieval look. When they ask ("let's turn this into Warstars mode", "make it sci-fi", "space mode", or "go back to the normal game", "medieval again"), call it. It only changes how the game looks and sounds; the rules, the board and the game in progress stay exactly as they are. In Warstars, talk in that world's terms (energy sword, blaster, laser bolts, commander, Light Side and Dark Side). It works before or during a game.
 - end_session: when they say goodbye for good or ask to close or quit everything, say bye and call it.
 When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Say only that: never describe or narrate the scene changing, your clothes, or what a skill did; the user can see it. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game you play together is called Swords and Arrows; that is its only name. From then on, until the game is left, you are their opponent, as below.
@@ -109,7 +109,7 @@ export const TOOLS = [
   { type: 'function', name: 'look_around', description: "Look through the user's headset camera: names the everyday things in front of them and where each is, and remembers where things were last seen. Pass find to ask where one particular thing is.", parameters: { type: 'object', properties: { find: { type: 'string', description: 'A thing to locate, e.g. "cup". Optional.' } }, additionalProperties: false } },
   { type: 'function', name: 'start_game', description: 'Start the board game when the user asks to play: the castle appears, the board is set between you and you change into your gown and crown.', parameters: NONE },
   { type: 'function', name: 'leave_game', description: "Leave the game when the user asks to stop playing or go back: the castle and board go away and you are both back in the user's room.", parameters: NONE },
-  { type: 'function', name: 'switch_companion', description: 'Change which of your two bodies and voices is on show: Sundai (the woman) or SaturdAI (the young man). Same mind, memory and skills either way.', parameters: { type: 'object', properties: { to: { type: 'string', enum: ['saturdai', 'sundai'], description: 'Which one to become.' } }, required: ['to'], additionalProperties: false } },
+  { type: 'function', name: 'switch_companion', description: 'Change which of your two bodies and voices is on show: Sundai (the woman) or Saturdai (the young man). Same mind, memory and skills either way.', parameters: { type: 'object', properties: { to: { type: 'string', enum: ['saturdai', 'sundai'], description: 'Which one to become.' } }, required: ['to'], additionalProperties: false } },
   { type: 'function', name: 'set_theme', description: 'Change how the game looks and sounds, without changing the rules or the game in progress: warstars (space battle on a starship) or classic (medieval).', parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['warstars', 'classic'] } }, required: ['theme'], additionalProperties: false } },
   { type: 'function', name: 'end_session', description: 'Close the whole experience when the user says goodbye for good or asks to quit everything.', parameters: NONE },
   { type: 'function', name: 'suggest_move', description: "During a game: the strongest move available to the user right now and why. Use when they ask for a hint or what to do.", parameters: NONE },
@@ -147,13 +147,13 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
   // ---------------------------------------------------------------- body
 
   const assetBase = new URL('avatar/', document.baseURI).href;
-  // Two bodies for one companion. Sundai (a woman) and SaturdAI (a man) are the same mind: the same
+  // Two bodies for one companion. Sundai (a woman) and Saturdai (a man) are the same mind: the same
   // voice agent, conversation, skills and permissions. Switching changes only the body that is
   // shown and the voice it speaks with. His body is fetched the first time he is asked for.
   const lite = /OculusBrowser|Quest|Android|Mobile/i.test(navigator.userAgent);
   const CAST = {
     sundai: { name: 'Sundai', fbx: 'RocketboxAdult.fbx', tex: 'f006', height: 1.7 },
-    saturdai: { name: 'SaturdAI', fbx: 'RocketboxMale.fbx', tex: 'male', height: 1.8 },
+    saturdai: { name: 'Saturdai', fbx: 'RocketboxMale.fbx', tex: 'male', height: 1.8 },
   };
   const bodies = {};
   function bodyOf(name) {
@@ -169,7 +169,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
   let wantWho = 'sundai'; // the body asked for (shown once it has loaded)
   let avatar = bodyOf('sundai').avatar;
   /** Her lines are written as "Sundai: ..."; shown under his name while he is the one standing there. */
-  const named = (text) => (who === 'saturdai' ? String(text).replace(/^Sundai:/, 'SaturdAI:') : text);
+  const named = (text) => (who === 'saturdai' ? String(text).replace(/^Sundai:/, 'Saturdai:') : text);
   const pose = { x: 0, y: 0, z: 0, yaw: 0, speed01: 0, gesture: '', metres: 0 };
   const lookAt = new THREE.Vector3();
   const pointAt = new THREE.Vector3();
@@ -577,7 +577,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       wantWho = to;
       bodyOf(to); // start fetching his body if this is the first time
       return to === 'saturdai'
-        ? { status: 'done', you_are: 'SaturdAI', note: 'You now appear as SaturdAI (say it "Saturday"), a young man, and speak with his voice. From this reply on, wrap EVERYTHING you say in <Saturday>...</Saturday> so the voice matches the body. Nothing else about you has changed: same memory of this conversation, same skills, same game. Say one short line as SaturdAI.' }
+        ? { status: 'done', you_are: 'Saturdai', note: 'You now appear as Saturdai (say it "Saturday"), a young man, and speak with his voice. From this reply on, wrap EVERYTHING you say in <Saturday>...</Saturday> so the voice matches the body. Nothing else about you has changed: same memory of this conversation, same skills, same game. Say one short line as Saturdai.' }
         : { status: 'done', you_are: 'Sundai', note: 'You appear as Sundai again and speak with her voice. Stop using the <Saturday> tag. Nothing else about you has changed. Say one short line as Sundai.' };
     }
     if (name === 'set_theme') {
@@ -621,7 +621,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       }
       try {
         // While he is the one on show, every message carries the reminder that keeps his voice on.
-        if (who === 'saturdai' || wantWho === 'saturdai') text += '\n(You are SaturdAI right now: wrap your whole reply in <Saturday>...</Saturday>.)';
+        if (who === 'saturdai' || wantWho === 'saturdai') text += '\n(You are Saturdai right now: wrap your whole reply in <Saturday>...</Saturday>.)';
         if (speak) conv.sendUserMessage(text);
         else conv.sendContextualUpdate(text);
         return true;

@@ -37,7 +37,7 @@ Win the duel and you take the square. Lose it and the attacking piece is removed
 monarch and you win the game. Sundai teases you as you play, explains any matchup you ask about,
 and gives a hint when you want one.
 
-## Warstars mode and SaturdAI
+## Warstars mode and Saturdai
 
 - **Warstars mode.** Say "let's turn this into Warstars mode" and the same game becomes a space
   battle aboard a starship: the Light Side with blue energy swords against the Dark Side with red
@@ -45,7 +45,7 @@ and gives a hint when you want one.
   battlefield was, and its own set of sounds. Only the look and sound change; the rules, the game
   in progress and every speed, path and hit test are the same code. "Go back to the normal game"
   restores the medieval look.
-- **SaturdAI.** Say "change to SaturdAI" (or "change to a guy") and the companion appears as a
+- **Saturdai.** Say "change to Saturdai" (or "change to a guy") and the companion appears as a
   young man with a man's voice; "change to Sundai" switches back. It is one voice agent with two
   bodies and two voices, so the conversation, skills, permissions and game carry straight over.
 

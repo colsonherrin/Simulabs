@@ -10,7 +10,7 @@ const tools = [...TOOLS.map((t) => ({ type: 'client', name: t.name, description:
 const res = await fetch(`https://api.elevenlabs.io/v1/convai/agents/${id}`, {
   method: 'PATCH',
   headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY ?? 'proxy-injected', 'content-type': 'application/json' },
-  body: JSON.stringify({ conversation_config: { agent: { prompt: { prompt: INSTRUCTIONS, tools } }, turn: { turn_timeout: 300 }, tts: { supported_voices: [{ label: 'Saturday', voice_id: 'bIHbv24MWmeRgasZH58o', description: 'The voice of SaturdAI, the male companion. Use it for everything you say while you are SaturdAI.' }] }, conversation: { max_duration_seconds: 3600, file_input: { enabled: true, max_files_in_memory: 3, max_files_per_conversation: 200 } } } }),
+  body: JSON.stringify({ conversation_config: { agent: { prompt: { prompt: INSTRUCTIONS, tools } }, turn: { turn_timeout: 300 }, tts: { supported_voices: [{ label: 'Saturday', voice_id: 'bIHbv24MWmeRgasZH58o', description: 'The voice of Saturdai, the male companion. Use it for everything you say while you are Saturdai.' }] }, conversation: { max_duration_seconds: 3600, file_input: { enabled: true, max_files_in_memory: 3, max_files_per_conversation: 200 } } } }),
 });
 const text = await res.text();
 console.log(res.status, res.ok ? 'agent ' + id + ' updated' : text.slice(0, 800));
