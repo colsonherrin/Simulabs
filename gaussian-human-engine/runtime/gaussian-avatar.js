@@ -244,10 +244,11 @@ export async function createGaussianBody({ THREE, mesh, base, limit = 0 }) {
      * by how squarely each Gaussian faced the camera.
      *   image     ImageData of the picture, covering the same frame the camera renders
      *   strength  how much this view counts (1 = a full vote)
+     *   sharpness how strongly the squarest view wins (2 = gentle average, 12 = nearly winner takes all)
      *   only      paint only this part: 1 head, 0 body, 2 hair, or -1 for everything
      * Returns how many Gaussians were painted.
      */
-    paint(camera, image, { strength = 1, only = -1, background = 26 } = {}) {
+    paint(camera, image, { strength = 1, only = -1, background = 26, sharpness = 2 } = {}) {
       const sk = mesh.skeleton;
       sk.update();
       mesh.updateMatrixWorld(true);
@@ -308,7 +309,9 @@ export async function createGaussianBody({ THREE, mesh, base, limit = 0 }) {
         const x = Math.min(W - 1, Math.max(0, Math.round(px[i]))), y = Math.min(H - 1, Math.max(0, Math.round(py[i])));
         const q = (y * W + x) * 4;
         if (d[q] + d[q + 1] + d[q + 2] < background * 3) continue; // the picture's backdrop, not her
-        const w = strength * face[i] * face[i];
+        // A high sharpness makes the view that faces a Gaussian most squarely decide its colour
+        // almost alone, so slightly different views are not averaged into blur.
+        const w = strength * Math.pow(face[i], sharpness);
         const t = w / (acc[i] + w);
         col[i * 4] += (d[q] - col[i * 4]) * t;
         col[i * 4 + 1] += (d[q + 1] - col[i * 4 + 1]) * t;

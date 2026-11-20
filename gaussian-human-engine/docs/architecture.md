@@ -101,3 +101,19 @@ it must return, pixel for pixel, the surface it was shown. That means a diffusio
 conditioned on the render's depth and normals (and ideally on the current paint, at low
 strength, so each pass refines what is there), running on a GPU beside the headset. That model
 was not available in the environment this was written in.
+
+**Second experiment (same seven photographs, no new generation).** Two changes:
+
+- each photograph is warped onto its render before painting (outline first, then dense optical
+  flow; the corrections averaged 25 to 37 pixels and reached 110), `diffusion/sampling/align_to_render.py`;
+- the view that faces a Gaussian most squarely decides its colour almost alone (`sharpness: 12`),
+  so different views are no longer averaged.
+
+The head now reads as a photograph of one woman from angles that were never photographed, with
+clear eyes, skin texture and hair. Remaining faults: a dark patch at the tip of the nose in the
+front view, a visible seam at the neck, and a soft, fuzzy torso (it has few Gaussians in this
+test). One run, one character, one still pose, on a desktop; nothing here has been tried with
+motion or in a headset.
+
+What this changes: a general image model plus alignment is good enough to paint a still head.
+A geometry-locked model would remove the need for the warp and is still what a live loop needs.
