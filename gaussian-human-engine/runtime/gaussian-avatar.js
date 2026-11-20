@@ -26,6 +26,7 @@ uniform float uCoeff[K_FIELDS];
 uniform float uViewport;
 uniform float uWorldScale;
 uniform float uSize;
+uniform float uTight;
 attribute vec3 aNormal;
 attribute vec4 aColour;
 attribute vec4 aBone;
@@ -62,11 +63,12 @@ void main() {
   // (diameter = 2 x radius; half the viewport height is one unit of clip space)
   // The face's Gaussians are drawn tighter, to keep its detail.
   float part = aColour.a * 255.0;
-  float tight = part > 0.5 && part < 1.5 ? 0.72 : 1.0;
+  float tight = part > 0.5 && part < 1.5 ? uTight : 1.0;
   gl_PointSize = clamp(aRadius * tight * uSize * uWorldScale * projectionMatrix[1][1] * uViewport / max(0.05, -mv.z), 2.0, 128.0);
 }
 `;
 const FRAG = /* glsl */ `
+uniform float uLit;
 varying vec3 vColour;
 varying vec3 vNormal;
 float hash(vec2 p) {
@@ -80,7 +82,8 @@ void main() {
   float a = exp(-r2 * 2.2);
   if (a < 0.14 + 0.3 * hash(gl_FragCoord.xy)) discard;
   vec3 n = normalize(vNormal);
-  float light = 0.62 + 0.38 * max(0.0, dot(n, normalize(vec3(0.35, 0.75, 0.55))));
+  // Painted colours already carry their own light (they come from photographs).
+  float light = mix(1.0, 0.62 + 0.38 * max(0.0, dot(n, normalize(vec3(0.35, 0.75, 0.55)))), uLit);
   vec3 colour = pow(vColour, vec3(2.2)) * light;
   gl_FragColor = vec4(colour, 1.0);
   #include <tonemapping_fragment>
@@ -145,6 +148,8 @@ export async function createGaussianBody({ THREE, mesh, base, limit = 0 }) {
       uWorldScale: { value: 0.01 },
       // Fewer Gaussians are drawn larger, so the surface stays closed.
       uSize: { value: 3.3 * Math.sqrt(total / n) },
+      uTight: { value: 0.72 },
+      uLit: { value: 1 },
     },
     vertexShader: VERT,
     fragmentShader: FRAG,
@@ -229,6 +234,91 @@ export async function createGaussianBody({ THREE, mesh, base, limit = 0 }) {
       // Fold the basis's scale into the coefficients, so the shader only multiplies.
       for (let k = 0; k < K; k++) coeff[k] = (h[k] * peak[k]) / 127;
       cpuMs = performance.now() - t0;
+    },
+    material,
+    /**
+     * Live repainting: take a picture of the character as seen by `camera` (for example a
+     * diffusion model's photographic version of the current view) and paint it onto the Gaussians
+     * that view can see. The paint is stored per Gaussian, in the body's own coordinates, so it
+     * stays in place when the character moves, and views painted later are averaged in, weighted
+     * by how squarely each Gaussian faced the camera.
+     *   image     ImageData of the picture, covering the same frame the camera renders
+     *   strength  how much this view counts (1 = a full vote)
+     *   only      paint only this part: 1 head, 0 body, 2 hair, or -1 for everything
+     * Returns how many Gaussians were painted.
+     */
+    paint(camera, image, { strength = 1, only = -1, background = 26 } = {}) {
+      const sk = mesh.skeleton;
+      sk.update();
+      mesh.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      const bm = sk.boneMatrices;
+      const pos = geo.attributes.position.array;
+      const nrm = geo.attributes.aNormal.array;
+      const bone = geo.attributes.aBone.array;
+      const wgt = geo.attributes.aWeight.array;
+      const col = geo.attributes.aColour.array;
+      if (!this._acc) this._acc = new Float32Array(n);
+      const acc = this._acc;
+      const toWorld = new THREE.Matrix4().multiplyMatrices(mesh.matrixWorld, mesh.bindMatrixInverse);
+      const bind = mesh.bindMatrix;
+      const vp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+      const W = image.width;
+      const H = image.height;
+      const px = new Float32Array(n), py = new Float32Array(n), pz = new Float32Array(n), face = new Float32Array(n);
+      const v = new THREE.Vector4(), s4 = new THREE.Vector4(), nv = new THREE.Vector3(), m = new THREE.Matrix4(), acc4 = new THREE.Matrix4(), wp = new THREE.Vector3();
+      // Depth buffer at a quarter of the picture's resolution, to tell what this view can see.
+      const zw = Math.ceil(W / 4), zh = Math.ceil(H / 4);
+      const zbuf = new Float32Array(zw * zh).fill(Infinity);
+      for (let i = 0; i < n; i++) {
+        // Pose this Gaussian with its four bones (the same sum the shader does).
+        const e = acc4.elements;
+        e.fill(0);
+        for (let k = 0; k < 4; k++) {
+          const w = wgt[i * 4 + k] / 255;
+          if (!w) continue;
+          const o = bone[i * 4 + k] * 16;
+          for (let j = 0; j < 16; j++) e[j] += bm[o + j] * w;
+        }
+        m.multiplyMatrices(toWorld, acc4).multiply(bind);
+        wp.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).applyMatrix4(m);
+        nv.set(nrm[i * 4], nrm[i * 4 + 1], nrm[i * 4 + 2]).transformDirection(m);
+        face[i] = nv.dot(s4.set(eye.x - wp.x, eye.y - wp.y, eye.z - wp.z, 0).normalize());
+        v.set(wp.x, wp.y, wp.z, 1).applyMatrix4(vp);
+        if (v.w <= 0) { pz[i] = Infinity; continue; }
+        px[i] = (v.x / v.w * 0.5 + 0.5) * W;
+        py[i] = (1 - (v.y / v.w * 0.5 + 0.5)) * H;
+        pz[i] = v.w;
+        const zx = Math.floor(px[i] / 4), zy = Math.floor(py[i] / 4);
+        if (zx < 1 || zy < 1 || zx >= zw - 1 || zy >= zh - 1) { pz[i] = Infinity; continue; }
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const q = (zy + dy) * zw + zx + dx;
+          if (v.w < zbuf[q]) zbuf[q] = v.w;
+        }
+      }
+      const d = image.data;
+      let painted = 0;
+      for (let i = 0; i < n; i++) {
+        if (pz[i] === Infinity || face[i] < 0.3) continue;
+        const part = col[i * 4 + 3];
+        if (only >= 0 && part !== only) continue;
+        const zx = Math.floor(px[i] / 4), zy = Math.floor(py[i] / 4);
+        if (pz[i] > zbuf[zy * zw + zx] + 0.012) continue; // something nearer covers it
+        const x = Math.min(W - 1, Math.max(0, Math.round(px[i]))), y = Math.min(H - 1, Math.max(0, Math.round(py[i])));
+        const q = (y * W + x) * 4;
+        if (d[q] + d[q + 1] + d[q + 2] < background * 3) continue; // the picture's backdrop, not her
+        const w = strength * face[i] * face[i];
+        const t = w / (acc[i] + w);
+        col[i * 4] += (d[q] - col[i * 4]) * t;
+        col[i * 4 + 1] += (d[q + 1] - col[i * 4 + 1]) * t;
+        col[i * 4 + 2] += (d[q + 2] - col[i * 4 + 2]) * t;
+        acc[i] += w;
+        painted += 1;
+      }
+      geo.attributes.aColour.needsUpdate = true;
+      material.uniforms.uLit.value = 0;
+      return painted;
     },
     dispose() {
       mesh.remove(points);

@@ -74,3 +74,30 @@ if a headset misses its frame time for three seconds.
    Gaussians. If it does not hold frame rate, nothing later matters until it does.
 2. Decide the Quest renderer: stay in WebXR, or port the three shader stages to Unity.
 3. Replace the stand-in teacher, head only first, and rerun the same report.
+
+## Live diffusion: "diffusion paints, Gaussians hold"
+
+The direction now being explored for photorealism. Diffusion cannot produce the frames a headset
+shows (too slow per image, flicker between frames, disagreement between the eyes). So it does not:
+the headset draws the Gaussians at full frame rate, and a diffusion model running alongside
+repaints the Gaussians the viewer can currently see. The paint is stored per Gaussian in the
+body's own coordinates, so it persists as she moves and accumulates as the viewer looks around.
+`paint(camera, image)` in `runtime/gaussian-avatar.js` is that write path.
+
+**First experiment (one run, desktop browser, 260,000 Gaussians, 85% of them on the head).**
+Seven views of the head were rendered from the mesh, a general image-editing model turned each
+into a photograph, and each photograph was painted back from its camera.
+
+- The mechanism works: the paint stays in place in 3D and views that were never photographed
+  show a coherent head with photographic skin tones.
+- The result is not sharp. Features are smeared and the eyes ghosted, because the image model
+  does not keep the geometry it is given: each photograph had to be rescaled by up to 7% and
+  shifted by up to 117 pixels (of 1024) just to bring its outline over the render, and inside the
+  outline the features still land in slightly different places from view to view. Averaging
+  those is blur.
+
+So the problem to solve for live diffusion is geometric fidelity of the painter, before speed:
+it must return, pixel for pixel, the surface it was shown. That means a diffusion model
+conditioned on the render's depth and normals (and ideally on the current paint, at low
+strength, so each pass refines what is there), running on a GPU beside the headset. That model
+was not available in the environment this was written in.
