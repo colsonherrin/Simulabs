@@ -21,6 +21,7 @@ import { TOP, squareLocal } from './tabletop.js';
 import { dressMedieval, undressMedieval } from './medieval.js';
 import { dressSpace, undressSpace } from './spacewear.js';
 import { isSpace } from './theme.js';
+import { createGaussianBody } from '../../gaussian-human-engine/runtime/gaussian-avatar.js';
 import { cameraState, look, snapshot, startCamera } from './see.js';
 import { assess, bestMove, boardText, clashRecord, describeAction } from './search.js';
 
@@ -60,6 +61,7 @@ You may also move on your own, the way a person does in a room: step nearer when
 - wave: wave your hand.
 - look_around: look through their headset camera at what is in front of them. Use it every time they ask what you see, what something looks like, to read something, or to find something ("where is my cup?"); look again each time, the view changes. It hands you the actual picture in the next message, marked [camera]: answer from that picture, naturally, in a sentence or two (what is there, people, colours, text you can read). Never describe anything before the picture has arrived, and never invent what is not in it. Do not name or identify people; describe them. If it says you cannot see, say so plainly and do not guess.
 - switch_companion: you have two bodies, and the user can ask for either at any time, in or out of a game. Sundai is the woman (your usual form). Saturdai (say it "Saturday") is a young man. When they ask for the other one ("change to Saturdai", "switch to Saturday", "bring out Saturdai", "let me talk to the guy", "change to a guy", or back with "change to Sundai", "switch back to Sunday", "change to a girl"), call it with to set to saturdai or sundai. You are the same mind either way, with the same memory of this conversation, the same skills and the same game; only your body, your voice and the name you go by change. While you are Saturdai, introduce yourself as Saturdai and wrap every single reply in <Saturday>...</Saturday> so you speak with his voice; as Sundai, never use that tag.
+- set_body: your body can be drawn two ways. "standard" is your usual body. "gaussian" is an experimental renderer that draws you as a cloud of 3D Gaussians. When they ask ("switch to the Gaussian body", "Gaussian mode", "show me the new avatar", or "go back to the normal body", "revert", "standard body"), call it. It works for Sundai and Saturdai alike and changes nothing else.
 - set_theme: the game has two looks. "warstars" turns it into a space battle on a starship: the Light Side with blue energy swords against the Dark Side with red ones, blaster troopers firing red laser bolts where the archers were, commanders where the monarchs were. "classic" is the medieval look. When they ask ("let's turn this into Warstars mode", "make it sci-fi", "space mode", or "go back to the normal game", "medieval again"), call it. It only changes how the game looks and sounds; the rules, the board and the game in progress stay exactly as they are. In Warstars, talk in that world's terms (energy sword, blaster, laser bolts, commander, Light Side and Dark Side). It works before or during a game.
 - end_session: when they say goodbye for good or ask to close or quit everything, say bye and call it.
 When they ask to play a game (or say yes to one), say something like "Sure, let's play" and call start_game. Say only that: never describe or narrate the scene changing, your clothes, or what a skill did; the user can see it. Their room gives way to a castle terrace at sunset, high above a kingdom; a board appears between the two of you and you change into your court gown and crown. The game you play together is called Swords and Arrows; that is its only name. From then on, until the game is left, you are their opponent, as below.
@@ -112,6 +114,7 @@ export const TOOLS = [
   { type: 'function', name: 'start_game', description: 'Start the board game when the user asks to play: the castle appears, the board is set between you and you change into your gown and crown.', parameters: NONE },
   { type: 'function', name: 'leave_game', description: "Leave the game when the user asks to stop playing or go back: the castle and board go away and you are both back in the user's room.", parameters: NONE },
   { type: 'function', name: 'switch_companion', description: 'Change which of your two bodies and voices is on show: Sundai (the woman) or Saturdai (the young man). Same mind, memory and skills either way.', parameters: { type: 'object', properties: { to: { type: 'string', enum: ['saturdai', 'sundai'], description: 'Which one to become.' } }, required: ['to'], additionalProperties: false } },
+  { type: 'function', name: 'set_body', description: 'Change how your body is drawn: gaussian (the experimental Gaussian renderer) or standard (your usual body). Works for Sundai and Saturdai alike; nothing else about you changes.', parameters: { type: 'object', properties: { style: { type: 'string', enum: ['gaussian', 'standard'] } }, required: ['style'], additionalProperties: false } },
   { type: 'function', name: 'set_theme', description: 'Change how the game looks and sounds, without changing the rules or the game in progress: warstars (space battle on a starship) or classic (medieval).', parameters: { type: 'object', properties: { theme: { type: 'string', enum: ['warstars', 'classic'] } }, required: ['theme'], additionalProperties: false } },
   { type: 'function', name: 'end_session', description: 'Close the whole experience when the user says goodbye for good or asks to quit everything.', parameters: NONE },
   { type: 'function', name: 'suggest_move', description: "During a game: the strongest move available to the user right now and why. Use when they ask for a hint or what to do.", parameters: NONE },
@@ -166,6 +169,47 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       bodies[name] = b;
     }
     return bodies[name];
+  }
+  // Either body can be drawn as its Gaussians instead of its mesh (gaussian-human-engine): an
+  // experimental renderer, off unless asked for. The mesh stays loaded, so going back is instant,
+  // and it goes back by itself if the headset cannot hold its frame rate with it.
+  const gaussBase = new URL('gauss/', document.baseURI).href;
+  let wantGaussian = false;
+  let slowFor = 0;
+  function gaussianStep(me, dt, xr) {
+    if (wantGaussian && !me.gauss && !me.gaussLoading && me.loaded) {
+      let mesh = null;
+      avatar.body.model.traverse((o) => { if (o.isSkinnedMesh && !mesh) mesh = o; });
+      if (!mesh) { wantGaussian = false; return; }
+      me.gaussLoading = true;
+      const forWho = who;
+      createGaussianBody({ THREE, mesh, base: gaussBase + forWho, limit: lite ? 30000 : 0 })
+        .then((g) => { me.gauss = g; me.gaussMesh = mesh; })
+        .catch((e) => {
+          console.warn('Gaussian body not loaded', e);
+          me.gaussLoading = false;
+          wantGaussian = false;
+          showNote('The Gaussian body could not be loaded.');
+        });
+    }
+    const on = wantGaussian && !!me.gauss;
+    if (me.gauss && on !== !!me.gaussOn) {
+      me.gaussOn = on;
+      me.gauss.show(on);
+      // The mesh's surfaces are switched off, not removed: its skeleton keeps driving the Gaussians.
+      for (const m of Array.isArray(me.gaussMesh.material) ? me.gaussMesh.material : [me.gaussMesh.material]) m.visible = !on;
+      slowFor = 0;
+    }
+    if (!on) return;
+    me.gauss.update(performance.now() / 1000, Math.min(1, voiceLevel * 1.6), voiceLevel > 0.05 ? 0.35 : 0.1);
+    // In a headset, three seconds of badly missed frames sends it back to the standard body.
+    if (xr) {
+      slowFor = dt > 1 / 45 ? slowFor + dt : Math.max(0, slowFor - dt * 0.5);
+      if (slowFor > 3) {
+        wantGaussian = false;
+        showNote('Gaussian body is too slow here: back to the standard body.', 6);
+      }
+    }
   }
   let who = 'sundai'; // the body on show
   let wantWho = 'sundai'; // the body asked for (shown once it has loaded)
@@ -373,7 +417,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     nextGesture = 'point';
   }
 
-  function update(dt, { visible, floorY, prelude = false, aside = 0 }) {
+  function update(dt, { visible, floorY, prelude = false, aside = 0, xr = false }) {
     // The other body takes over as soon as it is ready; until then the current one stays.
     if (wantWho !== who && bodyOf(wantWho).loaded) {
       avatar.root.visible = false;
@@ -506,6 +550,7 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     lookAt.copy(attendBoardFor > 0 ? pointAt : eyes);
     voiceLevel = Math.max(voice.level(), fallback.level(), builtIn.level());
     avatar.animate(dt, pose, voiceLevel, lookAt, pointAt);
+    gaussianStep(me, dt, xr);
     const text = voiceSign(performance.now());
     sign.set(text);
     sign.sprite.visible = !!text;
@@ -657,6 +702,14 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       return to === 'saturdai'
         ? { status: 'done', you_are: 'Saturdai', note: 'You now appear as Saturdai (say it "Saturday"), a young man, and speak with his voice. From this reply on, wrap EVERYTHING you say in <Saturday>...</Saturday> so the voice matches the body. Nothing else about you has changed: same memory of this conversation, same skills, same game. Say one short line as Saturdai.' }
         : { status: 'done', you_are: 'Sundai', note: 'You appear as Sundai again and speak with her voice. Stop using the <Saturday> tag. Nothing else about you has changed. Say one short line as Sundai.' };
+    }
+    if (name === 'set_body') {
+      const to = /gauss|splat|point|experiment|new/i.test(String(params.style || '')) ? 'gaussian' : 'standard';
+      if ((to === 'gaussian') === wantGaussian) return { status: 'already', body: to };
+      wantGaussian = to === 'gaussian';
+      return to === 'gaussian'
+        ? { status: 'done', body: 'gaussian', note: 'You are now drawn as a cloud of Gaussians, by the experimental engine. Same you, same skeleton and motion. If it runs too slowly it switches back by itself. Say one short line.' }
+        : { status: 'done', body: 'standard', note: 'You are drawn as your standard body again. Say one short line.' };
     }
     if (name === 'set_theme') {
       const theme = /war|star|space|sci|laser|future/i.test(String(params.theme || '')) ? 'warstars' : 'classic';
@@ -1175,6 +1228,10 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
     update,
     record,
     get root() { return avatar.root; },
+    /** How the body is drawn: 'gaussian' (asked for; shown once loaded) or 'standard'. */
+    get body() { return wantGaussian ? 'gaussian' : 'standard'; },
+    /** The Gaussian body's own figures, once it is loaded: { count, k, cpuMs, shown }. */
+    get gaussianStats() { const g = bodies[who].gauss; return g ? { count: g.count, k: g.k, cpuMs: g.cpuMs, shown: !!bodies[who].gaussOn, teacher: g.teacher } : null; },
     /** Which body is on show: 'sundai' or 'saturdai'. */
     get companion() { return who; },
     hasKey: () => { try { return !!storage.getItem(KEY_NAME); } catch (e) { return false; } },
@@ -1275,6 +1332,8 @@ export function createSim({ scene, board, getCamera, getGame, human, say: sayRaw
       const t = ' ' + String(text || '').toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ') + ' ';
       const side = / left /.test(t) ? 'left' : 'right';
       const INTENTS = [
+        [/ (revert|standard|normal|regular|usual|old) (body|avatar|look|self|form)| (revert|go back) to (sundai|saturdai|sunday|saturday|the mesh)| mesh (body|mode) | revert /, 'set_body', { style: 'standard' }, 'Standard body.'],
+        [/ gauss| splat| new (body|avatar|engine)| experimental /, 'set_body', { style: 'gaussian' }, 'Gaussian body.'],
         [/ war ?stars? | star ?wars? | sci ?fi | space (mode|battle|game) | laser/, 'set_theme', { theme: 'warstars' }, 'Warstars mode.'],
         [/ (normal|classic|medieval|regular|original) | swords and arrows mode /, 'set_theme', { theme: 'classic' }, 'Back to swords and arrows.'],
         [/ saturd| saturday | a guy | a man | the guy | a boy /, 'switch_companion', { to: 'saturdai' }, 'Saturdai here.'],

@@ -50,6 +50,14 @@ and gives a hint when you want one.
   young man with a man's voice; "change to Sundai" switches back. It is one voice agent with two
   bodies and two voices, so the conversation, skills, permissions and game carry straight over.
 
+## Experimental: the Gaussian body
+
+Either companion can be drawn as 60,000 deformable Gaussians in place of their mesh ("Gaussian
+body"; "revert" goes back). It is the first working slice of
+[gaussian-human-engine](gaussian-human-engine/README.md), a separate engine for diffusion-distilled
+Gaussian humans. It is a prototype: it does not look as good as the standard body yet, and it has
+not been measured on a headset.
+
 ## Things to say to her
 
 | Before a game | During a game |

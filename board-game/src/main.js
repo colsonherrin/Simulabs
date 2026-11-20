@@ -1231,6 +1231,7 @@ const commandPanel = createPanel([
     { id: 'leave', label: () => 'Leave the game', show: () => !prelude, run: () => sim.command('leave the game') },
     { id: 'hint', label: () => 'Give me a hint', show: () => !prelude && game.phase === 'play', run: () => sim.offerHint(game) },
     { id: 'theme', label: () => (isSpace() ? 'Swords and Arrows' : 'Warstars mode'), show: () => true, run: () => sim.command(isSpace() ? 'classic mode' : 'warstars mode') },
+    { id: 'body', label: () => (sim.body === 'gaussian' ? 'Revert to standard body' : 'Gaussian body (beta)'), show: () => true, run: () => sim.command(sim.body === 'gaussian' ? 'revert to the standard body' : 'gaussian body') },
     { id: 'who', label: () => (sim.companion === 'sundai' ? 'Switch to Saturdai' : 'Switch to Sundai'), show: () => true, run: () => sim.command(sim.companion === 'sundai' ? 'change to saturdai' : 'change to sundai') },
     { id: 'come', label: () => 'Come here', show: () => prelude, run: () => sim.command('come here') },
     { id: 'follow', label: () => (sim.position.following ? 'Stop following' : 'Follow me'), show: () => prelude, run: () => sim.command(sim.position.following ? 'stop' : 'follow me') },
@@ -1918,7 +1919,7 @@ function frame(t, xrFrame) {
   tabletop.update(dt, fadeSphere.position);
   // Sim stands on the floor: the headset's own floor when it gives one, otherwise table height below the board.
   board.getWorldPosition(_simAt);
-  sim.update(dt, { aside: menu ? 1.0 : 0, prelude: prelude || menu, visible: simPlays() && (prelude || menu || board.visible) && !combatView && !placing, floorY: renderer.xr.isPresenting && floorBased ? 0 : _simAt.y - 0.95 });
+  sim.update(dt, { xr: renderer.xr.isPresenting, aside: menu ? 1.0 : 0, prelude: prelude || menu, visible: simPlays() && (prelude || menu || board.visible) && !combatView && !placing, floorY: renderer.xr.isPresenting && floorBased ? 0 : _simAt.y - 0.95 });
   updateHands();
   if (combat.isActive()) combat.update(dt, input);
 

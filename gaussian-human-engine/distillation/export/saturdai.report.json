@@ -1,0 +1,58 @@
+{
+ "character": "saturdai",
+ "gaussians": 60000,
+ "teacher": "stand-in (hand-written correctives, not diffusion)",
+ "controls": [
+  "breath_sin",
+  "breath_cos",
+  "jaw",
+  "elbow_l",
+  "elbow_r",
+  "knee_l",
+  "knee_r",
+  "shoulder_l",
+  "shoulder_r",
+  "spine",
+  "head_turn",
+  "smile"
+ ],
+ "k": 12,
+ "dataset": {
+  "train_frames": 780,
+  "test_frames": 120,
+  "sequence_frames": 144,
+  "seconds": 8.6
+ },
+ "basis": {
+  "variance_explained": 1.0,
+  "seconds": 1.0
+ },
+ "training": {
+  "steps": 4000,
+  "parameters": 1868,
+  "distill_loss": 0.003222,
+  "temporal_loss": 1.1e-05,
+  "seconds": 2.3
+ },
+ "held_out": {
+  "units": "cm",
+  "teacher_displacement_rms": 0.163,
+  "error_no_correction": 0.163,
+  "error_linear_decoder": 0.0192,
+  "error_student": 0.0056,
+  "error_basis_ceiling": 0.0,
+  "student_worst_0.1pct": 0.0462,
+  "flicker_teacher": 0.00015,
+  "flicker_student": 0.00016
+ },
+ "quantised": {
+  "error_student": 0.006,
+  "added_error": 0.0023,
+  "basis_bytes": 2160000,
+  "weight_bytes": 3736
+ },
+ "inference": {
+  "mlp_ms_numpy_this_machine": 0.0109,
+  "note": "the headset figure must be measured on the headset"
+ }
+}
